@@ -1,0 +1,1043 @@
+// =============================================================================
+// SchoolOS — multi-tenant school management platform
+// =============================================================================
+//
+// TENANCY CONTRACT — every school-owned model obeys all three rules:
+//
+//   1. It carries a `schoolId` column.
+//   2. It declares `@@unique([schoolId, id])`.
+//   3. Every relation to another school-owned model is a COMPOSITE foreign key
+//      on `(schoolId, <parentId>) -> (schoolId, id)`.
+//
+// Rule 3 is what makes cross-tenant data physically impossible: PostgreSQL
+// rejects a row that links records belonging to two different schools, so a
+// forgotten `where: { schoolId }` is a read bug rather than a data breach.
+//
+// DELETION POLICY
+//
+//   * `School` relations cascade — deleting a school removes everything it owns.
+//   * Intra-tenant relations use NoAction, which blocks deleting a parent that
+//     still has children (you cannot drop a Class that has Sections) while
+//     still allowing a whole-school cascade to remove parent and child in the
+//     same statement. `Restrict` would fire spuriously during that cascade
+//     because it is checked immediately rather than at end of statement.
+//
+// Schools and people are normally deactivated via `status`, not deleted.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserRole {
+  SUPER_ADMIN
+  SCHOOL_ADMIN
+  TEACHER
+  STUDENT
+  PARENT
+}
+
+/// PENDING -> UNDER_REVIEW -> ACTIVE (approved) | REJECTED.
+/// An ACTIVE school may later become SUSPENDED or INACTIVE.
+enum SchoolStatus {
+  PENDING
+  UNDER_REVIEW
+  ACTIVE
+  REJECTED
+  SUSPENDED
+  INACTIVE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum StudentStatus {
+  ACTIVE
+  INACTIVE
+  TRANSFERRED
+  GRADUATED
+}
+
+/// Status of one student's placement within one academic session.
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  TRANSFERRED
+  WITHDRAWN
+}
+
+enum TeacherStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum TeacherAttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  ON_LEAVE
+}
+
+enum AdmissionStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+  WAITLISTED
+}
+
+enum NoticeAudience {
+  ALL
+  TEACHERS
+  STUDENTS
+  PARENTS
+}
+
+enum NoticeStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+/// Lifecycle of a single timetabled period on a specific date.
+/// Only SCHEDULED and COMPLETED are used in V1; the remaining values exist so
+/// substitute, remote and missed-class recovery can be built without a
+/// migration that rewrites history.
+enum ClassSessionStatus {
+  SCHEDULED
+  COMPLETED
+  SUBSTITUTE
+  REMOTE
+  MISSED
+  CANCELLED
+}
+
+enum PlanTier {
+  STARTER
+  STANDARD
+  PRO
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+enum MediaCategory {
+  GALLERY
+  BANNER
+  LOGO
+  DOCUMENT
+}
+
+/// Why a one-time code was issued. Only registration needs one today; the
+/// column exists so password resets and email changes can reuse the table
+/// without a migration that rewrites history.
+enum VerificationPurpose {
+  SCHOOL_REGISTRATION
+}
+
+/// What an API token may do. READ tokens are refused on every write, so a
+/// token handed to a reporting script cannot change a record even if it leaks.
+enum ApiTokenScope {
+  READ
+  FULL
+}
+
+enum ParentRelationship {
+  FATHER
+  MOTHER
+  GUARDIAN
+}
+
+// =============================================================================
+// PLATFORM LEVEL — not owned by any single school
+// =============================================================================
+
+/// Authentication identity. One row per person who can sign in.
+///
+/// `schoolId` is null only for SUPER_ADMIN; every other role is bound to
+/// exactly one school, and that column — never the URL or request body — is
+/// the authoritative source of a user's tenant.
+///
+/// Email is globally unique so that sign-in needs only an email and password,
+/// with no school picker. One person staffing two schools needs two accounts.
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  role         UserRole
+  firstName    String
+  lastName     String
+  phone        String?
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  schoolId String?
+  school   School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  sessions  Session[]
+  apiTokens ApiToken[]
+  teacher   Teacher?
+  student   Student?
+  parent    Parent?
+
+  auditLogs          AuditLog[]             @relation("AuditActor")
+  reviewedSchools    School[]               @relation("SchoolReviewer")
+  reviewedAdmissions AdmissionApplication[] @relation("AdmissionReviewer")
+  authoredNotices    Notice[]               @relation("NoticeAuthor")
+  markedAttendance   StudentAttendance[]    @relation("AttendanceMarker")
+
+  @@index([schoolId, role])
+  @@index([role])
+}
+
+/// Server-side session. The cookie carries an opaque random token; only its
+/// SHA-256 hash is stored, so a database leak does not yield usable sessions.
+///
+/// Sessions are rows rather than JWTs because they must be revocable: when a
+/// Super Admin suspends a school, every session belonging to it is deleted and
+/// the next request fails. A stateless token cannot be withdrawn early.
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  ipAddress String?
+  userAgent String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// A bearer token for the REST API.
+///
+/// A token *acts as the user who created it*: it carries no role of its own, so
+/// it can never do more than that person could, and deactivating them — or
+/// suspending their school — kills the token on its next request. Only the
+/// SHA-256 hash is stored; `prefix` exists so a token can be recognised in a
+/// list without being reconstructible.
+///
+/// `schoolId` is denormalised from the owner so tokens can be listed and
+/// scoped per school; it is null for platform (SUPER_ADMIN) tokens.
+model ApiToken {
+  id        String        @id @default(cuid())
+  name      String
+  tokenHash String        @unique
+  prefix    String
+  scope     ApiTokenScope @default(READ)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  schoolId String?
+  school   School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([userId])
+}
+
+/// A one-time code sent to an email address to prove the recipient owns it.
+///
+/// Only the code's hash is stored, and a row carries its own attempt counter
+/// so a six-digit code cannot be ground down: five wrong guesses and the code
+/// is dead, whoever is guessing. Codes expire quickly and are consumed on use.
+model EmailVerification {
+  id       String              @id @default(cuid())
+  email    String
+  purpose  VerificationPurpose @default(SCHOOL_REGISTRATION)
+  codeHash String
+
+  schoolId String?
+  school   School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  lastSentAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
+
+  @@index([schoolId, purpose])
+  @@index([email, purpose])
+  @@index([expiresAt])
+}
+
+/// A tenant. Also serves as the registration request: a submitted registration
+/// is a School row with status PENDING, which avoids a second entity that has
+/// to be kept in sync with the school it becomes.
+model School {
+  id     String       @id @default(cuid())
+  slug   String       @unique
+  status SchoolStatus @default(PENDING)
+
+  /// Reserved for the subdomain and custom-domain stages. Both are nullable
+  /// and unique, so they can be populated per school without a migration.
+  subdomain    String? @unique
+  customDomain String? @unique
+
+  name      String
+  shortName String?
+
+  // --- registration contact (the person who applied) ---
+  contactName  String
+  contactEmail String
+  contactPhone String
+
+  // --- public profile ---
+  about            String?
+  principalName    String?
+  principalMessage String?
+  establishedYear  Int?
+  affiliationBoard String?
+
+  // --- contact details shown on the public site ---
+  email       String?
+  phone       String?
+  addressLine String?
+  city        String?
+  state       String?
+  postalCode  String?
+  country     String  @default("India")
+
+  // --- branding ---
+  logoUrl        String?
+  faviconUrl     String?
+  bannerUrl      String?
+  primaryColor   String  @default("#1e40af")
+  secondaryColor String  @default("#f59e0b")
+
+  /// Set when the contact proves they own the registration address. A school
+  /// cannot be approved before this: otherwise anyone could register a school
+  /// in someone else's name.
+  contactEmailVerifiedAt DateTime?
+
+  // --- review trail ---
+  reviewedAt      DateTime?
+  reviewedById    String?
+  reviewedBy      User?     @relation("SchoolReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  rejectionReason String?
+  suspendedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users                 User[]
+  apiTokens             ApiToken[]
+  emailVerifications    EmailVerification[]
+  academicSessions      AcademicSession[]
+  classes               Class[]
+  streams               Stream[]
+  sections              Section[]
+  subjects              Subject[]
+  teachers              Teacher[]
+  teacherAssignments    TeacherSubjectAssignment[]
+  students              Student[]
+  enrollments           StudentEnrollment[]
+  parents               Parent[]
+  parentStudents        ParentStudent[]
+  timetableSlots        TimetableSlot[]
+  classSessions         ClassSession[]
+  studentAttendance     StudentAttendance[]
+  teacherAttendance     TeacherAttendance[]
+  admissionApplications AdmissionApplication[]
+  notices               Notice[]
+  events                Event[]
+  pages                 SchoolPage[]
+  media                 SchoolMedia[]
+  subscriptions         Subscription[]
+  auditLogs             AuditLog[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// Subscription plan offered by the platform. Priced in paise/cents to keep
+/// money in integers and out of floating point.
+model Plan {
+  id          String   @id @default(cuid())
+  tier        PlanTier @unique
+  name        String
+  description String?
+  priceMinor  Int
+  currency    String   @default("INR")
+  /// Null means unlimited.
+  maxStudents Int?
+  maxTeachers Int?
+  maxAdmins   Int?
+  storageMb   Int?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+/// A school's subscription. Payment integration is deliberately out of V1;
+/// this records what a school is entitled to so limits can be enforced later.
+model Subscription {
+  id        String             @id @default(cuid())
+  schoolId  String
+  school    School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  planId    String
+  plan      Plan               @relation(fields: [planId], references: [id], onDelete: Restrict)
+  status    SubscriptionStatus @default(TRIALING)
+  startsAt  DateTime
+  endsAt    DateTime?
+  notes     String?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  @@unique([schoolId, id])
+  @@index([schoolId, status])
+  @@index([endsAt])
+}
+
+/// Promotional offer on the SaaS marketing homepage, managed by the Super
+/// Admin. Display is bounded by startsAt/endsAt so expired offers stop showing
+/// without anyone having to unpublish them.
+model PlatformOffer {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  priceLabel  String?
+  ctaLabel    String?
+  ctaHref     String?
+  startsAt    DateTime
+  endsAt      DateTime?
+  isActive    Boolean   @default(true)
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([isActive, startsAt, endsAt])
+}
+
+/// Append-only record of consequential actions.
+///
+/// `schoolId` is null for platform-level events. Never write credentials,
+/// password hashes or session tokens into `metadata`.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  schoolId   String?
+  school     School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  action     String
+  entityType String
+  entityId   String?
+  summary    String
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([schoolId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+}
+
+// =============================================================================
+// TENANT LEVEL — every model below is owned by exactly one school
+// =============================================================================
+
+/// An academic year, e.g. "2026-27". Exactly one session per school should
+/// carry `isCurrent`; the application enforces that when switching sessions.
+model AcademicSession {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isCurrent Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sections              Section[]
+  enrollments           StudentEnrollment[]
+  teacherAssignments    TeacherSubjectAssignment[]
+  timetableSlots        TimetableSlot[]
+  studentAttendance     StudentAttendance[]
+  admissionApplications AdmissionApplication[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, name])
+  @@index([schoolId, isCurrent])
+}
+
+/// A grade level. Covers Nursery through Class 12 and is school-defined, so a
+/// school can offer any subset.
+///
+/// `level` drives ordering so that sorting never depends on parsing names:
+/// Nursery = -3, LKG = -2, UKG = -1, and Class N = N.
+model Class {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String
+  level     Int
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sections              Section[]
+  enrollments           StudentEnrollment[]
+  admissionApplications AdmissionApplication[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, name])
+  @@unique([schoolId, level])
+  @@index([schoolId, level])
+}
+
+/// An optional specialisation for senior classes. Science/Commerce/Arts are
+/// seeded, but a school may define any stream it likes.
+model Stream {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sections              Section[]
+  enrollments           StudentEnrollment[]
+  admissionApplications AdmissionApplication[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, name])
+}
+
+/// A concrete cohort: Class 11 "A" (Science) in the 2026-27 session.
+///
+/// Sections are scoped to an academic session, so "Class 10-A" in 2025-26 and
+/// in 2026-27 are different rows holding different students.
+model Section {
+  id                String   @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  classId           String
+  streamId          String?
+  name              String
+  capacity          Int?
+  classTeacherId    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  class           Class           @relation(fields: [schoolId, classId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  stream          Stream?         @relation(fields: [schoolId, streamId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  classTeacher    Teacher?        @relation("SectionClassTeacher", fields: [schoolId, classTeacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  enrollments        StudentEnrollment[]
+  teacherAssignments TeacherSubjectAssignment[]
+  timetableSlots     TimetableSlot[]
+  studentAttendance  StudentAttendance[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, academicSessionId, classId, name])
+  @@index([schoolId, academicSessionId])
+  @@index([schoolId, classId])
+}
+
+model Subject {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name      String
+  code      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teacherAssignments TeacherSubjectAssignment[]
+  timetableSlots     TimetableSlot[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, code])
+  @@index([schoolId, name])
+}
+
+/// Staff profile. The login identity lives on `User`; this holds the
+/// employment record.
+model Teacher {
+  id            String        @id @default(cuid())
+  schoolId      String
+  school        School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  userId        String        @unique
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employeeId    String
+  firstName     String
+  lastName      String
+  email         String?
+  phone         String?
+  gender        Gender?
+  qualification String?
+  joiningDate   DateTime?     @db.Date
+  photoUrl      String?
+  status        TeacherStatus @default(ACTIVE)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  assignments            TeacherSubjectAssignment[]
+  timetableSlots         TimetableSlot[]
+  classTeacherOf         Section[]                  @relation("SectionClassTeacher")
+  attendance             TeacherAttendance[]
+  scheduledClassSessions ClassSession[]             @relation("ClassSessionScheduledTeacher")
+  actualClassSessions    ClassSession[]             @relation("ClassSessionActualTeacher")
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, employeeId])
+  @@index([schoolId, status])
+  @@index([schoolId, lastName])
+}
+
+/// Which teacher teaches which subject to which section, in a given session.
+///
+/// This is also the authorization source for teachers: a teacher may mark
+/// attendance only for sections that appear here.
+model TeacherSubjectAssignment {
+  id                String   @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  teacherId         String
+  subjectId         String
+  sectionId         String
+  createdAt         DateTime @default(now())
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher         Teacher         @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  subject         Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, academicSessionId, teacherId, subjectId, sectionId])
+  @@index([schoolId, teacherId, academicSessionId])
+  @@index([schoolId, sectionId])
+}
+
+/// A child, as a person. Deliberately holds NO class or section.
+///
+/// Placement changes every year and lives in `StudentEnrollment`; storing it
+/// here would mean promoting a child from Class 9 to Class 10 erases the
+/// record of them ever having been in Class 9.
+model Student {
+  id                    String        @id @default(cuid())
+  schoolId              String
+  school                School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// Null until the school issues portal credentials.
+  userId                String?       @unique
+  user                  User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  admissionNumber       String
+  firstName             String
+  lastName              String
+  dateOfBirth           DateTime?     @db.Date
+  gender                Gender?
+  photoUrl              String?
+  status                StudentStatus @default(ACTIVE)
+  admissionDate         DateTime?     @db.Date
+  addressLine           String?
+  city                  String?
+  state                 String?
+  postalCode            String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  bloodGroup            String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  enrollments          StudentEnrollment[]
+  parents              ParentStudent[]
+  attendance           StudentAttendance[]
+  admissionApplication AdmissionApplication?
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, admissionNumber])
+  @@index([schoolId, status])
+  @@index([schoolId, lastName])
+  @@index([schoolId, firstName])
+}
+
+/// One student's placement for one academic session.
+///
+/// This is the table that keeps history intact: promotion inserts a new row
+/// rather than overwriting the old one, so last year's attendance still
+/// resolves to last year's class.
+model StudentEnrollment {
+  id                String           @id @default(cuid())
+  schoolId          String
+  studentId         String
+  academicSessionId String
+  classId           String
+  sectionId         String
+  streamId          String?
+  rollNumber        String?
+  status            EnrollmentStatus @default(ACTIVE)
+  enrolledOn        DateTime         @default(now()) @db.Date
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student         Student         @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  class           Class           @relation(fields: [schoolId, classId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  stream          Stream?         @relation(fields: [schoolId, streamId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  /// A student is placed exactly once per session.
+  @@unique([schoolId, studentId, academicSessionId])
+  /// Roll numbers are unique within a section, per session.
+  @@unique([schoolId, academicSessionId, sectionId, rollNumber])
+  @@index([schoolId, academicSessionId, sectionId])
+  @@index([schoolId, academicSessionId, classId])
+  @@index([schoolId, studentId])
+}
+
+/// A guardian. One parent row can be linked to any number of children through
+/// `ParentStudent`, so siblings never duplicate the parent record.
+model Parent {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  userId      String?  @unique
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  firstName   String
+  lastName    String
+  email       String?
+  phone       String
+  occupation  String?
+  addressLine String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  children ParentStudent[]
+
+  @@unique([schoolId, id])
+  @@index([schoolId, phone])
+  @@index([schoolId, lastName])
+}
+
+/// Join table between guardians and children.
+model ParentStudent {
+  id           String             @id @default(cuid())
+  schoolId     String
+  parentId     String
+  studentId    String
+  relationship ParentRelationship
+  /// The guardian contacted first; at most one per student is enforced by the
+  /// application when saving.
+  isPrimary    Boolean            @default(false)
+  createdAt    DateTime           @default(now())
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  parent  Parent  @relation(fields: [schoolId, parentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  student Student @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, parentId, studentId])
+  @@index([schoolId, studentId])
+  @@index([schoolId, parentId])
+}
+
+/// One recurring period in the weekly timetable.
+///
+/// Times are minutes from midnight rather than DateTime: a period is a
+/// wall-clock slot with no date and no timezone, and integers make ordering
+/// and overlap checks straightforward.
+model TimetableSlot {
+  id                String    @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  sectionId         String
+  subjectId         String
+  teacherId         String
+  dayOfWeek         DayOfWeek
+  startMinute       Int
+  endMinute         Int
+  room              String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  subject         Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher         Teacher         @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  classSessions ClassSession[]
+
+  @@unique([schoolId, id])
+  /// A section cannot have two lessons starting at the same moment.
+  @@unique([schoolId, academicSessionId, sectionId, dayOfWeek, startMinute])
+  /// Nor can a teacher be in two rooms at once. These catch exact collisions;
+  /// partially overlapping periods are rejected in the application layer.
+  @@unique([schoolId, academicSessionId, teacherId, dayOfWeek, startMinute])
+  @@index([schoolId, academicSessionId, sectionId, dayOfWeek])
+  @@index([schoolId, academicSessionId, teacherId, dayOfWeek])
+}
+
+/// A timetabled period on a specific date.
+///
+/// Not surfaced in V1 beyond being written alongside attendance. It exists now
+/// because it is the hook for the product's original problem — substitute
+/// teachers, remote classes and missed-class recovery all hang off this row,
+/// and retrofitting it later would mean backfilling history.
+model ClassSession {
+  id                 String             @id @default(cuid())
+  schoolId           String
+  timetableSlotId    String
+  date               DateTime           @db.Date
+  status             ClassSessionStatus @default(SCHEDULED)
+  scheduledTeacherId String
+  actualTeacherId    String?
+  notes              String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  school           School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  timetableSlot    TimetableSlot @relation(fields: [schoolId, timetableSlotId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  scheduledTeacher Teacher       @relation("ClassSessionScheduledTeacher", fields: [schoolId, scheduledTeacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  actualTeacher    Teacher?      @relation("ClassSessionActualTeacher", fields: [schoolId, actualTeacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, timetableSlotId, date])
+  @@index([schoolId, date, status])
+}
+
+/// Daily attendance for one student.
+///
+/// One record per student per day. Period-level attendance would hang off
+/// `ClassSession` instead; daily is what schools actually operate on in V1.
+model StudentAttendance {
+  id                String           @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  studentId         String
+  sectionId         String
+  date              DateTime         @db.Date
+  status            AttendanceStatus
+  remarks           String?
+  markedByUserId    String?
+  markedAt          DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  student         Student         @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  markedBy        User?           @relation("AttendanceMarker", fields: [markedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  /// Prevents double-marking the same student on the same day.
+  @@unique([schoolId, studentId, date])
+  @@index([schoolId, sectionId, date])
+  @@index([schoolId, academicSessionId, date])
+  @@index([schoolId, date, status])
+}
+
+/// Daily staff attendance. GPS and geofencing are out of V1; check-in and
+/// check-out times are recorded so they can be added without a schema change.
+model TeacherAttendance {
+  id           String                  @id @default(cuid())
+  schoolId     String
+  teacherId    String
+  date         DateTime                @db.Date
+  status       TeacherAttendanceStatus
+  checkInTime  DateTime?
+  checkOutTime DateTime?
+  remarks      String?
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacher Teacher @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, teacherId, date])
+  @@index([schoolId, date, status])
+}
+
+/// A public admission enquiry. Submitted by anyone from the school's public
+/// site, so it holds plain contact fields rather than links to User records.
+///
+/// Accepting an application creates the Student and Parent rows and points
+/// `createdStudentId` at the result; nothing is created before the school
+/// approves.
+model AdmissionApplication {
+  id                String          @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  applicationNumber String
+  status            AdmissionStatus @default(SUBMITTED)
+
+  // --- applicant ---
+  studentFirstName String
+  studentLastName  String
+  dateOfBirth      DateTime? @db.Date
+  gender           Gender?
+  previousSchool   String?
+
+  // --- guardian ---
+  parentName         String
+  parentRelationship ParentRelationship @default(GUARDIAN)
+  parentPhone        String
+  parentEmail        String?
+  addressLine        String?
+  city               String?
+  state              String?
+  postalCode         String?
+
+  // --- request ---
+  requestedClassId  String
+  requestedStreamId String?
+  notes             String?
+
+  submittedAt      DateTime  @default(now())
+  reviewedAt       DateTime?
+  reviewedById     String?
+  reviewNotes      String?
+  createdStudentId String?
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  requestedClass  Class           @relation(fields: [schoolId, requestedClassId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  requestedStream Stream?         @relation(fields: [schoolId, requestedStreamId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  reviewedBy      User?           @relation("AdmissionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  createdStudent  Student?        @relation(fields: [schoolId, createdStudentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, applicationNumber])
+  /// Composite, because `createdStudent` is a one-to-one across the tenant key.
+  @@unique([schoolId, createdStudentId])
+  @@index([schoolId, status, submittedAt])
+  @@index([schoolId, academicSessionId])
+  @@index([schoolId, parentPhone])
+}
+
+/// An announcement. `isPublic` controls whether it also appears on the
+/// school's public website; `audience` controls who sees it once signed in.
+model Notice {
+  id        String         @id @default(cuid())
+  schoolId  String
+  school    School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  audience  NoticeAudience @default(ALL)
+  status    NoticeStatus   @default(DRAFT)
+  isPublic  Boolean        @default(false)
+  publishAt DateTime?
+  expiresAt DateTime?
+  authorId  String?
+  author    User?          @relation("NoticeAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([schoolId, id])
+  @@index([schoolId, status, publishAt])
+  @@index([schoolId, audience, status])
+  @@index([schoolId, isPublic, status])
+}
+
+model Event {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  date        DateTime @db.Date
+  startMinute Int?
+  endMinute   Int?
+  location    String?
+  imageUrl    String?
+  isPublished Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([schoolId, id])
+  @@index([schoolId, date])
+  @@index([schoolId, isPublished, date])
+}
+
+/// A page of the school's public website, edited by the School Admin.
+///
+/// `body` is stored as plain text/Markdown and rendered through a sanitiser —
+/// raw HTML is never accepted, so a school admin cannot inject script into
+/// their own public site.
+model SchoolPage {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  slug        String
+  title       String
+  body        String
+  isPublished Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, slug])
+  @@index([schoolId, isPublished])
+}
+
+/// An uploaded asset (gallery image, banner, logo) held in object storage.
+model SchoolMedia {
+  id          String        @id @default(cuid())
+  schoolId    String
+  school      School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  category    MediaCategory @default(GALLERY)
+  url         String
+  caption     String?
+  contentType String?
+  sizeBytes   Int?
+  sortOrder   Int           @default(0)
+  createdAt   DateTime      @default(now())
+
+  @@unique([schoolId, id])
+  @@index([schoolId, category, sortOrder])
+}

@@ -1,0 +1,63 @@
+import type { SchoolStatus } from "@/generated/prisma/enums";
+import { prisma } from "@/server/db/prisma";
+import { fakeVerifyPassword, verifyPassword } from "@/server/auth/password";
+
+/**
+ * Credential verification.
+ *
+ * Every failure returns the same opaque outcome to the caller. The reasons are
+ * distinguished internally only so the audit log can record them; the user is
+ * always told the same thing, because "no such account" and "wrong password"
+ * told apart is an account-enumeration oracle.
+ */
+
+export type LoginFailureReason =
+  | "INVALID_CREDENTIALS"
+  | "ACCOUNT_DISABLED"
+  | "SCHOOL_NOT_ACTIVE";
+
+export type LoginOutcome =
+  | { ok: true; userId: string; schoolId: string | null }
+  | { ok: false; reason: LoginFailureReason };
+
+export async function authenticate(
+  email: string,
+  password: string,
+): Promise<LoginOutcome> {
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: {
+      id: true,
+      passwordHash: true,
+      isActive: true,
+      role: true,
+      schoolId: true,
+      school: { select: { status: true } },
+    },
+  });
+
+  if (!user) {
+    // Spend the same CPU a real bcrypt comparison would, so an unknown email
+    // is not detectable from how quickly the request comes back.
+    await fakeVerifyPassword(password);
+    return { ok: false, reason: "INVALID_CREDENTIALS" };
+  }
+
+  const passwordOk = await verifyPassword(password, user.passwordHash);
+  if (!passwordOk) {
+    return { ok: false, reason: "INVALID_CREDENTIALS" };
+  }
+
+  if (!user.isActive) {
+    return { ok: false, reason: "ACCOUNT_DISABLED" };
+  }
+
+  if (user.role !== "SUPER_ADMIN") {
+    const status: SchoolStatus | undefined = user.school?.status;
+    if (!user.schoolId || status !== "ACTIVE") {
+      return { ok: false, reason: "SCHOOL_NOT_ACTIVE" };
+    }
+  }
+
+  return { ok: true, userId: user.id, schoolId: user.schoolId };
+}

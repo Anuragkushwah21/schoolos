@@ -1,0 +1,266 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+
+import { ActionButton } from "@/components/forms/action-button";
+import { PageHeader } from "@/components/shared/page-header";
+import { StatusBadge } from "@/components/shared/status-badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { unlinkGuardianAction } from "@/features/school/people-actions";
+import {
+  EditParentForm,
+  EnrollmentForm,
+  LinkGuardianForm,
+  PortalAccessForm,
+  ResetPortalPasswordForm,
+} from "@/features/school/people-forms";
+import { formatDate, formatDateTime } from "@/lib/dates";
+import { formatPercent, humanize } from "@/lib/format";
+import { requireTenant } from "@/server/auth/current-user";
+import { listAcademicSessions, sectionLabel } from "@/server/academics/structure";
+import { orNotFound } from "@/server/page-helpers";
+import { getStudentProfile, searchParents } from "@/server/people/students";
+
+export const metadata: Metadata = { title: "Student" };
+
+function Detail({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="contents">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd>{children || "—"}</dd>
+    </div>
+  );
+}
+
+export default async function StudentPage(props: PageProps<"/admin/students/[studentId]">) {
+  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const { studentId } = await props.params;
+
+  const [{ student, attendance }, sessions, parents] = await Promise.all([
+    orNotFound(getStudentProfile(ctx, studentId)),
+    listAcademicSessions(ctx),
+    searchParents(ctx),
+  ]);
+
+  const sectionsBySession = await ctx.db.section.findMany({
+    where: { academicSessionId: { in: sessions.map((s) => s.id) } },
+    select: {
+      id: true,
+      name: true,
+      academicSessionId: true,
+      class: { select: { name: true, level: true } },
+      stream: { select: { name: true } },
+    },
+  });
+  const sectionOptions = sectionsBySession
+    .sort((a, b) => a.class.level - b.class.level || a.name.localeCompare(b.name))
+    .map((section) => ({ value: section.id, label: sectionLabel(section), sessionId: section.academicSessionId }));
+
+  const current = student.enrollments.find((e) => e.academicSession.isCurrent);
+  const counts = Object.fromEntries(attendance.map((row) => [row.status, row._count._all]));
+  const marked = attendance.reduce((sum, row) => sum + row._count._all, 0);
+  const attended = (counts.PRESENT ?? 0) + (counts.LATE ?? 0);
+  const linkedParentIds = new Set(student.parents.map((link) => link.parent.id));
+
+  return (
+    <>
+      <PageHeader
+        back={{ href: "/admin/students", label: "Students" }}
+        title={`${student.firstName} ${student.lastName}`}
+        description={
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <StatusBadge status={student.status} />
+            <span>
+              {student.admissionNumber}
+              {current ? ` · ${sectionLabel(current.section)}${current.rollNumber ? `, roll ${current.rollNumber}` : ""}` : " · not placed this session"}
+            </span>
+          </span>
+        }
+        actions={
+          <Button asChild variant="outline">
+            <Link href={`/admin/students/${student.id}/edit`}>Edit details</Link>
+          </Button>
+        }
+      />
+
+      <div className="grid gap-6 xl:grid-cols-[1.3fr_1fr]">
+        <div className="flex flex-col gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Attendance this session</CardTitle>
+              <CardDescription>
+                {marked ? `${formatPercent(attended, marked)} attended across ${marked} marked days.` : "No attendance marked yet."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {(["PRESENT", "LATE", "ABSENT", "EXCUSED"] as const).map((status) => (
+                  <div key={status} className="rounded-lg border p-3">
+                    <dt className="text-muted-foreground text-xs">{humanize(status)}</dt>
+                    <dd className="text-xl font-semibold tabular-nums">{counts[status] ?? 0}</dd>
+                  </div>
+                ))}
+              </dl>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Guardians</CardTitle>
+              <CardDescription>A guardian with a login sees all of their linked children.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {student.parents.map((link) => (
+                <div key={link.id} className="flex flex-col gap-3 rounded-lg border p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="flex items-center gap-2 font-medium">
+                        {link.parent.firstName} {link.parent.lastName}
+                        {link.isPrimary ? <StatusBadge status="ACTIVE" label="Primary" tone="info" /> : null}
+                      </p>
+                      <p className="text-muted-foreground text-xs">
+                        {humanize(link.relationship)} · {link.parent.phone}
+                        {link.parent.email ? ` · ${link.parent.email}` : ""}
+                      </p>
+                    </div>
+                    <ActionButton
+                      action={unlinkGuardianAction}
+                      fields={{ linkId: link.id }}
+                      variant="ghost"
+                      size="xs"
+                      confirm={{
+                        title: "Unlink this guardian?",
+                        description: "Their record is kept, but they will no longer see this child.",
+                        confirmLabel: "Unlink",
+                      }}
+                    >
+                      Unlink
+                    </ActionButton>
+                  </div>
+
+                  {link.parent.user ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <p className="text-muted-foreground text-xs">
+                        Login {link.parent.user.email} · last sign-in {formatDateTime(link.parent.user.lastLoginAt)}
+                      </p>
+                      <ResetPortalPasswordForm userId={link.parent.user.id} />
+                    </div>
+                  ) : (
+                    <PortalAccessForm kind="parent" personId={link.parent.id} defaultEmail={link.parent.email} />
+                  )}
+
+                  <details className="text-sm">
+                    <summary className="text-muted-foreground cursor-pointer">Edit guardian details</summary>
+                    <div className="mt-3">
+                      <EditParentForm
+                        parent={{
+                          id: link.parent.id,
+                          firstName: link.parent.firstName,
+                          lastName: link.parent.lastName,
+                          phone: link.parent.phone,
+                          email: link.parent.email,
+                          occupation: link.parent.occupation,
+                          addressLine: link.parent.addressLine,
+                        }}
+                      />
+                    </div>
+                  </details>
+                </div>
+              ))}
+
+              <details className="rounded-lg border border-dashed p-4" open={student.parents.length === 0}>
+                <summary className="cursor-pointer text-sm font-medium">Link a guardian</summary>
+                <div className="mt-4">
+                  <LinkGuardianForm
+                    studentId={student.id}
+                    parents={parents
+                      .filter((p) => !linkedParentIds.has(p.id))
+                      .map((p) => ({ value: p.id, label: `${p.firstName} ${p.lastName} · ${p.phone}` }))}
+                  />
+                </div>
+              </details>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="flex flex-col gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Placement</CardTitle>
+              <CardDescription>One placement per session; earlier years are kept.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-5">
+              {student.enrollments.length ? (
+                <ul className="flex flex-col gap-2 text-sm">
+                  {student.enrollments.map((enrollment) => (
+                    <li key={enrollment.id} className="flex items-center justify-between gap-2">
+                      <span>
+                        <span className="font-medium">{enrollment.academicSession.name}</span> ·{" "}
+                        {sectionLabel(enrollment.section)}
+                        {enrollment.rollNumber ? `, roll ${enrollment.rollNumber}` : ""}
+                      </span>
+                      <StatusBadge status={enrollment.status} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <EnrollmentForm
+                studentId={student.id}
+                sessions={sessions.map((s) => ({ value: s.id, label: s.isCurrent ? `${s.name} (current)` : s.name }))}
+                sections={sectionOptions}
+                defaults={{
+                  sessionId: current?.academicSession.id ?? sessions.find((s) => s.isCurrent)?.id,
+                  sectionId: current?.section.id,
+                  rollNumber: current?.rollNumber,
+                }}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Student login</CardTitle>
+              <CardDescription>Lets the student see their timetable, attendance and notices.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {student.user ? (
+                <div className="flex flex-col gap-3 text-sm">
+                  <p>
+                    {student.user.email}
+                    {student.user.isActive ? null : <StatusBadge status="INACTIVE" label="Disabled" className="ml-2" />}
+                  </p>
+                  <p className="text-muted-foreground text-xs">Last sign-in {formatDateTime(student.user.lastLoginAt)}</p>
+                  <ResetPortalPasswordForm userId={student.user.id} />
+                </div>
+              ) : student.status === "ACTIVE" ? (
+                <PortalAccessForm kind="student" personId={student.id} />
+              ) : (
+                <p className="text-muted-foreground text-sm">Only active students can be given a login.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Details</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+                <Detail label="Gender">{student.gender ? humanize(student.gender) : null}</Detail>
+                <Detail label="Date of birth">{student.dateOfBirth ? formatDate(student.dateOfBirth) : null}</Detail>
+                <Detail label="Admitted">{student.admissionDate ? formatDate(student.admissionDate) : null}</Detail>
+                <Detail label="Blood group">{student.bloodGroup}</Detail>
+                <Detail label="Address">
+                  {[student.addressLine, student.city, student.state, student.postalCode].filter(Boolean).join(", ")}
+                </Detail>
+                <Detail label="Emergency">
+                  {[student.emergencyContactName, student.emergencyContactPhone].filter(Boolean).join(" · ")}
+                </Detail>
+              </dl>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </>
+  );
+}

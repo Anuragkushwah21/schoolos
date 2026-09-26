@@ -119,6 +119,13 @@ enum NoticeStatus {
   ARCHIVED
 }
 
+/// A draft is the teacher's own; only PUBLISHED homework is work a class has
+/// actually been set.
+enum HomeworkStatus {
+  DRAFT
+  PUBLISHED
+}
+
 enum DayOfWeek {
   MONDAY
   TUESDAY
@@ -130,9 +137,10 @@ enum DayOfWeek {
 }
 
 /// Lifecycle of a single timetabled period on a specific date.
-/// Only SCHEDULED and COMPLETED are used in V1; the remaining values exist so
-/// substitute, remote and missed-class recovery can be built without a
-/// migration that rewrites history.
+///
+/// SCHEDULED is the absence of a record: the timetable says the period exists
+/// and nobody has written it up yet. The rest are what the teacher who took it
+/// — or the substitute who stood in — recorded afterwards.
 enum ClassSessionStatus {
   SCHEDULED
   COMPLETED
@@ -140,6 +148,27 @@ enum ClassSessionStatus {
   REMOTE
   MISSED
   CANCELLED
+}
+
+/// A teacher's structured read on one child, kept to fixed bands rather than
+/// free prose so a parent sees the same three questions answered every time —
+/// and so nothing beyond those bands is ever put on a child's record.
+enum RemarkLevel {
+  GOOD
+  AVERAGE
+  NEEDS_ATTENTION
+}
+
+enum HomeworkHabit {
+  REGULAR
+  SOMETIMES_MISSING
+  FREQUENTLY_MISSING
+}
+
+enum ParticipationLevel {
+  ACTIVE
+  AVERAGE
+  NEEDS_IMPROVEMENT
 }
 
 enum PlanTier {
@@ -154,6 +183,36 @@ enum SubscriptionStatus {
   PAST_DUE
   CANCELLED
   EXPIRED
+}
+
+/// What a teacher attached to a lesson. `LINK` and `DOCUMENT` carry a URL;
+/// `NOTES`, `QUESTIONS` and `PRACTICE` carry text the teacher typed. There is no
+/// upload pipeline in V1, so a document is a URL the school already hosts.
+enum LessonMaterialKind {
+  NOTES
+  LINK
+  DOCUMENT
+  QUESTIONS
+  PRACTICE
+}
+
+/// How a salary is expressed. Only MONTHLY is used today; the others exist so a
+/// school that pays hourly staff does not need a migration to say so.
+enum SalaryType {
+  MONTHLY
+  ANNUAL
+  HOURLY
+}
+
+/// How a fee payment reached the school. `OTHER` covers whatever a school does
+/// that this list does not — the point is a record, not a taxonomy.
+enum PaymentMethod {
+  CASH
+  CHEQUE
+  BANK_TRANSFER
+  UPI
+  CARD
+  OTHER
 }
 
 enum MediaCategory {
@@ -222,6 +281,8 @@ model User {
   reviewedAdmissions AdmissionApplication[] @relation("AdmissionReviewer")
   authoredNotices    Notice[]               @relation("NoticeAuthor")
   markedAttendance   StudentAttendance[]    @relation("AttendanceMarker")
+  recordedSalaries   TeacherSalary[]        @relation("SalaryRecorder")
+  recordedPayments   FeePayment[]           @relation("PaymentRecorder")
 
   @@index([schoolId, role])
   @@index([role])
@@ -381,6 +442,8 @@ model School {
   classSessions         ClassSession[]
   studentAttendance     StudentAttendance[]
   teacherAttendance     TeacherAttendance[]
+  homework              Homework[]
+  studentRemarks        StudentRemark[]
   admissionApplications AdmissionApplication[]
   notices               Notice[]
   events                Event[]
@@ -388,6 +451,14 @@ model School {
   media                 SchoolMedia[]
   subscriptions         Subscription[]
   auditLogs             AuditLog[]
+  assessments           Assessment[]
+  assessmentResults     AssessmentResult[]
+  lessonMaterials       LessonMaterial[]
+  teacherSalaries       TeacherSalary[]
+  classTeacherHistory   ClassTeacherAssignment[]
+  feeHeads              FeeHead[]
+  feeCharges            FeeCharge[]
+  feePayments           FeePayment[]
 
   @@index([status])
   @@index([createdAt])
@@ -499,7 +570,13 @@ model AcademicSession {
   teacherAssignments    TeacherSubjectAssignment[]
   timetableSlots        TimetableSlot[]
   studentAttendance     StudentAttendance[]
+  homework              Homework[]
+  studentRemarks        StudentRemark[]
   admissionApplications AdmissionApplication[]
+  assessments           Assessment[]
+  classTeacherHistory   ClassTeacherAssignment[]
+  feeCharges            FeeCharge[]
+  feePayments           FeePayment[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, name])
@@ -572,10 +649,13 @@ model Section {
   stream          Stream?         @relation(fields: [schoolId, streamId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   classTeacher    Teacher?        @relation("SectionClassTeacher", fields: [schoolId, classTeacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
 
-  enrollments        StudentEnrollment[]
-  teacherAssignments TeacherSubjectAssignment[]
-  timetableSlots     TimetableSlot[]
-  studentAttendance  StudentAttendance[]
+  enrollments         StudentEnrollment[]
+  teacherAssignments  TeacherSubjectAssignment[]
+  timetableSlots      TimetableSlot[]
+  studentAttendance   StudentAttendance[]
+  homework            Homework[]
+  assessments         Assessment[]
+  classTeacherHistory ClassTeacherAssignment[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, academicSessionId, classId, name])
@@ -595,6 +675,9 @@ model Subject {
 
   teacherAssignments TeacherSubjectAssignment[]
   timetableSlots     TimetableSlot[]
+  homework           Homework[]
+  studentRemarks     StudentRemark[]
+  assessments        Assessment[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, code])
@@ -615,7 +698,14 @@ model Teacher {
   email         String?
   phone         String?
   gender        Gender?
+  dateOfBirth   DateTime?     @db.Date
   qualification String?
+  /// What the school calls this post — "Senior Teacher", "Head of Science".
+  designation   String?
+  addressLine   String?
+  city          String?
+  state         String?
+  postalCode    String?
   joiningDate   DateTime?     @db.Date
   photoUrl      String?
   status        TeacherStatus @default(ACTIVE)
@@ -625,9 +715,14 @@ model Teacher {
   assignments            TeacherSubjectAssignment[]
   timetableSlots         TimetableSlot[]
   classTeacherOf         Section[]                  @relation("SectionClassTeacher")
+  classTeacherHistory    ClassTeacherAssignment[]
+  salaries               TeacherSalary[]
   attendance             TeacherAttendance[]
   scheduledClassSessions ClassSession[]             @relation("ClassSessionScheduledTeacher")
   actualClassSessions    ClassSession[]             @relation("ClassSessionActualTeacher")
+  homework               Homework[]
+  studentRemarks         StudentRemark[]
+  assessments            Assessment[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, employeeId])
@@ -693,6 +788,10 @@ model Student {
   enrollments          StudentEnrollment[]
   parents              ParentStudent[]
   attendance           StudentAttendance[]
+  remarks              StudentRemark[]
+  assessmentResults    AssessmentResult[]
+  feeCharges           FeeCharge[]
+  feePayments          FeePayment[]
   admissionApplication AdmissionApplication?
 
   @@unique([schoolId, id])
@@ -821,12 +920,17 @@ model TimetableSlot {
   @@index([schoolId, academicSessionId, teacherId, dayOfWeek])
 }
 
-/// A timetabled period on a specific date.
+/// A timetabled period on a specific date — and the teacher's record of what
+/// happened in it.
 ///
-/// Not surfaced in V1 beyond being written alongside attendance. It exists now
-/// because it is the hook for the product's original problem — substitute
-/// teachers, remote classes and missed-class recovery all hang off this row,
-/// and retrofitting it later would mean backfilling history.
+/// This is the "class activity" a teacher fills in after a lesson. It carries
+/// no class, section, subject or academic session of its own: every one of
+/// those is reached through `timetableSlot`, which already holds them and is
+/// the same row the timetable is drawn from. Copying them here would let a
+/// lesson's record drift from the lesson.
+///
+/// It is also the hook for the product's original problem — substitute
+/// teachers, remote classes and missed-class recovery all hang off this row.
 model ClassSession {
   id                 String             @id @default(cuid())
   schoolId           String
@@ -835,7 +939,20 @@ model ClassSession {
   status             ClassSessionStatus @default(SCHEDULED)
   scheduledTeacherId String
   actualTeacherId    String?
+  /// What was taught. Short, and the one field a parent report would quote.
+  topic              String?
+  /// Anything longer the teacher wants on the record.
   notes              String?
+  /// What the teacher intends to cover, set before the class rather than after.
+  /// A row with this and `status = SCHEDULED` is a planned lesson; the same row
+  /// becomes the record of it once the teacher writes it up, which is why there
+  /// is no separate lesson-plan table.
+  plannedTopic       String?
+  /// What students should do before the class. The one field that makes an
+  /// upcoming lesson actionable rather than just announced.
+  preparation        String?
+  /// The short list a student revises from — "practice questions 1-10".
+  importantPoints    String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -844,9 +961,15 @@ model ClassSession {
   scheduledTeacher Teacher       @relation("ClassSessionScheduledTeacher", fields: [schoolId, scheduledTeacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   actualTeacher    Teacher?      @relation("ClassSessionActualTeacher", fields: [schoolId, actualTeacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
 
+  materials LessonMaterial[]
+
   @@unique([schoolId, id])
+  /// One record per period per day: a teacher saving twice edits the first
+  /// record rather than creating a second one.
   @@unique([schoolId, timetableSlotId, date])
   @@index([schoolId, date, status])
+  /// "My recent classes", which is how a teacher reads this table.
+  @@index([schoolId, scheduledTeacherId, date])
 }
 
 /// Daily attendance for one student.
@@ -900,6 +1023,315 @@ model TeacherAttendance {
   @@unique([schoolId, id])
   @@unique([schoolId, teacherId, date])
   @@index([schoolId, date, status])
+}
+
+/// Work set for a whole section in one subject.
+///
+/// Addressed to the section, not to individual students: that is how a
+/// teacher actually sets homework, and it keeps one row per assignment
+/// instead of one per child. Per-student submission and marking would be a
+/// separate table hanging off this one.
+model Homework {
+  id                String         @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  sectionId         String
+  subjectId         String
+  /// Who set it. Also decides who may edit it.
+  teacherId         String
+  title             String
+  description       String?
+  assignedOn        DateTime       @db.Date
+  dueOn             DateTime       @db.Date
+  status            HomeworkStatus @default(PUBLISHED)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  subject         Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher         Teacher         @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  /// What a section is due to hand in — the query a report would run.
+  @@index([schoolId, academicSessionId, sectionId, dueOn])
+  /// What this teacher has set, newest first.
+  @@index([schoolId, teacherId, assignedOn])
+  @@index([schoolId, status, dueOn])
+}
+
+/// A teacher's note about one child, for one academic session.
+///
+/// Deliberately plain text and deliberately attributed: the teacher who wrote
+/// a remark is the only one who may change it, and the session scope keeps
+/// last year's notes out of this year's report.
+model StudentRemark {
+  id                String              @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  studentId         String
+  teacherId         String
+  /// Which subject prompted it, where that is meaningful.
+  subjectId         String?
+  /// The three structured bands. All optional: a teacher may answer one, all
+  /// three, or none and write only a note. The application requires at least
+  /// one of the four to be present, so an empty remark cannot be saved.
+  understanding     RemarkLevel?
+  homeworkHabit     HomeworkHabit?
+  participation     ParticipationLevel?
+  /// The teacher's own words. Optional since the bands can stand alone.
+  body              String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  student         Student         @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher         Teacher         @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  subject         Subject?        @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, academicSessionId, studentId])
+  @@index([schoolId, teacherId, createdAt])
+}
+
+/// One assessment a class sits: a unit test, a term exam, a class quiz.
+///
+/// Scoped to a section rather than a class so two sections of Class 10 can sit
+/// the same paper on different days, which is how schools actually run them.
+/// Marks live on `AssessmentResult`, one row per child.
+model Assessment {
+  id                String   @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  sectionId         String
+  subjectId         String
+  /// Who set it. Null once that teacher's record is removed.
+  teacherId         String?
+  name              String
+  date              DateTime @db.Date
+  /// The paper's total. Integer: schools mark in whole numbers, and a float
+  /// here would invite rounding differences between the two ends of a report.
+  maxMarks          Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  subject         Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher         Teacher?        @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  results AssessmentResult[]
+
+  @@unique([schoolId, id])
+  @@index([schoolId, academicSessionId, sectionId, date])
+  @@index([schoolId, subjectId, date])
+}
+
+/// Something a teacher attached to one lesson for the class to work from.
+///
+/// Hung off `ClassSession` rather than off a subject or a section, because the
+/// question a student asks is "what did we get for *that* lesson?" — and because
+/// the lesson already carries the authorization: only the teacher who may write
+/// that period up may attach to it.
+///
+/// Zero to many per lesson, which is the whole reason this is a table and not
+/// three more columns.
+model LessonMaterial {
+  id             String             @id @default(cuid())
+  schoolId       String
+  classSessionId String
+  kind           LessonMaterialKind
+  title          String
+  /// For LINK and DOCUMENT. `https://` only — there is no upload pipeline.
+  url            String?
+  /// For NOTES, QUESTIONS and PRACTICE: the teacher's own text.
+  body           String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  school       School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classSession ClassSession @relation(fields: [schoolId, classSessionId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, classSessionId])
+}
+
+/// One child's marks in one assessment.
+///
+/// `marksObtained` is null for a child who did not sit it — distinct from a
+/// zero, which is a mark. The percentage is not stored: it is
+/// `marksObtained / assessment.maxMarks`, and storing it would let the two
+/// disagree the moment a paper's total is corrected.
+model AssessmentResult {
+  id            String   @id @default(cuid())
+  schoolId      String
+  assessmentId  String
+  studentId     String
+  marksObtained Int?
+  /// Absent, medical leave, exempted — the reason there is no mark.
+  remarks       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  school     School     @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  assessment Assessment @relation(fields: [schoolId, assessmentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  student    Student    @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  /// One result per child per assessment.
+  @@unique([schoolId, assessmentId, studentId])
+  @@index([schoolId, studentId])
+}
+
+/// What a teacher is paid, from a date.
+///
+/// Effective-dated rather than a column on `Teacher`: a raise is a new row, so
+/// what somebody was paid last April survives the change. The current figure is
+/// the newest row whose `effectiveFrom` has passed, which is also how a future
+/// raise can be entered before it takes effect.
+///
+/// Money is integer paise, the same convention as `Plan.priceMinor`. A float
+/// would let two screens disagree about ₹25,000 by a rounding error.
+model TeacherSalary {
+  id              String     @id @default(cuid())
+  schoolId        String
+  teacherId       String
+  salaryType      SalaryType @default(MONTHLY)
+  amountMinor     Int
+  /// Regular additions — travel, housing. Stored separately so the base figure
+  /// stays comparable between staff.
+  allowancesMinor Int        @default(0)
+  /// Regular subtractions — provident fund, professional tax.
+  deductionsMinor Int        @default(0)
+  effectiveFrom   DateTime   @db.Date
+  notes           String?
+  /// Who entered it. Kept so a figure can be traced without reading the log.
+  recordedById    String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  school     School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacher    Teacher @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  recordedBy User?   @relation("SalaryRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  /// One figure per teacher per effective date; correcting one edits that row.
+  @@unique([schoolId, teacherId, effectiveFrom])
+  @@index([schoolId, teacherId, effectiveFrom])
+}
+
+/// Who was class teacher of a section, and when.
+///
+/// `Section.classTeacherId` stays the current pointer that the rest of the app
+/// reads — this is the history behind it, opened and closed as the office
+/// reassigns. Not a duplicate concept: one answers "who is it now" in a single
+/// join, the other answers "who was it in August", and collapsing them into one
+/// would cost every screen a date filter.
+model ClassTeacherAssignment {
+  id                String    @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  sectionId         String
+  teacherId         String
+  fromDate          DateTime  @db.Date
+  /// Null while this is the current assignment.
+  toDate            DateTime? @db.Date
+  createdAt         DateTime  @default(now())
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher         Teacher         @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, sectionId, fromDate])
+  @@index([schoolId, teacherId, fromDate])
+}
+
+/// A kind of fee a school charges. Configurable, because no two schools bill
+/// the same things: one has a transport fee, another a lab fee.
+model FeeHead {
+  id        String   @id @default(cuid())
+  schoolId  String
+  name      String
+  /// Shown to parents above the breakdown, where the name alone is not enough.
+  note      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school  School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  charges FeeCharge[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, name])
+  @@index([schoolId, isActive])
+}
+
+/// One amount charged to one student for one session, under one head.
+///
+/// Per student rather than per class, because that is where a charge actually
+/// lands: two children in the same class can owe different transport fees. The
+/// admin raises them for a whole class in one action, which writes one row each.
+model FeeCharge {
+  id                String   @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  studentId         String
+  feeHeadId         String
+  amountMinor       Int
+  dueOn             DateTime @db.Date
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  student         Student         @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  feeHead         FeeHead         @relation(fields: [schoolId, feeHeadId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  /// One charge per head per student per session; raising it twice edits the
+  /// first rather than billing the family twice for the same thing.
+  @@unique([schoolId, academicSessionId, studentId, feeHeadId])
+  @@index([schoolId, academicSessionId, studentId])
+  @@index([schoolId, academicSessionId, dueOn])
+}
+
+/// Money received against one student's fees for one session.
+///
+/// Deliberately not allocated head by head. Schools take a payment against the
+/// account — "₹10,000 towards this year" — and forcing the office to split every
+/// receipt across four heads invents work and a new way to be wrong. What is
+/// owed is the sum of the charges; what is left is that minus the payments.
+model FeePayment {
+  id                String        @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  studentId         String
+  amountMinor       Int
+  paidOn            DateTime      @db.Date
+  method            PaymentMethod @default(CASH)
+  /// The school's own receipt number, unique within the school.
+  receiptNo         String
+  notes             String?
+  /// Who took the payment.
+  recordedById      String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  student         Student         @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  recordedBy      User?           @relation("PaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, receiptNo])
+  @@index([schoolId, academicSessionId, studentId])
+  @@index([schoolId, paidOn])
 }
 
 /// A public admission enquiry. Submitted by anyone from the school's public

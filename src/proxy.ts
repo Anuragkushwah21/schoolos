@@ -18,8 +18,8 @@ import { SESSION_COOKIE_NAME } from "@/server/auth/session";
  */
 
 const PROTECTED_PREFIXES = [
-  "/platform",
-  "/admin",
+  "/super-admin",
+  "/school-admin",
   "/teacher",
   "/student",
   "/parent",

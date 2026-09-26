@@ -133,19 +133,31 @@ function StudentContactFields({ d }: { d: StudentDefaults }) {
   );
 }
 
+/**
+ * Attaching a parent to a child.
+ *
+ * There is no "add later": a child cannot be admitted with nobody responsible
+ * for them, and the server refuses it too. The choice that matters is whether
+ * this family is already at the school — picking the existing parent is what
+ * keeps one guardian with three children as one account rather than three.
+ */
 function GuardianModeFields({
   parents,
   modes,
 }: {
   parents: SelectOption[];
-  modes: Array<"none" | "existing" | "new">;
+  modes: Array<"existing" | "new">;
 }) {
-  const [mode, setMode] = useState(modes[0]!);
+  // Default to the existing parent when there is one to pick: a sibling already
+  // at the school is the case that creates duplicates when it is missed.
+  const [mode, setMode] = useState<"existing" | "new">(
+    modes.includes("existing") && parents.length ? "existing" : "new",
+  );
 
   return (
     <>
       <div className="flex flex-col gap-2">
-        <Label htmlFor="guardianMode">Guardian</Label>
+        <Label htmlFor="guardianMode">Parent or guardian</Label>
         <select
           id="guardianMode"
           name="guardianMode"
@@ -153,16 +165,26 @@ function GuardianModeFields({
           onChange={(event) => setMode(event.target.value as typeof mode)}
           className={`${nativeSelectClass} w-full`}
         >
-          {modes.includes("none") ? <option value="none">Add later</option> : null}
           {modes.includes("existing") && parents.length ? (
-            <option value="existing">Existing guardian (sibling already at school)</option>
+            <option value="existing">Existing parent — a sibling is already at this school</option>
           ) : null}
-          {modes.includes("new") ? <option value="new">New guardian</option> : null}
+          {modes.includes("new") ? <option value="new">New parent</option> : null}
         </select>
+        <p className="text-muted-foreground text-xs">
+          Every student needs at least one. Search the existing list first so a family with more
+          than one child keeps a single parent account.
+        </p>
       </div>
 
       {mode === "existing" ? (
-        <SelectField name="existingParentId" label="Choose guardian" options={parents} placeholder="Select…" required />
+        <SelectField
+          name="existingParentId"
+          label="Choose the parent"
+          options={parents}
+          placeholder="Search by name or phone…"
+          hint="Listed with their phone number so two people with the same name can be told apart."
+          required
+        />
       ) : null}
 
       {mode === "new" ? (
@@ -172,15 +194,19 @@ function GuardianModeFields({
             <TextField name="parentLastName" label="Last name" required />
           </FieldRow>
           <FieldRow>
-            <TextField name="parentPhone" label="Phone" type="tel" required />
+            <TextField name="parentPhone" label="Mobile" type="tel" required />
             <TextField name="parentEmail" label="Email" type="email" />
           </FieldRow>
         </>
       ) : null}
 
-      {mode !== "none" ? (
-        <SelectField name="relationship" label="Relationship" options={RELATIONSHIP_OPTIONS} defaultValue="GUARDIAN" required />
-      ) : null}
+      <SelectField
+        name="relationship"
+        label="Relationship to the student"
+        options={RELATIONSHIP_OPTIONS}
+        defaultValue="FATHER"
+        required
+      />
     </>
   );
 }
@@ -207,8 +233,8 @@ export function CreateStudentForm({
         </FieldRow>
       </Section>
 
-      <Section title="Guardian">
-        <GuardianModeFields parents={parents} modes={["new", "existing", "none"]} />
+      <Section title="Parent">
+        <GuardianModeFields parents={parents} modes={["existing", "new"]} />
       </Section>
 
       <Section title="Address and emergency contact">
@@ -391,12 +417,19 @@ export function ResetPortalPasswordForm({ userId }: { userId: string }) {
 
 type TeacherDefaults = {
   teacherId?: string;
+  email?: string;
   firstName?: string;
   lastName?: string;
   gender?: string | null;
   employeeId?: string;
   phone?: string | null;
   qualification?: string | null;
+  designation?: string | null;
+  dateOfBirth?: string;
+  addressLine?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
   joiningDate?: string;
   status?: string;
 };
@@ -422,7 +455,23 @@ function TeacherFields({ d, requireEmployeeId }: { d: TeacherDefaults; requireEm
         <TextField name="phone" label="Phone" type="tel" defaultValue={d.phone ?? ""} />
         <TextField name="joiningDate" label="Joining date" type="date" defaultValue={d.joiningDate} />
       </FieldRow>
-      <TextField name="qualification" label="Qualification" placeholder="M.Sc., B.Ed." defaultValue={d.qualification ?? ""} />
+      <FieldRow>
+        <TextField name="qualification" label="Qualification" placeholder="M.Sc., B.Ed." defaultValue={d.qualification ?? ""} />
+        <TextField
+          name="designation"
+          label="Designation"
+          placeholder="Senior Teacher"
+          defaultValue={d.designation ?? ""}
+          hint="What the school calls this post."
+        />
+      </FieldRow>
+      <TextField name="dateOfBirth" label="Date of birth" type="date" defaultValue={d.dateOfBirth} />
+      <TextField name="addressLine" label="Address" defaultValue={d.addressLine ?? ""} />
+      <FieldRow>
+        <TextField name="city" label="City" defaultValue={d.city ?? ""} />
+        <TextField name="state" label="State" defaultValue={d.state ?? ""} />
+      </FieldRow>
+      <TextField name="postalCode" label="Postal code" defaultValue={d.postalCode ?? ""} className="max-w-40" />
     </>
   );
 }
@@ -454,6 +503,14 @@ export function EditTeacherForm({ teacher }: { teacher: TeacherDefaults & { teac
     <ActionForm action={updateTeacherAction}>
       <input type="hidden" name="teacherId" value={teacher.teacherId} />
       <TeacherFields d={teacher} requireEmployeeId />
+      <TextField
+        name="email"
+        label="Sign-in email"
+        type="email"
+        defaultValue={teacher.email}
+        hint="Changing this changes the address they sign in with. Their password is unaffected."
+        required
+      />
       <SelectField
         name="status"
         label="Status"

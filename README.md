@@ -4,18 +4,23 @@ Multi-tenant school management SaaS. One Next.js application and one PostgreSQL
 database serve every school; adding a school is a database row, not a new
 deployment.
 
-**What it does.** A school registers from the marketing site and verifies its
-contact address with a six-digit code; a Super Admin then approves it, which
-provisions its classes, streams, subjects and current session and issues the
-first administrator. That administrator runs the school:
+**What it does.** A school registers from the marketing site — choosing the
+password its administrator will use — and verifies its contact address with a
+six-digit code; a Super Admin then approves it, which provisions its classes,
+streams, subjects and current session and opens that account. The administrator
+signs in and lands on their dashboard, and runs the school:
 sections and staff, students and guardians, the weekly timetable, daily
 attendance and reports, notices and events, online admissions, and the school's
-own public website. Teachers mark their own classes, students see their
+own public website. Teachers mark their own classes, write up what they taught,
+set homework and keep remarks on the children they teach; students see their
 timetable and attendance, and guardians see their own children.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the tenancy model,
-authorization design and directory layout, and [`docs/API.md`](docs/API.md)
-for the REST API.
+**New here? Read [`docs/PROJECT.md`](docs/PROJECT.md)** — what is built, how a
+school goes from registration to daily use, how to add the next feature, and
+what is deliberately still missing.
+
+See also [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the tenancy model
+and authorization design, and [`docs/API.md`](docs/API.md) for the REST API.
 
 ## Stack
 

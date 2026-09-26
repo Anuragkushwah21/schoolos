@@ -11,13 +11,14 @@ import { createHash, randomBytes } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient } from "../src/generated/prisma/client";
+import { connectionConfig } from "../src/server/db/connection";
 
 if (process.env.NODE_ENV === "production") {
   throw new Error("Refusing to mint a session against production.");
 }
 
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }),
+  adapter: new PrismaPg(connectionConfig(process.env.DATABASE_URL!)),
 });
 
 async function main() {

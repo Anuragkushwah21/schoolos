@@ -4,7 +4,9 @@ import type { PlanTier } from "@/generated/prisma/enums";
 import { RateLimitedError } from "@/lib/errors";
 import { slugify } from "@/lib/format";
 import type { RegisterSchoolInput } from "@/lib/validation/platform";
+import { ConflictError } from "@/lib/errors";
 import { recordAudit } from "@/server/audit/log";
+import { hashPassword } from "@/server/auth/password";
 import { PUBLIC_FORM_RATE_LIMIT, rateLimit } from "@/server/auth/rate-limit";
 import { prisma } from "@/server/db/prisma";
 import { isUniqueViolation } from "@/server/db/errors";
@@ -13,9 +15,14 @@ import { sendVerificationCode } from "@/server/platform/verification";
 /**
  * Public school registration.
  *
- * A registration is a `School` row in PENDING status. Nothing about it grants
- * access: no user account exists until a Super Admin approves the school and
- * issues one, and sign-in refuses any school that is not ACTIVE.
+ * A registration creates a `School` row in PENDING status and the
+ * administrator's own account, with the password they chose. Neither grants
+ * access: sign-in refuses every school that is not ACTIVE, and so does session
+ * validation on each later request, so the account simply cannot be used until
+ * a Super Admin approves the school.
+ *
+ * Letting them choose the password here means there is no generated secret to
+ * email and hand over — one fewer credential in an inbox.
  *
  * Registering also sends a one-time code to the contact address. Until that is
  * verified the school cannot be approved, so registering a school in someone
@@ -66,12 +73,24 @@ export async function registerSchool(
     return { reference: slugify(input.name) || "school" };
   }
 
+  // Checked before writing anything, so the message can be useful rather than
+  // a unique-constraint failure. The race is still caught below.
+  const emailTaken = await prisma.user.count({ where: { email: input.contactEmail } });
+  if (emailTaken) {
+    throw new ConflictError(
+      "An account with that email address already exists. Sign in instead, or register with another address.",
+    );
+  }
+
   const plan = input.plan
     ? await prisma.plan.findFirst({
         where: { tier: input.plan as PlanTier, isActive: true },
         select: { id: true },
       })
     : null;
+
+  const [firstName, ...rest] = input.contactName.trim().split(/\s+/);
+  const passwordHash = await hashPassword(input.password);
 
   // Two registrations can race for the same slug; retry once on collision.
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -90,6 +109,16 @@ export async function registerSchool(
           contactName: input.contactName,
           contactEmail: input.contactEmail,
           contactPhone: input.contactPhone,
+          users: {
+            create: {
+              email: input.contactEmail,
+              passwordHash,
+              role: "SCHOOL_ADMIN",
+              firstName: firstName || "School",
+              lastName: rest.join(" ") || "Admin",
+              phone: input.contactPhone,
+            },
+          },
           ...(plan
             ? {
                 subscriptions: {
@@ -111,7 +140,7 @@ export async function registerSchool(
         entityType: "School",
         entityId: school.id,
         schoolId: school.id,
-        summary: `${school.name} registered (${input.city}, ${input.state}).`,
+        summary: `${school.name} registered (${input.city}, ${input.state}) with administrator ${input.contactEmail}.`,
         metadata: { requestedPlan: input.plan },
         ipAddress: meta.ipAddress,
       });
@@ -125,7 +154,17 @@ export async function registerSchool(
 
       return { reference: school.slug };
     } catch (error) {
-      if (attempt === 0 && isUniqueViolation(error)) continue;
+      if (isUniqueViolation(error)) {
+        // The email is the only other unique column in this write, and it was
+        // already checked — so a collision here is the slug, unless someone
+        // registered the same address in the last few milliseconds.
+        const stillFree = (await prisma.user.count({ where: { email: input.contactEmail } })) === 0;
+        if (stillFree && attempt === 0) continue;
+
+        throw new ConflictError(
+          "An account with that email address already exists. Sign in instead, or register with another address.",
+        );
+      }
       throw error;
     }
   }

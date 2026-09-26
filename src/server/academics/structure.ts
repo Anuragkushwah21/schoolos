@@ -1,6 +1,8 @@
 import "server-only";
 
+import { today } from "@/lib/dates";
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
+import { fullName } from "@/lib/format";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -435,6 +437,12 @@ export async function updateSection(
   assertRole(ctx.user, "SCHOOL_ADMIN");
   await assertStreamAndTeacher(ctx, input);
 
+  const existing = await ctx.db.section.findFirst({
+    where: { id: sectionId },
+    select: { id: true, classTeacherId: true, academicSessionId: true },
+  });
+  if (!existing) throw new NotFoundError();
+
   try {
     const { count } = await ctx.db.section.updateMany({
       where: { id: sectionId },
@@ -446,6 +454,18 @@ export async function updateSection(
     throw error;
   }
 
+  // A class teacher can be assigned, changed or removed at any time, and none of
+  // it destroys what came before: the previous assignment is closed rather than
+  // overwritten, so "who was class teacher in August" stays answerable.
+  if (existing.classTeacherId !== input.classTeacherId) {
+    await recordClassTeacherChange(ctx, {
+      sectionId: existing.id,
+      academicSessionId: existing.academicSessionId,
+      previousTeacherId: existing.classTeacherId,
+      teacherId: input.classTeacherId,
+    });
+  }
+
   await recordAudit({
     action: "SECTION_UPDATED",
     entityType: "Section",
@@ -454,6 +474,90 @@ export async function updateSection(
     actorId: ctx.user.id,
     summary: `Section ${input.name.toUpperCase()} updated.`,
   });
+}
+
+/**
+ * Close the outgoing class-teacher assignment and open the incoming one.
+ *
+ * `Section.classTeacherId` remains the current pointer every other screen reads;
+ * this keeps the history behind it. Removing a class teacher closes the open row
+ * and opens nothing, which is how "nobody, since October" is recorded.
+ */
+async function recordClassTeacherChange(
+  ctx: TenantContext,
+  input: {
+    sectionId: string;
+    academicSessionId: string;
+    previousTeacherId: string | null;
+    teacherId: string | null;
+  },
+): Promise<void> {
+  const now = today();
+
+  if (input.previousTeacherId) {
+    await ctx.db.classTeacherAssignment.updateMany({
+      where: { sectionId: input.sectionId, teacherId: input.previousTeacherId, toDate: null },
+      data: { toDate: now },
+    });
+  }
+
+  if (input.teacherId) {
+    await ctx.db.classTeacherAssignment.create({
+      data: {
+        schoolId: ctx.schoolId,
+        academicSessionId: input.academicSessionId,
+        sectionId: input.sectionId,
+        teacherId: input.teacherId,
+        fromDate: now,
+      },
+    });
+  }
+
+  const teacher = input.teacherId
+    ? await ctx.db.teacher.findFirst({
+        where: { id: input.teacherId },
+        select: { firstName: true, lastName: true },
+      })
+    : null;
+
+  await recordAudit({
+    action: "CLASS_TEACHER_ASSIGNED",
+    entityType: "Section",
+    entityId: input.sectionId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: teacher
+      ? `Class teacher set to ${fullName(teacher)}.`
+      : "Class teacher removed.",
+  });
+}
+
+/** Who has been class teacher of this section, newest first. */
+export async function classTeacherHistory(ctx: TenantContext, sectionId: string) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
+  const rows = await ctx.db.classTeacherAssignment.findMany({
+    where: { sectionId },
+    // `createdAt` breaks the tie: two changes on the same day share a `fromDate`,
+    // and without this their order would be whatever Postgres returned.
+    orderBy: [{ fromDate: "desc" }, { createdAt: "desc" }],
+    select: {
+      id: true,
+      fromDate: true,
+      toDate: true,
+      teacher: { select: { id: true, firstName: true, lastName: true, employeeId: true } },
+    },
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    fromDate: row.fromDate,
+    toDate: row.toDate,
+    current: row.toDate === null,
+    teacherId: row.teacher.id,
+    teacher: fullName(row.teacher),
+    employeeId: row.teacher.employeeId,
+  }));
 }
 
 /** Only an empty section can be removed; anything with history is kept. */

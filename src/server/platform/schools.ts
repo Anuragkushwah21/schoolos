@@ -266,16 +266,18 @@ export async function transitionSchool(
       actorId: actor.id,
       summary: `Administrator ${credentials.email} created for ${school.name}.`,
     });
+  }
 
-    // The school gets its own copy; the Super Admin still sees it once on
-    // screen, so an undelivered email never blocks the handover.
+  if (transition === "approve") {
+    // Either way the school is told it is live. A password appears only when
+    // the platform generated one; normally they chose it at registration.
     await sendMail(
       schoolApprovedEmail({
         to: school.contactEmail,
         contactName: school.contactName,
         schoolName: school.name,
-        email: credentials.email,
-        password: credentials.password,
+        email: credentials?.email ?? school.contactEmail,
+        password: credentials?.password,
       }),
     );
   }

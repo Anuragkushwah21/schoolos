@@ -10,7 +10,7 @@ export default async function NewEventPage() {
   await requireTenant("SCHOOL_ADMIN");
   return (
     <>
-      <PageHeader back={{ href: "/admin/events", label: "Events" }} title="New event" />
+      <PageHeader back={{ href: "/school-admin/events", label: "Events" }} title="New event" />
       <EventForm />
     </>
   );

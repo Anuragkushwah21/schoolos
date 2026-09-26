@@ -11,7 +11,7 @@ import {
   Security,
   Steps,
 } from "@/features/marketing/sections";
-import { getLiveOffers, getPublicPlans } from "@/server/platform/marketing";
+import { getHomepageCatalogue } from "@/server/platform/marketing";
 
 export const metadata: Metadata = {
   title: { absolute: "SchoolOS — School management for every school you run" },
@@ -38,7 +38,9 @@ export const dynamic = "force-dynamic";
  * date disappears on its own.
  */
 export default async function HomePage() {
-  const [offers, plans] = await Promise.all([getLiveOffers(), getPublicPlans()]);
+  // Degrades to an empty catalogue rather than a 500 — see the note on
+  // `getHomepageCatalogue`.
+  const { offers, plans } = await getHomepageCatalogue();
 
   return (
     <main className="flex flex-1 flex-col">

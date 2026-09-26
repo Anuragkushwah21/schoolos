@@ -18,7 +18,7 @@ export async function createSlotAction(_p: Result, formData: FormData): Promise<
       await createSlot(ctx, parseFormData(slotSchema, formData));
       return successResult("Period added.");
     },
-    { revalidate: ["/admin", "/teacher", "/student", "/parent"] },
+    { revalidate: ["/school-admin", "/teacher", "/student", "/parent"] },
   );
 }
 
@@ -32,6 +32,6 @@ export async function deleteSlotAction(_p: Result, formData: FormData): Promise<
       await deleteSlot(ctx, slotId);
       return successResult("Period removed.");
     },
-    { revalidate: ["/admin", "/teacher", "/student", "/parent"] },
+    { revalidate: ["/school-admin", "/teacher", "/student", "/parent"] },
   );
 }

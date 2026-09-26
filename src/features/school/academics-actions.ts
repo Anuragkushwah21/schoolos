@@ -31,7 +31,7 @@ import { performAction } from "@/server/perform-action";
 type Result = ActionResult<undefined>;
 
 const admin = () => requireTenantForAction("SCHOOL_ADMIN");
-const REVALIDATE = "/admin";
+const REVALIDATE = "/school-admin";
 
 export async function createAcademicSessionAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
@@ -163,6 +163,6 @@ export async function deleteSectionAction(_p: Result, formData: FormData): Promi
       await deleteSection(ctx, sectionId);
       return successResult("Section deleted.");
     },
-    { revalidate: REVALIDATE, redirectTo: "/admin/academics/classes" },
+    { revalidate: REVALIDATE, redirectTo: "/school-admin/academics/classes" },
   );
 }

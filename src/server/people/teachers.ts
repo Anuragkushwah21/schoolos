@@ -164,7 +164,13 @@ export async function createTeacher(
           email: input.email,
           phone: input.phone,
           gender: input.gender,
+          dateOfBirth: input.dateOfBirth,
           qualification: input.qualification,
+          designation: input.designation,
+          addressLine: input.addressLine,
+          city: input.city,
+          state: input.state,
+          postalCode: input.postalCode,
           joiningDate: input.joiningDate,
         },
         select: { id: true },
@@ -199,7 +205,7 @@ export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInpu
 
   const existing = await ctx.db.teacher.findFirst({
     where: { id: teacherId },
-    select: { id: true, status: true, userId: true },
+    select: { id: true, status: true, userId: true, user: { select: { email: true } } },
   });
   if (!existing) throw new NotFoundError();
 
@@ -207,14 +213,26 @@ export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInpu
     await assertWithinPlanLimit(ctx, "teachers");
   }
 
+  // The address is the teacher's way in, so a typo in it locks them out for
+  // good unless it can be corrected here. Both copies move together: the
+  // staff record's own address and the one they sign in with.
+  const emailChanged = data.email !== existing.user.email;
+
   try {
     await ctx.db.teacher.updateMany({ where: { id: teacherId }, data });
     await ctx.db.user.updateMany({
       where: { id: existing.userId },
-      data: { firstName: data.firstName, lastName: data.lastName, phone: data.phone },
+      data: {
+        firstName: data.firstName,
+        lastName: data.lastName,
+        phone: data.phone,
+        email: data.email,
+      },
     });
   } catch (error) {
-    if (isUniqueViolation(error)) throw new ConflictError("That employee ID is already in use.");
+    if (isUniqueViolation(error)) {
+      throw new ConflictError("That employee ID or email address is already in use.");
+    }
     throw error;
   }
 
@@ -229,7 +247,92 @@ export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInpu
     entityId: teacherId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Teacher ${data.firstName} ${data.lastName} updated.`,
+    summary: emailChanged
+      ? `Teacher ${data.firstName} ${data.lastName} updated; sign-in moved to ${data.email}.`
+      : `Teacher ${data.firstName} ${data.lastName} updated.`,
+  });
+}
+
+/**
+ * What stands between a teacher and being erased.
+ *
+ * Split in two because the answers differ. History — a register, a lesson, a
+ * piece of homework, a remark — can never be undone, so a teacher who has any
+ * of it is kept and deactivated instead. A live responsibility can be handed
+ * over, so that refusal tells the admin what to move first.
+ */
+async function deletionBlockers(ctx: TenantContext, teacherId: string) {
+  const [attendance, scheduled, taught, homework, remarks, slots, sections] = await Promise.all([
+    ctx.db.teacherAttendance.count({ where: { teacherId } }),
+    ctx.db.classSession.count({ where: { scheduledTeacherId: teacherId } }),
+    ctx.db.classSession.count({ where: { actualTeacherId: teacherId } }),
+    ctx.db.homework.count({ where: { teacherId } }),
+    ctx.db.studentRemark.count({ where: { teacherId } }),
+    ctx.db.timetableSlot.count({ where: { teacherId } }),
+    ctx.db.section.count({ where: { classTeacherId: teacherId } }),
+  ]);
+
+  const history: string[] = [];
+  if (attendance) history.push(`${attendance} attendance ${attendance === 1 ? "record" : "records"}`);
+  if (scheduled || taught) history.push(`${Math.max(scheduled, taught)} class records`);
+  if (homework) history.push(`${homework} ${homework === 1 ? "assignment" : "assignments"}`);
+  if (remarks) history.push(`${remarks} ${remarks === 1 ? "remark" : "remarks"}`);
+
+  const live: string[] = [];
+  if (slots) live.push(`${slots} timetable ${slots === 1 ? "period" : "periods"}`);
+  if (sections) live.push(`class teacher of ${sections} ${sections === 1 ? "section" : "sections"}`);
+
+  return { history, live };
+}
+
+/**
+ * Erase a teacher and their login.
+ *
+ * For a record added by mistake. Subject assignments go with them — an
+ * assignment is a permission, not a record of anything — but nothing else is
+ * cleared to make room: if the delete would destroy history, it is refused.
+ * The composite foreign keys would refuse it anyway; counting first is what
+ * turns that into a sentence an admin can act on.
+ */
+export async function deleteTeacher(ctx: TenantContext, teacherId: string): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
+  const teacher = await ctx.db.teacher.findFirst({
+    where: { id: teacherId },
+    select: { id: true, userId: true, firstName: true, lastName: true, employeeId: true },
+  });
+  if (!teacher) throw new NotFoundError();
+
+  const { history, live } = await deletionBlockers(ctx, teacher.id);
+
+  if (history.length) {
+    throw new ConflictError(
+      `${teacher.firstName} ${teacher.lastName} has ${history.join(", ")} in this school, which cannot be undone. Set their status to Inactive instead — that keeps the record and closes their sign-in.`,
+    );
+  }
+
+  if (live.length) {
+    throw new ConflictError(
+      `${teacher.firstName} ${teacher.lastName} still has ${live.join(" and ")}. Hand those over first, then delete.`,
+    );
+  }
+
+  await ctx.db.$transaction(async (tx) => {
+    // A permission, not a record — it goes with the person it was granted to.
+    await tx.teacherSubjectAssignment.deleteMany({ where: { teacherId: teacher.id } });
+    await tx.teacher.deleteMany({ where: { id: teacher.id } });
+    // Sessions and API tokens cascade from the user, so this also signs them
+    // out of every device at once.
+    await tx.user.deleteMany({ where: { id: teacher.userId } });
+  });
+
+  await recordAudit({
+    action: "TEACHER_DELETED",
+    entityType: "Teacher",
+    entityId: teacher.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Teacher ${teacher.firstName} ${teacher.lastName} (${teacher.employeeId}) deleted with their sign-in.`,
   });
 }
 

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { EmptyState } from "@/components/shared/empty-state";
+import { NoSessionNotice } from "@/components/shared/no-session-notice";
 import { PageHeader } from "@/components/shared/page-header";
 import { RegisterScreen } from "@/features/attendance/register-page";
 import { param } from "@/lib/search-params";
@@ -16,14 +16,7 @@ export default async function TeacherAttendancePage(props: PageProps<"/teacher/a
   const search = await props.searchParams;
   const session = await getCurrentSession(ctx);
 
-  if (!session) {
-    return (
-      <>
-        <PageHeader title="Attendance" />
-        <EmptyState title="The school has no current academic session" />
-      </>
-    );
-  }
+  if (!session) return <NoSessionNotice title="Attendance" />;
 
   // Only the sections this teacher teaches or is class teacher of.
   const ids = await accessibleSectionIds(ctx, session.id);

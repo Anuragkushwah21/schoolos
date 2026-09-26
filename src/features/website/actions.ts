@@ -16,7 +16,7 @@ import {
 import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
-const SITE = ["/admin", "/schools/[slug]"];
+const SITE = ["/school-admin", "/schools/[slug]"];
 
 export async function updateWebsiteProfileAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
@@ -36,7 +36,7 @@ export async function savePageAction(_p: Result, formData: FormData): Promise<Re
       await savePage(ctx, parseFormData(schoolPageSchema, formData));
       return successResult("Page saved.");
     },
-    { revalidate: SITE, redirectTo: "/admin/website" },
+    { revalidate: SITE, redirectTo: "/school-admin/website" },
   );
 }
 
@@ -48,7 +48,7 @@ export async function deletePageAction(_p: Result, formData: FormData): Promise<
       await deletePage(ctx, pageId);
       return successResult("Page deleted.");
     },
-    { revalidate: SITE, redirectTo: "/admin/website" },
+    { revalidate: SITE, redirectTo: "/school-admin/website" },
   );
 }
 

@@ -59,12 +59,15 @@ export async function attendanceTrend(
   const points: TrendPoint[] = [];
   for (let offset = 0; offset < days; offset += 1) {
     const date = addDays(from, offset);
-    // Sunday is not a school day anywhere in the product; leave it out entirely
-    // rather than drawing a gap the reader has to explain to themselves.
-    if (dayOfWeek(date) === "SUNDAY") continue;
-
     const key = toDateInput(date);
     const counts = byDay.get(key) ?? emptyCounts();
+
+    // Sundays are dropped so the chart is not a row of gaps nobody has to
+    // explain — but only when nothing was marked. A school that did hold
+    // class on a Sunday gets its day back: hiding real attendance would be
+    // worse than an odd-looking week.
+    if (dayOfWeek(date) === "SUNDAY" && counts.total === 0) continue;
+
     points.push({
       date,
       key,

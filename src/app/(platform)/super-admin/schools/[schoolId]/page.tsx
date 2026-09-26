@@ -39,7 +39,7 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
 }
 
 export default async function PlatformSchoolPage(
-  props: PageProps<"/platform/schools/[schoolId]">,
+  props: PageProps<"/super-admin/schools/[schoolId]">,
 ) {
   const user = await requireSuperAdmin();
   const { schoolId } = await props.params;
@@ -57,7 +57,7 @@ export default async function PlatformSchoolPage(
   return (
     <>
       <PageHeader
-        back={{ href: "/platform/schools", label: "Schools" }}
+        back={{ href: "/super-admin/schools", label: "Schools" }}
         title={school.name}
         description={
           <span className="inline-flex flex-wrap items-center gap-2">
@@ -344,7 +344,7 @@ export default async function PlatformSchoolPage(
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Activity</CardTitle>
               <Button asChild variant="ghost" size="sm">
-                <Link href={`/platform/audit?schoolId=${school.id}`}>All</Link>
+                <Link href={`/super-admin/audit?schoolId=${school.id}`}>All</Link>
               </Button>
             </CardHeader>
             <CardContent>

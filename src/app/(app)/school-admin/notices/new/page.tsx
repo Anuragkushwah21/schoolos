@@ -10,7 +10,7 @@ export default async function NewNoticePage() {
   await requireTenant("SCHOOL_ADMIN");
   return (
     <>
-      <PageHeader back={{ href: "/admin/notices", label: "Notices" }} title="New notice" />
+      <PageHeader back={{ href: "/school-admin/notices", label: "Notices" }} title="New notice" />
       <NoticeForm />
     </>
   );

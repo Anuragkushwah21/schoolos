@@ -19,11 +19,12 @@ import { enumParam, pageParam, param } from "@/lib/search-params";
 import { STUDENT_STATUSES } from "@/lib/validation/school";
 import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession, sectionLabel, sectionOptions } from "@/server/academics/structure";
+import { ParentDetailsDialog } from "@/features/school/parent-dialog";
 import { listStudents } from "@/server/people/students";
 
 export const metadata: Metadata = { title: "Students" };
 
-export default async function StudentsPage(props: PageProps<"/admin/students">) {
+export default async function StudentsPage(props: PageProps<"/school-admin/students">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
 
@@ -45,14 +46,14 @@ export default async function StudentsPage(props: PageProps<"/admin/students">) 
         description={session ? `Placements shown for ${session.name}.` : undefined}
         actions={
           <Button asChild>
-            <Link href="/admin/students/new">Add student</Link>
+            <Link href="/school-admin/students/new">Add student</Link>
           </Button>
         }
       />
 
       <FilterBar
-        action="/admin/students"
-        search={{ defaultValue: q, placeholder: "Name or admission number" }}
+        action="/school-admin/students"
+        search={{ defaultValue: q, placeholder: "Student, admission no, parent name, mobile or email" }}
         selects={[
           { name: "section", label: "Section", defaultValue: sectionId, allLabel: "All sections", options: sections },
           {
@@ -74,7 +75,7 @@ export default async function StudentsPage(props: PageProps<"/admin/students">) 
               <TableRow>
                 <TableHead>Student</TableHead>
                 <TableHead>Class</TableHead>
-                <TableHead className="hidden md:table-cell">Primary guardian</TableHead>
+                <TableHead className="hidden md:table-cell">Parent</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="hidden sm:table-cell">Login</TableHead>
               </TableRow>
@@ -86,7 +87,7 @@ export default async function StudentsPage(props: PageProps<"/admin/students">) 
                 return (
                   <TableRow key={student.id}>
                     <TableCell>
-                      <Link href={`/admin/students/${student.id}`} className="font-medium hover:underline">
+                      <Link href={`/school-admin/students/${student.id}`} className="font-medium hover:underline">
                         {student.firstName} {student.lastName}
                       </Link>
                       <p className="text-muted-foreground text-xs">{student.admissionNumber}</p>
@@ -105,13 +106,43 @@ export default async function StudentsPage(props: PageProps<"/admin/students">) 
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
                       {guardian ? (
-                        <>
-                          {guardian.firstName} {guardian.lastName}
-                          <p className="text-muted-foreground text-xs">{guardian.phone}</p>
-                        </>
+                        // The name opens the family: three siblings in this list
+                        // are three rows, and only the dialog makes them one
+                        // household.
+                        <ParentDetailsDialog
+                          parent={{
+                            id: guardian.id,
+                            name: `${guardian.firstName} ${guardian.lastName}`,
+                            phone: guardian.phone,
+                            email: guardian.email,
+                            hasLogin: guardian.user !== null,
+                            loginActive: guardian.user?.isActive ?? false,
+                            children: guardian.children.map((link) => {
+                              const placement = link.student.enrollments[0];
+                              return {
+                                id: link.student.id,
+                                name: `${link.student.firstName} ${link.student.lastName}`,
+                                admissionNumber: link.student.admissionNumber,
+                                status: link.student.status,
+                                relationship: link.relationship,
+                                isPrimary: link.isPrimary,
+                                sectionLabel: placement ? sectionLabel(placement.section) : null,
+                                rollNumber: placement?.rollNumber ?? null,
+                              };
+                            }),
+                          }}
+                        />
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
+                      {guardian ? (
+                        <p className="text-muted-foreground text-xs">
+                          {guardian.phone}
+                          {guardian.children.length > 1
+                            ? ` · ${guardian.children.length} children here`
+                            : ""}
+                        </p>
+                      ) : null}
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={student.status} />
@@ -130,7 +161,7 @@ export default async function StudentsPage(props: PageProps<"/admin/students">) 
           title="No students match"
           action={
             <Button asChild size="sm">
-              <Link href="/admin/students/new">Add a student</Link>
+              <Link href="/school-admin/students/new">Add a student</Link>
             </Button>
           }
         >
@@ -142,7 +173,7 @@ export default async function StudentsPage(props: PageProps<"/admin/students">) 
         page={page}
         pageCount={pageCount}
         total={total}
-        basePath="/admin/students"
+        basePath="/school-admin/students"
         params={{ q, section: sectionId, status: statusParam }}
       />
     </>

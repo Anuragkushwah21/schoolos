@@ -33,7 +33,7 @@ export default async function AdminNoticesPage() {
         description="Announcements for staff, students and parents — and optionally the public website."
         actions={
           <Button asChild>
-            <Link href="/admin/notices/new">New notice</Link>
+            <Link href="/school-admin/notices/new">New notice</Link>
           </Button>
         }
       />
@@ -55,7 +55,7 @@ export default async function AdminNoticesPage() {
                 return (
                   <TableRow key={notice.id}>
                     <TableCell className="max-w-md whitespace-normal">
-                      <Link href={`/admin/notices/${notice.id}`} className="inline-flex items-center gap-1.5 font-medium hover:underline">
+                      <Link href={`/school-admin/notices/${notice.id}`} className="inline-flex items-center gap-1.5 font-medium hover:underline">
                         {notice.title}
                         {notice.isPublic ? <GlobeIcon className="text-muted-foreground size-3.5" aria-label="On the public website" /> : null}
                       </Link>

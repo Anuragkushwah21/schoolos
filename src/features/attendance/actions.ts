@@ -53,7 +53,7 @@ export async function markAttendanceAction(_p: Result, formData: FormData): Prom
       const { saved } = await markAttendance(ctx, { sectionId, date, entries });
       return successResult(`Attendance saved for ${saved} ${saved === 1 ? "student" : "students"}.`);
     },
-    { revalidate: ["/admin", "/teacher", "/student", "/parent"] },
+    { revalidate: ["/school-admin", "/teacher", "/student", "/parent"] },
   );
 }
 
@@ -70,6 +70,6 @@ export async function markStaffAttendanceAction(_p: Result, formData: FormData):
       const { saved } = await markStaffAttendance(ctx, { date, entries });
       return successResult(`Staff attendance saved for ${saved}.`);
     },
-    { revalidate: "/admin" },
+    { revalidate: "/school-admin" },
   );
 }

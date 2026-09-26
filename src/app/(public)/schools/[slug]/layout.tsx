@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -57,7 +58,7 @@ export default async function SchoolSiteLayout(props: LayoutProps<"/schools/[slu
     >
       <header className="bg-background/90 sticky top-0 z-40 border-b backdrop-blur">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-4 py-3 sm:px-6">
-          <Link href={base} className="flex min-w-0 items-center gap-3">
+          <Link href={base as Route} className="flex min-w-0 items-center gap-3">
             {school.logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element -- a school-supplied URL, not a bundled asset
               <img src={school.logoUrl} alt="" className="size-10 shrink-0 rounded-lg object-contain" />
@@ -79,7 +80,7 @@ export default async function SchoolSiteLayout(props: LayoutProps<"/schools/[slu
             {nav.map((item) => (
               <li key={item.href}>
                 <Link
-                  href={item.href}
+                  href={item.href as Route}
                   className="hover:text-foreground hover:border-primary block border-b-2 border-transparent px-3 py-2.5 whitespace-nowrap transition-colors"
                 >
                   {item.label}
@@ -105,7 +106,7 @@ export default async function SchoolSiteLayout(props: LayoutProps<"/schools/[slu
             {school.email ? <p className="break-all">{school.email}</p> : null}
           </div>
           <div className="text-muted-foreground md:text-right">
-            <Link href={`${base}/admissions`} className="text-primary font-medium hover:underline">
+            <Link href={`${base}/admissions` as Route} className="text-primary font-medium hover:underline">
               Apply for admission
             </Link>
             <p className="mt-2 text-xs">

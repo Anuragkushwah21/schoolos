@@ -5,6 +5,7 @@ import { useId } from "react";
 import { useFormContext } from "@/components/forms/action-form";
 import { nativeSelectClass } from "@/components/forms/styles";
 import { FieldError } from "@/components/shared/field-error";
+import { Spinner } from "@/components/shared/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -210,12 +211,22 @@ export function SubmitButton({
   return (
     <Button
       type="submit"
+      // Disabled while the action runs, which is also what makes a second
+      // submission impossible — the guard is the same thing as the feedback.
       disabled={pending}
+      aria-busy={pending || undefined}
       className={className}
       variant={variant}
       size={size}
     >
-      {pending ? (pendingLabel ?? "Saving…") : children}
+      {pending ? (
+        <>
+          <Spinner />
+          {pendingLabel ?? "Saving…"}
+        </>
+      ) : (
+        children
+      )}
     </Button>
   );
 }

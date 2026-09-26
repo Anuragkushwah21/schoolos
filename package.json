@@ -17,6 +17,7 @@
     "db:studio": "prisma studio",
     "db:reset": "prisma migrate reset",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:demo": "tsx --env-file=.env scripts/seed-demo.ts",
     "db:start": "pg_ctl -D $HOME/.local/share/schoolos-pg -o '-p 5433' -l $HOME/.local/share/schoolos-pg/server.log start",
     "db:stop": "pg_ctl -D $HOME/.local/share/schoolos-pg stop -m fast"
   },

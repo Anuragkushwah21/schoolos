@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import Link from "next/link";
 import { ChevronLeftIcon } from "lucide-react";
 
@@ -12,7 +13,7 @@ export function PageHeader({
   /** Buttons aligned to the right of the title. */
   actions?: React.ReactNode;
   /** A link to the parent page, shown above the title. */
-  back?: { href: string; label: string };
+  back?: { href: Route; label: string };
 }) {
   return (
     <div className="mb-6 flex flex-col gap-3">

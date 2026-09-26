@@ -45,7 +45,7 @@ export default async function AcademicsPage() {
         description="Sessions, classes, sections, streams and subjects."
         actions={
           <Button asChild>
-            <Link href="/admin/academics/classes">Classes & sections</Link>
+            <Link href="/school-admin/academics/classes">Classes & sections</Link>
           </Button>
         }
       />

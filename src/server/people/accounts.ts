@@ -84,6 +84,12 @@ export async function setPortalUserActive(
   userId: string,
   isActive: boolean,
 ): Promise<void> {
+  // Asserted here rather than left to the caller. Today the only callers are
+  // the admin's own update paths, but a login is exactly the kind of switch a
+  // future caller would reach for, and the check must not depend on which
+  // function got there first.
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
   const { count } = await ctx.db.user.updateMany({
     where: { id: userId, role: { in: ["TEACHER", "STUDENT", "PARENT"] } },
     data: { isActive },

@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { Route } from "next";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -18,7 +19,7 @@ export async function performAction<T>(
   options: {
     /** Route prefixes whose pages should re-render with fresh data. */
     revalidate?: string | string[];
-    redirectTo?: string | ((data: T) => string | null);
+    redirectTo?: Route | ((data: T) => Route | null);
   } = {},
 ): Promise<ActionResult<T>> {
   const result = await runAction(body);

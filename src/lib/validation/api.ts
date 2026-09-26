@@ -82,6 +82,20 @@ export const auditQuery = pageQuery.extend({
   action: z.enum(AUDIT_ACTIONS).optional(),
 });
 
+/** Parent portal reads. None of these carries a `parentId` or a `schoolId`. */
+export const childActivityQuery = z.object({
+  subject: trimmed.optional(),
+  days: z.coerce.number().int().min(1).max(365).optional(),
+});
+
+export const childReportQuery = z.object({
+  period: z.enum(["day", "week", "month"]).optional(),
+});
+
+export const childFocusQuery = z.object({
+  child: trimmed.optional(),
+});
+
 export const listQuery = z.object({ limit: z.coerce.number().int().min(1).max(100).optional() });
 
 /** Flag-only updates, where a full replacement would be silly. */

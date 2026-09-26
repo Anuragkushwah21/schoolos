@@ -29,6 +29,23 @@ export function optionalText(max = 500) {
   ).transform((value) => value ?? null);
 }
 
+/**
+ * An optional `https://` link. Plain `http` is refused because a school page
+ * served over TLS cannot load it, and there is no upload pipeline in V1 — every
+ * document is a link to somewhere the school already hosts it.
+ */
+export const optionalUrl = z
+  .preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .trim()
+      .max(500, "Keep this under 500 characters")
+      .regex(/^https:\/\//, "Use an https:// link")
+      .optional(),
+  )
+  .transform((value) => value ?? null);
+
 export const optionalEmail = z
   .preprocess(
     emptyToUndefined,

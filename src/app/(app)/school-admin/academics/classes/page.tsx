@@ -1,10 +1,11 @@
+import type { Route } from "next";
 import type { Metadata } from "next";
 import Link from "next/link";
 
 import { ActionButton } from "@/components/forms/action-button";
-import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
+import { SetupNotice } from "@/components/shared/setup-notice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toggleClassAction } from "@/features/school/academics-actions";
 import { CreateSectionForm, InlineCreateForm } from "@/features/school/academics-forms";
@@ -20,20 +21,17 @@ import { teacherOptions } from "@/server/people/teachers";
 
 export const metadata: Metadata = { title: "Classes & sections" };
 
-export default async function ClassesPage(props: PageProps<"/admin/academics/classes">) {
+export default async function ClassesPage(props: PageProps<"/school-admin/academics/classes">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
 
   const session = await resolveSession(ctx, param(search.session));
-  const back = { href: "/admin/academics", label: "Academics" };
+  const back = { href: "/school-admin/academics" as Route, label: "Academics" };
 
   if (!session) {
     return (
       <>
-        <PageHeader back={back} title="Classes & sections" />
-        <EmptyState title="No current academic session">
-          Create a session under Academics and make it current first.
-        </EmptyState>
+        <SetupNotice title="Classes & sections" need="session" back={back} />
       </>
     );
   }
@@ -56,7 +54,7 @@ export default async function ClassesPage(props: PageProps<"/admin/academics/cla
       />
 
       <FilterBar
-        action="/admin/academics/classes"
+        action="/school-admin/academics/classes"
         selects={[
           {
             name: "session",
@@ -94,7 +92,7 @@ export default async function ClassesPage(props: PageProps<"/admin/academics/cla
                   {klass.sections.map((section) => (
                     <li key={section.id}>
                       <Link
-                        href={`/admin/academics/sections/${section.id}`}
+                        href={`/school-admin/academics/sections/${section.id}`}
                         className="hover:border-primary flex flex-col rounded-lg border px-3 py-2 text-sm transition-colors"
                       >
                         <span className="font-medium">

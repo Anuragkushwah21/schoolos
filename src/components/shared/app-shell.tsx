@@ -2,8 +2,7 @@ import Link from "next/link";
 
 import { Logo } from "@/components/shared/logo";
 import { NavLinks } from "@/components/shared/nav-links";
-import { Button } from "@/components/ui/button";
-import { logoutAction } from "@/features/auth/actions";
+import { SignOutButton } from "@/features/auth/sign-out-button";
 import { NAV_BY_ROLE } from "@/lib/nav";
 import { ROLE_LABEL } from "@/lib/roles";
 import type { SessionUser } from "@/server/auth/session";
@@ -50,11 +49,7 @@ export function AppShell({
             </p>
           </div>
 
-          <form action={logoutAction}>
-            <Button type="submit" variant="outline" size="sm">
-              Sign out
-            </Button>
-          </form>
+          <SignOutButton />
         </header>
 
         <main className="min-w-0 flex-1 p-5 md:p-8">{children}</main>

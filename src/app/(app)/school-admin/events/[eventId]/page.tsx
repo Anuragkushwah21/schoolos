@@ -11,7 +11,7 @@ import { orNotFound } from "@/server/page-helpers";
 
 export const metadata: Metadata = { title: "Edit event" };
 
-export default async function EditEventPage(props: PageProps<"/admin/events/[eventId]">) {
+export default async function EditEventPage(props: PageProps<"/school-admin/events/[eventId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { eventId } = await props.params;
   const event = await orNotFound(getEvent(ctx, eventId));
@@ -19,7 +19,7 @@ export default async function EditEventPage(props: PageProps<"/admin/events/[eve
   return (
     <>
       <PageHeader
-        back={{ href: "/admin/events", label: "Events" }}
+        back={{ href: "/school-admin/events", label: "Events" }}
         title={event.title}
         actions={
           <ActionButton

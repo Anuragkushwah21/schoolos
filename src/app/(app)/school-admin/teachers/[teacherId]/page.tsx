@@ -6,29 +6,34 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { unassignSubjectAction } from "@/features/school/people-actions";
+import { deleteTeacherAction, unassignSubjectAction } from "@/features/school/people-actions";
 import {
   AssignSubjectForm,
   EditTeacherForm,
   ResetPortalPasswordForm,
 } from "@/features/school/people-forms";
-import { formatDateTime, toDateInput } from "@/lib/dates";
-import { pluralize } from "@/lib/format";
+import { removeSalaryAction } from "@/features/finance/actions";
+import { SalaryForm } from "@/features/finance/forms";
+import { rupees, toRupeeInput } from "@/features/finance/money";
+import { formatDate, formatDateTime, toDateInput, today } from "@/lib/dates";
+import { humanize, pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
 import { listSubjects, sectionLabel, sectionOptions } from "@/server/academics/structure";
 import { orNotFound } from "@/server/page-helpers";
+import { getTeacherSalary } from "@/server/finance/salary";
 import { getTeacherProfile } from "@/server/people/teachers";
 
 export const metadata: Metadata = { title: "Teacher" };
 
-export default async function TeacherPage(props: PageProps<"/admin/teachers/[teacherId]">) {
+export default async function TeacherPage(props: PageProps<"/school-admin/teachers/[teacherId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { teacherId } = await props.params;
 
   const { teacher, session, periodsPerWeek } = await orNotFound(getTeacherProfile(ctx, teacherId));
-  const [subjects, sections] = await Promise.all([
+  const [subjects, sections, salary] = await Promise.all([
     listSubjects(ctx, { activeOnly: true }),
     session ? sectionOptions(ctx, session.id) : Promise.resolve([]),
+    getTeacherSalary(ctx, teacherId),
   ]);
 
   const assignments = [...teacher.assignments].sort(
@@ -38,7 +43,7 @@ export default async function TeacherPage(props: PageProps<"/admin/teachers/[tea
   return (
     <>
       <PageHeader
-        back={{ href: "/admin/teachers", label: "Teachers" }}
+        back={{ href: "/school-admin/teachers", label: "Teachers" }}
         title={`${teacher.firstName} ${teacher.lastName}`}
         description={
           <span className="inline-flex flex-wrap items-center gap-2">
@@ -49,9 +54,28 @@ export default async function TeacherPage(props: PageProps<"/admin/teachers/[tea
           </span>
         }
         actions={
-          <Button asChild variant="outline">
-            <Link href={`/admin/timetable?teacher=${teacher.id}`}>Timetable</Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link href={`/school-admin/timetable?teacher=${teacher.id}`}>Timetable</Link>
+            </Button>
+            {/* Refused by the service once this teacher has any record in the
+                school, which is why the dialog says what it will and will not
+                do rather than simply asking twice. */}
+            <ActionButton
+              action={deleteTeacherAction}
+              fields={{ teacherId: teacher.id }}
+              variant="destructive"
+              size="default"
+              confirm={{
+                title: `Delete ${teacher.firstName} ${teacher.lastName}?`,
+                description:
+                  "This erases the staff record and the sign-in together. It only works for someone added by mistake — once they have taken a register, taught a period or set homework, the delete is refused and you should set their status to Inactive instead.",
+                confirmLabel: "Delete",
+              }}
+            >
+              Delete
+            </ActionButton>
+          </>
         }
       />
 
@@ -72,7 +96,7 @@ export default async function TeacherPage(props: PageProps<"/admin/teachers/[tea
                     <li key={assignment.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
                       <span>
                         <span className="font-medium">{assignment.subject.name}</span> ·{" "}
-                        <Link href={`/admin/academics/sections/${assignment.section.id}`} className="hover:underline">
+                        <Link href={`/school-admin/academics/sections/${assignment.section.id}`} className="hover:underline">
                           {sectionLabel(assignment.section)}
                         </Link>
                       </span>
@@ -102,7 +126,7 @@ export default async function TeacherPage(props: PageProps<"/admin/teachers/[tea
                   {teacher.classTeacherOf.map((s, i) => (
                     <span key={s.id}>
                       {i > 0 ? ", " : ""}
-                      <Link href={`/admin/academics/sections/${s.id}`} className="font-medium hover:underline">
+                      <Link href={`/school-admin/academics/sections/${s.id}`} className="font-medium hover:underline">
                         {s.class.name} – {s.name}
                       </Link>
                     </span>
@@ -138,7 +162,90 @@ export default async function TeacherPage(props: PageProps<"/admin/teachers/[tea
           </Card>
         </div>
 
-        <Card>
+        <div className="flex flex-col gap-6">
+          <Card>
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle>Salary</CardTitle>
+                <CardDescription>
+                  Only you and {teacher.firstName} can see this. Never required to add a teacher.
+                </CardDescription>
+              </div>
+              {salary.current ? (
+                <StatusBadge status="ACTIVE" label="Configured" />
+              ) : (
+                <StatusBadge status="PENDING" label="Not set" />
+              )}
+            </CardHeader>
+            <CardContent className="flex flex-col gap-5">
+              {salary.current ? (
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-3">
+                  <Detail label="Salary" value={`${rupees(salary.current.amountMinor)} ${humanize(salary.current.salaryType).toLowerCase()}`} />
+                  <Detail label="Net" value={rupees(salary.current.netMinor)} />
+                  <Detail label="Allowances" value={rupees(salary.current.allowancesMinor)} />
+                  <Detail label="Deductions" value={rupees(salary.current.deductionsMinor)} />
+                  <Detail label="Effective from" value={formatDate(salary.current.effectiveFrom)} />
+                </dl>
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  No salary recorded. A teacher works without one — this is the school&apos;s
+                  employment record, not a requirement for adding them.
+                </p>
+              )}
+
+              {salary.history.length > 1 ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm font-medium">History</p>
+                  <ul className="divide-y rounded-lg border">
+                    {salary.history.map((row) => (
+                      <li key={row.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                        <span className="text-muted-foreground w-28 shrink-0 text-xs tabular-nums">
+                          {formatDate(row.effectiveFrom)}
+                        </span>
+                        <span className="min-w-0 flex-1 tabular-nums">{rupees(row.amountMinor)}</span>
+                        {row.current ? <StatusBadge status="ACTIVE" label="Current" /> : null}
+                        {row.effectiveFrom > today() ? (
+                          <StatusBadge status="PENDING" label="Scheduled" />
+                        ) : null}
+                        <ActionButton
+                          action={removeSalaryAction}
+                          fields={{ salaryId: row.id }}
+                          variant="ghost"
+                          size="xs"
+                          pendingLabel="Removing…"
+                          confirm={{
+                            title: "Remove this salary record?",
+                            description:
+                              "The figure before it becomes current again. Use this for a row entered by mistake.",
+                            confirmLabel: "Remove",
+                          }}
+                        >
+                          Remove
+                        </ActionButton>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              <SalaryForm
+                teacherId={teacher.id}
+                today={toDateInput(today())}
+                current={
+                  salary.current
+                    ? {
+                        salaryType: salary.current.salaryType,
+                        amountRupees: toRupeeInput(salary.current.amountMinor),
+                        allowancesRupees: toRupeeInput(salary.current.allowancesMinor),
+                        deductionsRupees: toRupeeInput(salary.current.deductionsMinor),
+                      }
+                    : undefined
+                }
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
           <CardHeader>
             <CardTitle>Details</CardTitle>
           </CardHeader>
@@ -146,6 +253,7 @@ export default async function TeacherPage(props: PageProps<"/admin/teachers/[tea
             <EditTeacherForm
               teacher={{
                 teacherId: teacher.id,
+                email: teacher.user.email,
                 firstName: teacher.firstName,
                 lastName: teacher.lastName,
                 gender: teacher.gender,
@@ -154,11 +262,27 @@ export default async function TeacherPage(props: PageProps<"/admin/teachers/[tea
                 qualification: teacher.qualification,
                 joiningDate: teacher.joiningDate ? toDateInput(teacher.joiningDate) : "",
                 status: teacher.status,
+                designation: teacher.designation,
+                dateOfBirth: teacher.dateOfBirth ? toDateInput(teacher.dateOfBirth) : "",
+                addressLine: teacher.addressLine,
+                city: teacher.city,
+                state: teacher.state,
+                postalCode: teacher.postalCode,
               }}
             />
           </CardContent>
-        </Card>
+          </Card>
+        </div>
       </div>
     </>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <dt className="text-muted-foreground text-xs">{label}</dt>
+      <dd className="text-sm tabular-nums">{value}</dd>
+    </div>
   );
 }

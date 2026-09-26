@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import Link from "next/link";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
@@ -17,7 +18,7 @@ export function Pager({
   page: number;
   pageCount: number;
   total: number;
-  basePath: string;
+  basePath: Route;
   params: Record<string, string | undefined>;
 }) {
   if (pageCount <= 1) {
@@ -30,7 +31,9 @@ export function Pager({
       if (value) search.set(key, value);
     }
     search.set("page", String(target));
-    return `${basePath}?${search.toString()}`;
+    // A query string on a known route. Typed routes cover the path, not the
+    // search params, so the join is asserted rather than inferred.
+    return `${basePath}?${search.toString()}` as Route;
   };
 
   return (

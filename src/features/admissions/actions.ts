@@ -1,5 +1,6 @@
 "use server";
 
+import type { Route } from "next";
 import { headers } from "next/headers";
 import { z } from "zod";
 
@@ -39,9 +40,9 @@ export async function submitApplicationAction(
       return successResult(undefined, { slug, applicationNumber });
     },
     {
-      revalidate: "/admin",
+      revalidate: "/school-admin",
       redirectTo: ({ slug, applicationNumber }) =>
-        `/schools/${encodeURIComponent(slug)}/admissions/submitted?no=${encodeURIComponent(applicationNumber)}`,
+        (`/schools/${encodeURIComponent(slug)}/admissions/submitted?no=${encodeURIComponent(applicationNumber)}` as Route),
     },
   );
 }
@@ -53,7 +54,7 @@ export async function setApplicationStatusAction(_p: Result, formData: FormData)
       await setApplicationStatus(ctx, parseFormData(admissionStatusSchema, formData));
       return successResult("Application updated.");
     },
-    { revalidate: "/admin" },
+    { revalidate: "/school-admin" },
   );
 }
 
@@ -67,6 +68,6 @@ export async function acceptApplicationAction(
       const { studentId } = await acceptApplication(ctx, parseFormData(acceptAdmissionSchema, formData));
       return successResult("Application accepted and student admitted.", { studentId });
     },
-    { revalidate: "/admin", redirectTo: ({ studentId }) => `/admin/students/${studentId}` },
+    { revalidate: "/school-admin", redirectTo: ({ studentId }) => `/school-admin/students/${studentId}` as Route },
   );
 }

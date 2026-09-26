@@ -61,7 +61,7 @@ export async function verifyEmailAction(
       return successResult(undefined, { reference });
     },
     {
-      revalidate: "/platform",
+      revalidate: "/super-admin/dashboard",
       redirectTo: ({ reference }) => `/register/submitted?ref=${encodeURIComponent(reference)}`,
     },
   );

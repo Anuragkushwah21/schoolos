@@ -52,3 +52,34 @@ export async function getPublicPlans() {
 
 export type PublicPlan = Awaited<ReturnType<typeof getPublicPlans>>[number];
 export type LiveOffer = Awaited<ReturnType<typeof getLiveOffers>>[number];
+
+/**
+ * What the homepage needs, and what it does when the database is unreachable.
+ *
+ * Offers and prices are the only database-backed parts of that page; the rest
+ * is what the product is and how to sign up. A blip in the database should not
+ * take the front door down with it, so the catalogue degrades to empty — the
+ * pricing and offer sections simply do not render — and the failure is logged
+ * rather than swallowed.
+ *
+ * This is deliberately the only place that does this. Anywhere someone is
+ * *working* — every signed-in screen — an unreachable database has to be an
+ * error, because quietly showing them no students would be worse than saying
+ * something broke.
+ */
+export async function getHomepageCatalogue(): Promise<{
+  offers: LiveOffer[];
+  plans: PublicPlan[];
+  degraded: boolean;
+}> {
+  try {
+    const [offers, plans] = await Promise.all([getLiveOffers(), getPublicPlans()]);
+    return { offers, plans, degraded: false };
+  } catch (error) {
+    console.error(
+      "[marketing] could not read offers and plans; rendering the homepage without them",
+      error,
+    );
+    return { offers: [], plans: [], degraded: true };
+  }
+}

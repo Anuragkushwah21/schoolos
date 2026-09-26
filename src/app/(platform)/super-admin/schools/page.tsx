@@ -41,7 +41,7 @@ const STATUS_LABEL: Record<(typeof STATUS_FILTERS)[number], string> = {
   INACTIVE: "Inactive",
 };
 
-export default async function SchoolsPage(props: PageProps<"/platform/schools">) {
+export default async function SchoolsPage(props: PageProps<"/super-admin/schools">) {
   const user = await requireSuperAdmin();
   const search = await props.searchParams;
 
@@ -58,7 +58,7 @@ export default async function SchoolsPage(props: PageProps<"/platform/schools">)
       <PageHeader title="Schools" description="Registrations and every school on the platform." />
 
       <FilterBar
-        action="/platform/schools"
+        action="/super-admin/schools"
         search={{ defaultValue: q, placeholder: "Search name, city or email" }}
         selects={[
           {
@@ -90,7 +90,7 @@ export default async function SchoolsPage(props: PageProps<"/platform/schools">)
                 return (
                   <TableRow key={school.id}>
                     <TableCell>
-                      <Link href={`/platform/schools/${school.id}`} className="font-medium hover:underline">
+                      <Link href={`/super-admin/schools/${school.id}`} className="font-medium hover:underline">
                         {school.name}
                       </Link>
                       <p className="text-muted-foreground text-xs">
@@ -129,7 +129,7 @@ export default async function SchoolsPage(props: PageProps<"/platform/schools">)
         page={page}
         pageCount={pageCount}
         total={total}
-        basePath="/platform/schools"
+        basePath="/super-admin/schools"
         params={{ status, q }}
       />
     </>

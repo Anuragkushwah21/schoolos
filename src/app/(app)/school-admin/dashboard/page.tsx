@@ -10,13 +10,13 @@ import {
   attendanceLegend,
   attendanceSegments,
 } from "@/components/charts/attendance-colors";
-import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { NoticeList } from "@/features/communication/feed";
+import { SetupChecklist, isSetUp } from "@/features/school/setup-checklist";
 import { formatDate, formatDayShort } from "@/lib/dates";
 import { formatPercent, pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
@@ -44,14 +44,27 @@ export default async function AdminDashboardPage() {
 
   const session = await getCurrentSession(ctx);
 
-  const [students, teachers, pendingAdmissions, notices, overview, gender] = await Promise.all([
-    db.student.count({ where: { status: "ACTIVE" } }),
-    db.teacher.count({ where: { status: { in: ["ACTIVE", "ON_LEAVE"] } } }),
-    db.admissionApplication.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
-    noticesFor(ctx, { take: 4 }),
-    session ? todayOverview(ctx, session.id) : Promise.resolve(null),
-    genderSplit(ctx),
-  ]);
+  const [students, teachers, pendingAdmissions, notices, overview, gender, classes, sections] =
+    await Promise.all([
+      db.student.count({ where: { status: "ACTIVE" } }),
+      db.teacher.count({ where: { status: { in: ["ACTIVE", "ON_LEAVE"] } } }),
+      db.admissionApplication.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
+      noticesFor(ctx, { take: 4 }),
+      session ? todayOverview(ctx, session.id) : Promise.resolve(null),
+      genderSplit(ctx),
+      db.class.count(),
+      session ? db.section.count({ where: { academicSessionId: session.id } }) : Promise.resolve(0),
+    ]);
+
+  // A school that is not finished being set up needs the order of the steps
+  // more than it needs charts of data it does not have yet.
+  const setup = {
+    hasSession: Boolean(session),
+    hasClasses: classes > 0,
+    hasSections: sections > 0,
+    hasTeachers: teachers > 0,
+    hasStudents: students > 0,
+  };
 
   const [trend, strength, funnel, attention, registers] = session
     ? await Promise.all([
@@ -82,49 +95,38 @@ export default async function AdminDashboardPage() {
         actions={
           <>
             <Button asChild variant="outline">
-              <Link href="/admin/reports">Reports</Link>
+              <Link href="/school-admin/reports">Reports</Link>
             </Button>
             <Button asChild>
-              <Link href="/admin/attendance">Mark attendance</Link>
+              <Link href="/school-admin/attendance">Mark attendance</Link>
             </Button>
           </>
         }
       />
 
-      {!session ? (
-        <EmptyState
-          title="Set up your academic session"
-          action={
-            <Button asChild size="sm">
-              <Link href="/admin/academics">Go to Academics</Link>
-            </Button>
-          }
-        >
-          Classes, sections, timetables and attendance all belong to a session.
-        </EmptyState>
-      ) : null}
+      {isSetUp(setup) ? null : <SetupChecklist state={setup} />}
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
           label="Students"
           value={students}
           hint={`${gender.boys} boys · ${gender.girls} girls`}
-          href="/admin/students"
+          href="/school-admin/students"
         />
-        <StatCard label="Teachers" value={teachers} href="/admin/teachers" />
+        <StatCard label="Teachers" value={teachers} href="/school-admin/teachers" />
         <StatCard
           label="Present today"
           value={overview && overview.counts.total ? formatPercent(attendedToday, overview.counts.total) : "—"}
           hint={overview ? `${overview.counts.total} marked` : undefined}
-          href="/admin/attendance"
+          href="/school-admin/attendance"
         />
         <StatCard
           label="Registers marked"
           value={overview ? `${overview.sectionsMarked}/${overview.sections}` : "—"}
           hint={overview ? formatDayShort(overview.date) : undefined}
-          href="/admin/attendance"
+          href="/school-admin/attendance"
         />
-        <StatCard label="Pending admissions" value={pendingAdmissions} href="/admin/admissions" />
+        <StatCard label="Pending admissions" value={pendingAdmissions} href="/school-admin/admissions" />
       </div>
 
       {outstanding.length ? (
@@ -139,7 +141,7 @@ export default async function AdminDashboardPage() {
             {outstanding.length > 3 ? ` and ${outstanding.length - 3} more` : ""}.
           </p>
           <Button asChild size="sm" variant="outline">
-            <Link href="/admin/attendance">Open registers</Link>
+            <Link href="/school-admin/attendance">Open registers</Link>
           </Button>
         </div>
       ) : null}
@@ -272,7 +274,7 @@ export default async function AdminDashboardPage() {
                     <li key={student.id} className="flex items-center justify-between gap-3 py-2.5">
                       <div className="min-w-0">
                         <Link
-                          href={`/admin/students/${student.id}`}
+                          href={`/school-admin/students/${student.id}`}
                           className="font-medium hover:underline"
                         >
                           {student.name}
@@ -342,7 +344,7 @@ export default async function AdminDashboardPage() {
                 <CardDescription>What your school is announcing.</CardDescription>
               </div>
               <Button asChild variant="ghost" size="sm">
-                <Link href="/admin/notices">All</Link>
+                <Link href="/school-admin/notices">All</Link>
               </Button>
             </CardHeader>
             <CardContent>
@@ -354,7 +356,7 @@ export default async function AdminDashboardPage() {
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Registers today</CardTitle>
               <Button asChild variant="ghost" size="sm">
-                <Link href="/admin/attendance">Open</Link>
+                <Link href="/school-admin/attendance">Open</Link>
               </Button>
             </CardHeader>
             <CardContent>
@@ -367,7 +369,7 @@ export default async function AdminDashboardPage() {
                         <StatusBadge status="ACTIVE" label="Marked" />
                       ) : (
                         <Button asChild size="xs" variant="outline">
-                          <Link href={`/admin/attendance?section=${row.id}`}>Mark</Link>
+                          <Link href={`/school-admin/attendance?section=${row.id}`}>Mark</Link>
                         </Button>
                       )}
                     </li>

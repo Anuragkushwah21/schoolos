@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowRightIcon, CalendarDaysIcon, MegaphoneIcon } from "lucide-react";
@@ -58,7 +59,7 @@ export default async function SchoolHomePage(props: PageProps<"/schools/[slug]">
 
           <div className="mt-8 flex flex-wrap gap-3">
             <Button asChild size="lg" variant="secondary" className="h-11 px-5 text-base">
-              <Link href={`${base}/admissions`}>
+              <Link href={`${base}/admissions` as Route}>
                 Apply for admission
                 <ArrowRightIcon data-icon="inline-end" />
               </Link>
@@ -69,7 +70,7 @@ export default async function SchoolHomePage(props: PageProps<"/schools/[slug]">
               variant="outline"
               className="h-11 border-white/40 bg-transparent px-5 text-base text-white hover:bg-white/10 hover:text-white"
             >
-              <Link href={`${base}/contact`}>Contact us</Link>
+              <Link href={`${base}/contact` as Route}>Contact us</Link>
             </Button>
           </div>
         </div>
@@ -107,7 +108,7 @@ export default async function SchoolHomePage(props: PageProps<"/schools/[slug]">
                 Latest notices
               </h2>
               <Button asChild variant="ghost" size="sm">
-                <Link href={`${base}/notices`}>All notices</Link>
+                <Link href={`${base}/notices` as Route}>All notices</Link>
               </Button>
             </div>
             <NoticeList notices={notices} compact />
@@ -123,7 +124,7 @@ export default async function SchoolHomePage(props: PageProps<"/schools/[slug]">
                 Upcoming events
               </h2>
               <Button asChild variant="ghost" size="sm">
-                <Link href={`${base}/events`}>All events</Link>
+                <Link href={`${base}/events` as Route}>All events</Link>
               </Button>
             </div>
             <EventList events={events} />
@@ -163,7 +164,7 @@ export default async function SchoolHomePage(props: PageProps<"/schools/[slug]">
             give. There is nothing to pay to apply.
           </p>
           <Button asChild size="lg" variant="secondary" className="h-11 px-5 text-base">
-            <Link href={`${base}/admissions`}>
+            <Link href={`${base}/admissions` as Route}>
               Start an application
               <ArrowRightIcon data-icon="inline-end" />
             </Link>

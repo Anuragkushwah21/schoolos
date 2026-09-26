@@ -1,5 +1,7 @@
 "use server";
 
+import type { Route } from "next";
+
 import { z } from "zod";
 
 import { type ActionResult, parseFormData, successResult } from "@/lib/action-result";
@@ -19,6 +21,7 @@ import { requireTenantForAction } from "@/server/auth/current-user";
 import { resetPortalPassword } from "@/server/people/accounts";
 import {
   createStudent,
+  deleteStudent,
   enrollStudent,
   grantParentPortal,
   grantStudentPortal,
@@ -30,6 +33,7 @@ import {
 import {
   assignSubject,
   createTeacher,
+  deleteTeacher,
   unassignSubject,
   updateTeacher,
 } from "@/server/people/teachers";
@@ -40,7 +44,7 @@ type Result = ActionResult<undefined>;
 type CredentialsResult = ActionResult<{ credentials?: Credentials }>;
 
 const admin = () => requireTenantForAction("SCHOOL_ADMIN");
-const REVALIDATE = "/admin";
+const REVALIDATE = "/school-admin";
 
 // -----------------------------------------------------------------------------
 // Students
@@ -56,7 +60,7 @@ export async function createStudentAction(
       const studentId = await createStudent(ctx, parseFormData(createStudentSchema, formData));
       return successResult("Student added.", { studentId });
     },
-    { revalidate: REVALIDATE, redirectTo: ({ studentId }) => `/admin/students/${studentId}` },
+    { revalidate: REVALIDATE, redirectTo: ({ studentId }) => `/school-admin/students/${studentId}` as Route },
   );
 }
 
@@ -71,7 +75,28 @@ export async function updateStudentAction(
       await updateStudent(ctx, input);
       return successResult("Student saved.", { studentId: input.studentId });
     },
-    { revalidate: REVALIDATE, redirectTo: ({ studentId }) => `/admin/students/${studentId}` },
+    { revalidate: REVALIDATE, redirectTo: ({ studentId }) => `/school-admin/students/${studentId}` as Route },
+  );
+}
+
+const studentIdSchema = z.object({ studentId: id });
+
+/**
+ * Erase a student admitted by mistake.
+ *
+ * Refused once they have a register, a remark or a result behind them, so this
+ * cannot be a way to lose a child's year — see `deleteStudent`.
+ */
+export async function deleteStudentAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const { studentId } = parseFormData(studentIdSchema, formData);
+      await deleteStudent(ctx, studentId);
+      return successResult("Student deleted.");
+    },
+    // The page it was pressed on no longer exists.
+    { revalidate: REVALIDATE, redirectTo: "/school-admin/students" },
   );
 }
 
@@ -91,7 +116,7 @@ export async function linkGuardianAction(_p: Result, formData: FormData): Promis
     async () => {
       const ctx = await admin();
       await linkGuardian(ctx, parseFormData(linkGuardianSchema, formData));
-      return successResult("Guardian linked.");
+      return successResult("Parent linked.");
     },
     { revalidate: REVALIDATE },
   );
@@ -105,7 +130,7 @@ export async function unlinkGuardianAction(_p: Result, formData: FormData): Prom
       const ctx = await admin();
       const { linkId } = parseFormData(linkIdSchema, formData);
       await unlinkGuardian(ctx, linkId);
-      return successResult("Guardian unlinked.");
+      return successResult("Parent unlinked.");
     },
     { revalidate: REVALIDATE },
   );
@@ -116,7 +141,7 @@ export async function updateParentAction(_p: Result, formData: FormData): Promis
     async () => {
       const ctx = await admin();
       await updateParent(ctx, parseFormData(updateParentSchema, formData));
-      return successResult("Guardian saved.");
+      return successResult("Parent saved.");
     },
     { revalidate: REVALIDATE },
   );
@@ -140,7 +165,7 @@ export async function grantParentPortalAction(_p: CredentialsResult, formData: F
       const ctx = await admin();
       const { personId, email } = parseFormData(portalAccessSchema, formData);
       const credentials = await grantParentPortal(ctx, personId, email);
-      return successResult("Guardian login created.", { credentials });
+      return successResult("Parent login created.", { credentials });
     },
     { revalidate: REVALIDATE },
   );
@@ -186,6 +211,27 @@ export async function updateTeacherAction(_p: Result, formData: FormData): Promi
       return successResult("Teacher saved.");
     },
     { revalidate: REVALIDATE },
+  );
+}
+
+const teacherIdSchema = z.object({ teacherId: id });
+
+/**
+ * Erase a teacher added by mistake.
+ *
+ * Refused outright once they have a record in the school, so the button this
+ * sits behind is not a way to lose history — see `deleteTeacher`.
+ */
+export async function deleteTeacherAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const { teacherId } = parseFormData(teacherIdSchema, formData);
+      await deleteTeacher(ctx, teacherId);
+      return successResult("Teacher deleted.");
+    },
+    // The page it was pressed on no longer exists.
+    { revalidate: REVALIDATE, redirectTo: "/school-admin/teachers" },
   );
 }
 

@@ -13,6 +13,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Spinner } from "@/components/shared/spinner";
 import { Button } from "@/components/ui/button";
 import type { ActionResult } from "@/lib/action-result";
 
@@ -65,10 +66,19 @@ export function ActionButton({
       variant={variant}
       size={size}
       className={className}
+      // Disabled while the action runs: one press, one request.
       disabled={pending}
+      aria-busy={pending || undefined}
       onClick={() => (confirm ? setOpen(true) : run())}
     >
-      {pending ? (pendingLabel ?? "Working…") : children}
+      {pending ? (
+        <>
+          <Spinner size="xs" />
+          {pendingLabel ?? "Working…"}
+        </>
+      ) : (
+        children
+      )}
     </Button>
   );
 

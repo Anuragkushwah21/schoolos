@@ -60,6 +60,31 @@ export function RegisterForm({
         </FieldRow>
       </fieldset>
 
+      <fieldset className="flex flex-col gap-5">
+        <legend className="mb-4 text-sm font-semibold">Your sign-in</legend>
+        <p className="text-muted-foreground -mt-2 text-sm">
+          You will sign in with the email above and the password you choose
+          here, once your school is approved.
+        </p>
+        <FieldRow>
+          <TextField
+            name="password"
+            label="Password"
+            type="password"
+            autoComplete="new-password"
+            hint="At least 10 characters, with a letter and a number."
+            required
+          />
+          <TextField
+            name="confirmPassword"
+            label="Confirm password"
+            type="password"
+            autoComplete="new-password"
+            required
+          />
+        </FieldRow>
+      </fieldset>
+
       {plans.length ? (
         <SelectField
           name="plan"

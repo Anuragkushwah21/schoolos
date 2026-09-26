@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 
 import { FieldError } from "@/components/shared/field-error";
+import { Spinner } from "@/components/shared/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -63,8 +64,22 @@ export function LoginForm() {
         <FieldError id="password-error" messages={fieldErrors?.password} />
       </div>
 
-      <Button type="submit" disabled={isPending} className="w-full">
-        {isPending ? "Signing in…" : "Sign in"}
+      <Button
+        type="submit"
+        // Disabled the moment the action starts, so a second press cannot send
+        // a second sign-in attempt at the rate limiter.
+        disabled={isPending}
+        aria-busy={isPending || undefined}
+        className="w-full"
+      >
+        {isPending ? (
+          <>
+            <Spinner />
+            Signing in…
+          </>
+        ) : (
+          "Sign in"
+        )}
       </Button>
     </form>
   );

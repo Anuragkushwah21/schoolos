@@ -95,6 +95,19 @@ When an id appears in both the path and the body, **the path wins**.
 | `GET` | `/me/attendance` | student — your own record |
 | `GET` | `/me/children` | parent — your own children |
 | `GET` | `/me/children/{studentId}` | parent — one child's attendance and timetable |
+| `GET` | `/me/children/{studentId}/today` | parent — the register, each period as the teacher wrote it up, what is due, the latest mark and remark |
+| `GET` | `/me/children/{studentId}/activity` | parent — what was actually taught. `?subject=` `?days=` |
+| `GET` | `/me/children/{studentId}/homework` | parent — published work, bucketed: overdue, due today, due soon, later |
+| `GET` | `/me/children/{studentId}/results` | parent — every assessment the class sat, with this child's mark. A null mark means they did not sit it, not zero |
+| `GET` | `/me/children/{studentId}/remarks` | parent — structured teacher observations |
+| `GET` | `/me/children/{studentId}/report` | parent — a summary assembled from source rows. `?period=day\|week\|month` |
+| `GET` | `/me/alerts` | parent — derived on each read from real rows; there is no notification table |
+| `GET` | `/me/focus` | parent — what to help with at home. `?child=<studentId>` required |
+
+Every `/me/children/{studentId}` route resolves the child through the
+`ParentStudent` link before reading anything. Another guardian's child, another
+school's child and a made-up id all answer `404`, so changing the id in the path
+reveals nothing. All of them are reads: the parent portal writes nothing.
 
 A guardian asking for a child not linked to them gets a 404: the link is
 checked in the database, and being in the same school is not enough.
@@ -111,7 +124,7 @@ school; there is no school id to pass, and no way to name another one.
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` `POST` | `/students` | `?q=&section=&class=&status=&page=` |
-| `GET` `PUT` | `/students/{id}` | |
+| `GET` `PUT` `DELETE` | `/students/{id}`. `DELETE` erases a student admitted by mistake and answers 409 once they have a register, a remark or a result — set `status` instead |
 | `POST` | `/students/{id}/enrollments` | Place or promote; a later session keeps this year's record |
 | `POST` `DELETE` | `/students/{id}/guardians`, `/students/{id}/guardians/{linkId}` | |
 | `POST` | `/students/{id}/portal-access` | Issues a login; password returned once |
@@ -119,7 +132,7 @@ school; there is no school id to pass, and no way to name another one.
 | `PUT` | `/guardians/{id}` | |
 | `POST` | `/guardians/{id}/portal-access` | |
 | `GET` `POST` | `/teachers` | Creating also creates their login |
-| `GET` `PUT` | `/teachers/{id}` | `status: "INACTIVE"` also disables their login |
+| `GET` `PUT` `DELETE` | `/teachers/{id}` | `PUT` carries `email` and moves the sign-in address with it; `status: "INACTIVE"` also disables their login. `DELETE` erases the staff record and its login together and answers 409 once they have any record in the school — deactivate those instead |
 | `POST` `DELETE` | `/teachers/{id}/assignments`, `/teachers/{id}/assignments/{assignmentId}` | An assignment is what lets a teacher mark that section's register |
 
 ### Academics
@@ -203,21 +216,23 @@ as React elements and never as HTML, so markup in them is shown, not executed.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/platform/schools` | `?status=&q=&page=`; `status=REVIEW` is the queue |
-| `GET` | `/platform/schools/{id}` | Governance data and counts — never a school's records |
-| `POST` | `/platform/schools/{id}/transition` | `{ "transition": "approve" }`, or `reject`/`suspend` with a `reason` |
-| `GET` `POST` | `/platform/schools/{id}/admins` | |
-| `PUT` | `/platform/schools/{id}/subscription` | |
-| `POST` | `/platform/admins/{userId}/password` | New one-time password; signs them out everywhere |
-| `POST` | `/platform/admins/{userId}/active` | `{ "isActive": false }` signs them out at once |
-| `GET` | `/platform/plans`, `PUT /platform/plans/{id}` | Prices in rupees on the way in |
-| `GET` `POST` | `/platform/offers` | |
-| `GET` `PUT` `DELETE` | `/platform/offers/{id}` | |
-| `GET` | `/platform/audit` | `?action=&schoolId=&q=&page=` |
+| `GET` | `/super-admin/schools` | `?status=&q=&page=`; `status=REVIEW` is the queue |
+| `GET` | `/super-admin/schools/{id}` | Governance data and counts — never a school's records |
+| `POST` | `/super-admin/schools/{id}/transition` | `{ "transition": "approve" }`, or `reject`/`suspend` with a `reason` |
+| `GET` `POST` | `/super-admin/schools/{id}/admins` | |
+| `PUT` | `/super-admin/schools/{id}/subscription` | |
+| `POST` | `/super-admin/admins/{userId}/password` | New one-time password; signs them out everywhere |
+| `POST` | `/super-admin/admins/{userId}/active` | `{ "isActive": false }` signs them out at once |
+| `GET` | `/super-admin/plans`, `PUT /super-admin/plans/{id}` | Prices in rupees on the way in |
+| `GET` `POST` | `/super-admin/offers` | |
+| `GET` `PUT` `DELETE` | `/super-admin/offers/{id}` | |
+| `GET` | `/super-admin/audit` | `?action=&schoolId=&q=&page=` |
 
 Approving a school also provisions it — classes Nursery to 12, streams,
-subjects and the current session — and issues its first administrator. That
-password comes back in the response and is never retrievable again.
+subjects and the current session. The administrator's account already exists
+with the password chosen at registration, so nothing is generated; `credentials`
+comes back non-null only when the school had no administrator and one was
+created here, and that password is never retrievable again.
 
 ---
 
@@ -241,10 +256,13 @@ here: a pending, rejected or suspended school is a 404.
 The application and registration `POST`s are rate-limited per address and carry
 a honeypot field (`website`) which must be absent or empty. An application
 creates nothing in the school's records until an administrator accepts it, and
-a registration creates a PENDING school and no account at all.
+a registration creates a PENDING school and a dormant administrator account
+that cannot sign in until the school is approved.
 
-Registering emails a six-digit code to the contact address and returns the
-reference to verify against:
+Registration takes `password` and `confirmPassword` alongside the school and
+contact details — the administrator chooses their own, so no secret has to be
+emailed later. It then emails a six-digit code to the contact address and
+returns the reference to verify against:
 
 ```bash
 curl -X POST https://schoolos.app/api/v1/public/registrations/abc-public-school/verify \

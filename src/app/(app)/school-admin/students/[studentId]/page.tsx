@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 
 import { ActionButton } from "@/components/forms/action-button";
@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { unlinkGuardianAction } from "@/features/school/people-actions";
+import { deleteStudentAction, unlinkGuardianAction } from "@/features/school/people-actions";
 import {
   EditParentForm,
   EnrollmentForm,
@@ -32,7 +32,7 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
   );
 }
 
-export default async function StudentPage(props: PageProps<"/admin/students/[studentId]">) {
+export default async function StudentPage(props: PageProps<"/school-admin/students/[studentId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { studentId } = await props.params;
 
@@ -65,7 +65,7 @@ export default async function StudentPage(props: PageProps<"/admin/students/[stu
   return (
     <>
       <PageHeader
-        back={{ href: "/admin/students", label: "Students" }}
+        back={{ href: "/school-admin/students", label: "Students" }}
         title={`${student.firstName} ${student.lastName}`}
         description={
           <span className="inline-flex flex-wrap items-center gap-2">
@@ -77,9 +77,28 @@ export default async function StudentPage(props: PageProps<"/admin/students/[stu
           </span>
         }
         actions={
-          <Button asChild variant="outline">
-            <Link href={`/admin/students/${student.id}/edit`}>Edit details</Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link href={`/school-admin/students/${student.id}/edit` as Route}>Edit details</Link>
+            </Button>
+            {/* Refused by the service once this child has a register, a remark
+                or a result behind them, which is why the dialog says what it
+                will and will not do rather than simply asking twice. */}
+            <ActionButton
+              action={deleteStudentAction}
+              fields={{ studentId: student.id }}
+              variant="destructive"
+              size="default"
+              confirm={{
+                title: `Delete ${student.firstName} ${student.lastName}?`,
+                description:
+                  "This erases the student record, their placement, their parent links and any sign-in. It only works for a child admitted by mistake — once they appear in a register, or have a remark or a result, the delete is refused and you should set their status to Transferred or Graduated instead.",
+                confirmLabel: "Delete",
+              }}
+            >
+              Delete
+            </ActionButton>
+          </>
         }
       />
 
@@ -106,7 +125,7 @@ export default async function StudentPage(props: PageProps<"/admin/students/[stu
 
           <Card>
             <CardHeader>
-              <CardTitle>Guardians</CardTitle>
+              <CardTitle>Parents &amp; guardians</CardTitle>
               <CardDescription>A guardian with a login sees all of their linked children.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">

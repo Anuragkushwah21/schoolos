@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import Link from "next/link";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +14,7 @@ export function StatCard({
   label: string;
   value: React.ReactNode;
   hint?: React.ReactNode;
-  href?: string;
+  href?: Route;
   className?: string;
 }) {
   const card = (

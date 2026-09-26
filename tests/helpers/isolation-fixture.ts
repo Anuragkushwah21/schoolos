@@ -5,6 +5,7 @@
  * notices and attendance, so the tests compare like with like rather than
  * "populated school vs. empty school".
  */
+import { addDays, today } from "@/lib/dates";
 import { prisma } from "@/server/db/prisma";
 
 export type SeededSchool = {
@@ -22,10 +23,23 @@ export type SeededSchool = {
   parentUserId: string;
   parentId: string;
   studentIds: string[];
+  /** A sign-in for the first student, so the student portal can be tested. */
+  studentUserId: string;
 };
 
 /** Prefix for every row this fixture creates, so teardown is unambiguous. */
 const FIXTURE_PREFIX = "iso-test-";
+
+/**
+ * The day the seeded register is taken on.
+ *
+ * Relative to today, not a fixed calendar date: a hard-coded day drops out of
+ * every "last seven days" window once the suite is a week old, and the tests
+ * that read a trend then fail for reasons that have nothing to do with the
+ * code. Three days back keeps it clear of the days individual suites mark
+ * themselves.
+ */
+const MARKED_ON = addDays(today(), -3);
 
 async function buildSchool(
   key: string,
@@ -144,11 +158,30 @@ async function buildSchool(
   });
 
   const studentIds: string[] = [];
+  let studentUserId = "";
 
   for (const [index, name] of studentNames.entries()) {
+    // Only the first child gets a login: one is enough to exercise the student
+    // portal, and the rest staying login-less matches how schools issue them.
+    const studentUser =
+      index === 0
+        ? await prisma.user.create({
+            data: {
+              email: `student@${FIXTURE_PREFIX}${key}.test`,
+              passwordHash: "not-a-real-hash",
+              role: "STUDENT",
+              firstName: name,
+              lastName: key.toUpperCase(),
+              schoolId: school.id,
+            },
+          })
+        : null;
+    if (studentUser) studentUserId = studentUser.id;
+
     const student = await prisma.student.create({
       data: {
         schoolId: school.id,
+        userId: studentUser?.id ?? null,
         admissionNumber: `ADM${index + 1}`,
         firstName: name,
         lastName: key.toUpperCase(),
@@ -183,7 +216,7 @@ async function buildSchool(
         academicSessionId: academicSession.id,
         studentId: student.id,
         sectionId: section.id,
-        date: new Date(Date.UTC(2026, 8, 18)),
+        date: MARKED_ON,
         status: "PRESENT",
         markedByUserId: adminUser.id,
       },
@@ -215,6 +248,7 @@ async function buildSchool(
     parentUserId: parentUser.id,
     parentId: parent.id,
     studentIds,
+    studentUserId,
   };
 }
 

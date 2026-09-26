@@ -12,9 +12,9 @@ export const metadata: Metadata = {
 };
 
 const NEXT_STEPS = [
-  "We review your application, usually within two working days.",
-  "Once approved, your school is set up with classes Nursery to 12 and the current session.",
-  "Your administrator receives a sign-in to add staff and students.",
+  "Verify your email with the six-digit code we send you.",
+  "We review the registration, usually within two working days.",
+  "Once approved, sign in with the password you choose here — your school is already set up with classes Nursery to 12 and the current session.",
 ];
 
 export default async function RegisterPage(props: PageProps<"/register">) {

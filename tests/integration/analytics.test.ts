@@ -71,12 +71,14 @@ describe("attendance trend", () => {
     const totalA = a.reduce((sum, point) => sum + point.counts.total, 0);
     const totalB = b.reduce((sum, point) => sum + point.counts.total, 0);
 
-    // Two days marked here for A's students, and B sees only its own fixture day.
-    expect(totalA).toBe(schoolA.studentIds.length * 2);
+    // Counting exact rows would depend on which weekday the suite runs on, so
+    // assert the property that matters: each school sees its own marks only.
+    expect(totalA).toBeGreaterThanOrEqual(schoolA.studentIds.length * 2);
     expect(totalB).toBe(schoolB.studentIds.length);
+    expect(totalA).not.toBe(totalB);
   });
 
-  it("leaves unmarked days as gaps rather than zeroes, and drops Sundays", async () => {
+  it("leaves unmarked days as gaps rather than zeroes", async () => {
     const points = await attendanceTrend(adminOf(schoolA), {
       academicSessionId: schoolA.academicSessionId,
       days: 7,
@@ -84,8 +86,29 @@ describe("attendance trend", () => {
 
     const unmarked = points.find((point) => point.counts.total === 0);
     expect(unmarked?.share).toBeNull();
+  });
 
-    expect(points.every((point) => point.date.getUTCDay() !== 0)).toBe(true);
+  it("drops an empty Sunday but keeps one a school actually taught on", async () => {
+    const ctx = adminOf(schoolA);
+
+    // The Sunday before last: far enough back that the fixture has not
+    // touched it, whatever weekday this suite runs on.
+    let sunday = addDays(today(), -7);
+    while (sunday.getUTCDay() !== 0) sunday = addDays(sunday, -1);
+    const days = 21;
+
+    const before = await attendanceTrend(ctx, { academicSessionId: schoolA.academicSessionId, days });
+    expect(before.some((point) => point.key === toDateInput(sunday))).toBe(false);
+
+    await markAttendance(ctx, {
+      sectionId: schoolA.sectionId,
+      date: sunday,
+      entries: [{ studentId: schoolA.studentIds[0]!, status: "PRESENT", remarks: null }],
+    });
+
+    const after = await attendanceTrend(ctx, { academicSessionId: schoolA.academicSessionId, days });
+    const restored = after.find((point) => point.key === toDateInput(sunday));
+    expect(restored?.counts.total).toBe(1);
   });
 
   it("counts late as attended and absent as not", async () => {

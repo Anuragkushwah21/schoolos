@@ -53,7 +53,7 @@ export async function approveSchoolAction(
         { credentials },
       );
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -79,7 +79,7 @@ export async function reasonTransitionAction(
       await transitionSchool(actor, schoolId, transition, reason);
       return successResult(transition === "reject" ? "Registration rejected." : "School suspended. Its users have been signed out.");
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -99,7 +99,7 @@ export async function simpleTransitionAction(
       await transitionSchool(actor, schoolId, transition);
       return successResult(transition === "review" ? "Marked as under review." : "School reactivated.");
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -127,7 +127,7 @@ export async function resendSchoolCodeAction(
             "The code was generated but the email could not be delivered. Check the mail provider, or verify this address another way.",
           );
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -143,7 +143,7 @@ export async function markEmailVerifiedAction(
       await markEmailVerified(actor, schoolId);
       return successResult("Email marked as verified.");
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -158,7 +158,7 @@ export async function createSchoolAdminAction(
       const credentials = await createSchoolAdmin(actor, input);
       return successResult("Administrator created.", { credentials });
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -175,7 +175,7 @@ export async function resetAdminPasswordAction(
       const credentials = await resetSchoolAdminPassword(actor, userId);
       return successResult("New password issued.", { credentials });
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -192,7 +192,7 @@ export async function setAdminActiveAction(
       await setSchoolAdminActive(actor, userId, active === "true");
       return successResult(active === "true" ? "Administrator reactivated." : "Administrator deactivated and signed out.");
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -207,7 +207,7 @@ export async function setSubscriptionAction(
       await setSubscription(actor, input);
       return successResult("Subscription saved.");
     },
-    { revalidate: "/platform" },
+    { revalidate: "/super-admin/dashboard" },
   );
 }
 
@@ -222,7 +222,7 @@ export async function saveOfferAction(
       await saveOffer(actor, offerId || null, input);
       return successResult("Offer saved.");
     },
-    { revalidate: ["/platform", "/"], redirectTo: "/platform/offers" },
+    { revalidate: ["/super-admin/dashboard", "/"], redirectTo: "/super-admin/offers" },
   );
 }
 
@@ -239,7 +239,7 @@ export async function deleteOfferAction(
       await deleteOffer(actor, offerId);
       return successResult("Offer deleted.");
     },
-    { revalidate: ["/platform", "/"] },
+    { revalidate: ["/super-admin/dashboard", "/"] },
   );
 }
 
@@ -254,6 +254,6 @@ export async function updatePlanAction(
       await updatePlan(actor, planId, { ...rest, priceMinor: Math.round(priceRupees * 100) });
       return successResult("Plan saved.");
     },
-    { revalidate: ["/platform", "/"] },
+    { revalidate: ["/super-admin/dashboard", "/"] },
   );
 }

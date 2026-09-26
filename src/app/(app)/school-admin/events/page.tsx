@@ -31,7 +31,7 @@ export default async function AdminEventsPage() {
         description="Published upcoming events appear on dashboards and the school website."
         actions={
           <Button asChild>
-            <Link href="/admin/events/new">New event</Link>
+            <Link href="/school-admin/events/new">New event</Link>
           </Button>
         }
       />
@@ -50,7 +50,7 @@ export default async function AdminEventsPage() {
               {events.map((event) => (
                 <TableRow key={event.id}>
                   <TableCell>
-                    <Link href={`/admin/events/${event.id}`} className="font-medium hover:underline">
+                    <Link href={`/school-admin/events/${event.id}`} className="font-medium hover:underline">
                       {event.title}
                     </Link>
                   </TableCell>

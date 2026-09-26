@@ -46,7 +46,7 @@ export async function requireUser(): Promise<SessionUser> {
  * Require one of `roles`.
  *
  * A signed-in user who lacks the role is sent to their own dashboard rather
- * than shown an error: a teacher probing `/platform` learns nothing about
+ * than shown an error: a teacher probing `/super-admin` learns nothing about
  * whether that section exists.
  */
 export async function requireRole(

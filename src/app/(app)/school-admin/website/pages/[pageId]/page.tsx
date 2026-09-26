@@ -10,7 +10,7 @@ import { orNotFound } from "@/server/page-helpers";
 
 export const metadata: Metadata = { title: "Edit page" };
 
-export default async function EditWebsitePage(props: PageProps<"/admin/website/pages/[pageId]">) {
+export default async function EditWebsitePage(props: PageProps<"/school-admin/website/pages/[pageId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { pageId } = await props.params;
   const page = await orNotFound(getPage(ctx, pageId));
@@ -18,7 +18,7 @@ export default async function EditWebsitePage(props: PageProps<"/admin/website/p
   return (
     <>
       <PageHeader
-        back={{ href: "/admin/website", label: "Website" }}
+        back={{ href: "/school-admin/website", label: "Website" }}
         title={page.title}
         description={`/schools/${ctx.schoolSlug}/${page.slug}`}
         actions={

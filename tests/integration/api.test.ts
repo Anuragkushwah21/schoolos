@@ -17,8 +17,15 @@ import { prisma } from "@/server/db/prisma";
 import { GET as getMe } from "@/app/api/v1/me/route";
 import { GET as listStudents, POST as createStudentRoute } from "@/app/api/v1/students/route";
 import { GET as getStudent, PUT as putStudent } from "@/app/api/v1/students/[studentId]/route";
+import { POST as createTeacherRoute } from "@/app/api/v1/teachers/route";
+import { DELETE as deleteTeacherRoute } from "@/app/api/v1/teachers/[teacherId]/route";
 import { GET as listSectionsRoute } from "@/app/api/v1/sections/route";
 import { GET as getMyTimetable } from "@/app/api/v1/me/timetable/route";
+import { GET as getChildTodayRoute } from "@/app/api/v1/me/children/[studentId]/today/route";
+import { GET as getChildResultsRoute } from "@/app/api/v1/me/children/[studentId]/results/route";
+import { GET as getChildRemarksRoute } from "@/app/api/v1/me/children/[studentId]/remarks/route";
+import { GET as getChildReportRoute } from "@/app/api/v1/me/children/[studentId]/report/route";
+import { GET as getMyAlertsRoute } from "@/app/api/v1/me/alerts/route";
 import { GET as listPlatformSchools } from "@/app/api/v1/platform/schools/route";
 import { GET as getPublicSchoolRoute } from "@/app/api/v1/public/schools/[slug]/route";
 import { POST as submitApplicationRoute } from "@/app/api/v1/public/schools/[slug]/applications/route";
@@ -42,6 +49,7 @@ const tokens = {
   adminARead: "",
   adminBFull: "",
   teacherA: "",
+  parentA: "",
   superAdmin: "",
   revoked: "",
   expired: "",
@@ -54,7 +62,12 @@ function studentBody(overrides: Record<string, unknown> = {}) {
     firstName: "Api",
     lastName: "Created",
     sectionId: schoolA.sectionId,
-    guardianMode: "none",
+    // A student needs a parent, so the body carries one.
+    guardianMode: "new",
+    parentFirstName: "Api",
+    parentLastName: "Guardian",
+    parentPhone: "+91 90000 12345",
+    relationship: "FATHER",
     ...overrides,
   };
 }
@@ -112,6 +125,7 @@ beforeAll(async () => {
   tokens.adminARead = await mint(adminOf(schoolA).user, "READ");
   tokens.adminBFull = await mint(adminOf(schoolB).user, "FULL");
   tokens.teacherA = await mintFor(schoolA.teacherUserId, schoolA.schoolId);
+  tokens.parentA = await mintFor(schoolA.parentUserId, schoolA.schoolId);
   tokens.superAdmin = await mint(superAdmin, "FULL");
 
   tokens.revoked = await mint(adminOf(schoolA).user, "FULL");
@@ -320,6 +334,211 @@ describe("tenant isolation", () => {
   });
 });
 
+describe("deleting a teacher", () => {
+  async function addTeacher(email: string): Promise<string> {
+    const { status, body } = await callApi(
+      createTeacherRoute,
+      apiRequest("/api/v1/teachers", {
+        method: "POST",
+        token: tokens.adminAFull,
+        body: { firstName: "Api", lastName: "Teacher", email },
+      }),
+    );
+    expect(status).toBe(201);
+    return (body.data as { teacherId: string }).teacherId;
+  }
+
+  it("erases a teacher who has no record yet", async () => {
+    const teacherId = await addTeacher("api.delete@iso-test-a.test");
+
+    const { status, body } = await callApi(
+      deleteTeacherRoute,
+      apiRequest(`/api/v1/teachers/${teacherId}`, {
+        method: "DELETE",
+        token: tokens.adminAFull,
+      }),
+      { teacherId },
+    );
+    expect(status).toBe(200);
+    expect(body.data).toEqual({ deleted: true });
+    await expect(prisma.teacher.findUnique({ where: { id: teacherId } })).resolves.toBeNull();
+  });
+
+  it("answers 409 for a teacher whose history cannot be undone", async () => {
+    const teacherId = await addTeacher("api.keep@iso-test-a.test");
+    await prisma.teacherAttendance.create({
+      data: {
+        schoolId: schoolA.schoolId,
+        teacherId,
+        date: new Date(Date.UTC(2026, 8, 1)),
+        status: "PRESENT",
+      },
+    });
+
+    const { status, body } = await callApi(
+      deleteTeacherRoute,
+      apiRequest(`/api/v1/teachers/${teacherId}`, {
+        method: "DELETE",
+        token: tokens.adminAFull,
+      }),
+      { teacherId },
+    );
+    expect(status).toBe(409);
+    expect(body.error?.message).toMatch(/Inactive/);
+    await expect(prisma.teacher.findUnique({ where: { id: teacherId } })).resolves.not.toBeNull();
+  });
+
+  it("reports another school's teacher as missing", async () => {
+    const { status, body } = await callApi(
+      deleteTeacherRoute,
+      apiRequest(`/api/v1/teachers/${schoolB.teacherId}`, {
+        method: "DELETE",
+        token: tokens.adminAFull,
+      }),
+      { teacherId: schoolB.teacherId },
+    );
+    expect(status).toBe(404);
+    expect(body.error?.code).toBe("NOT_FOUND");
+    await expect(
+      prisma.teacher.findUnique({ where: { id: schoolB.teacherId } }),
+    ).resolves.not.toBeNull();
+  });
+
+  it("refuses a read-only token", async () => {
+    const teacherId = await addTeacher("api.readonly@iso-test-a.test");
+
+    const { status } = await callApi(
+      deleteTeacherRoute,
+      apiRequest(`/api/v1/teachers/${teacherId}`, {
+        method: "DELETE",
+        token: tokens.adminARead,
+      }),
+      { teacherId },
+    );
+    expect(status).toBe(403);
+    await expect(prisma.teacher.findUnique({ where: { id: teacherId } })).resolves.not.toBeNull();
+  });
+});
+
+describe("the parent portal over the API", () => {
+  /**
+   * The question §24 of the spec asks, asked of the real handlers: if the
+   * `studentId` in the path is changed, does another child's record come back?
+   *
+   * Each route is called with three ids — the guardian's own child, another
+   * family's child in the same school, and a child in another school — and only
+   * the first may answer.
+   */
+  const ROUTES = [
+    { name: "today", handler: getChildTodayRoute },
+    { name: "results", handler: getChildResultsRoute },
+    { name: "remarks", handler: getChildRemarksRoute },
+    { name: "report", handler: getChildReportRoute },
+  ] as const;
+
+  let ownChild: string;
+  let strangerChild: string;
+
+  beforeAll(async () => {
+    ownChild = schoolA.studentIds[0]!;
+
+    // Another family in school A: same school, same section, different guardian.
+    const otherParent = await prisma.parent.create({
+      data: { schoolId: schoolA.schoolId, firstName: "Other", lastName: "Family", phone: "+91 98888 11111" },
+    });
+    const child = await prisma.student.create({
+      data: { schoolId: schoolA.schoolId, admissionNumber: "ADM7300", firstName: "Other", lastName: "Child" },
+    });
+    await prisma.studentEnrollment.create({
+      data: {
+        schoolId: schoolA.schoolId,
+        studentId: child.id,
+        academicSessionId: schoolA.academicSessionId,
+        classId: schoolA.classId,
+        sectionId: schoolA.sectionId,
+        rollNumber: "77",
+      },
+    });
+    await prisma.parentStudent.create({
+      data: {
+        schoolId: schoolA.schoolId,
+        parentId: otherParent.id,
+        studentId: child.id,
+        relationship: "GUARDIAN",
+      },
+    });
+    strangerChild = child.id;
+  });
+
+  it("answers for the guardian's own child", async () => {
+    for (const route of ROUTES) {
+      const { status, body } = await callApi(
+        route.handler,
+        apiRequest(`/api/v1/me/children/${ownChild}/${route.name}`, { token: tokens.parentA }),
+        { studentId: ownChild },
+      );
+      expect(status, `${route.name} must answer for a linked child`).toBe(200);
+      expect(body.data).toBeTruthy();
+    }
+  });
+
+  it("reports another family's child as missing, not forbidden", async () => {
+    for (const route of ROUTES) {
+      const { status, body } = await callApi(
+        route.handler,
+        apiRequest(`/api/v1/me/children/${strangerChild}/${route.name}`, { token: tokens.parentA }),
+        { studentId: strangerChild },
+      );
+      expect(status, `${route.name} must refuse an unlinked child`).toBe(404);
+      expect(body.error?.code).toBe("NOT_FOUND");
+    }
+  });
+
+  it("reports another school's child identically, so probing reveals nothing", async () => {
+    for (const route of ROUTES) {
+      const { status } = await callApi(
+        route.handler,
+        apiRequest(`/api/v1/me/children/${schoolB.studentIds[0]!}/${route.name}`, {
+          token: tokens.parentA,
+        }),
+        { studentId: schoolB.studentIds[0]! },
+      );
+      expect(status, `${route.name} must refuse another school's child`).toBe(404);
+    }
+  });
+
+  it("refuses a guardian's token on an admin endpoint", async () => {
+    const { status, body } = await callApi(
+      listStudents,
+      apiRequest("/api/v1/students", { token: tokens.parentA }),
+    );
+    expect(status).toBe(403);
+    expect(body.error?.code).toBe("FORBIDDEN");
+  });
+
+  it("refuses an admin's token on the guardian endpoints", async () => {
+    const { status } = await callApi(
+      getChildTodayRoute,
+      apiRequest(`/api/v1/me/children/${ownChild}/today`, { token: tokens.adminAFull }),
+      { studentId: ownChild },
+    );
+    expect(status).toBe(403);
+  });
+
+  it("derives alerts for the guardian's own children only", async () => {
+    const { status, body } = await callApi(
+      getMyAlertsRoute,
+      apiRequest("/api/v1/me/alerts", { token: tokens.parentA }),
+    );
+    expect(status).toBe(200);
+    const alerts = body.data as Array<{ childId: string | null }>;
+    const ids = new Set(alerts.map((alert) => alert.childId).filter(Boolean));
+    for (const id of ids) {
+      expect(schoolA.studentIds).toContain(id);
+    }
+  });
+});
+
 describe("input handling", () => {
   it("returns field-level errors with 422", async () => {
     const { status, body } = await callApi(
@@ -327,7 +546,7 @@ describe("input handling", () => {
       apiRequest("/api/v1/students", {
         method: "POST",
         token: tokens.adminAFull,
-        body: { firstName: "", lastName: "", guardianMode: "none" },
+        body: { firstName: "", lastName: "", guardianMode: "new" },
       }),
     );
     expect(status).toBe(422);

@@ -110,7 +110,7 @@ and `forbidden()`, which still require the experimental `authInterrupts` flag.
 The core authorization path of a production system should not depend on an
 experimental toggle. The behaviour is also better: a signed-out visitor reaches
 the login form, a signed-in user who lacks a role is sent to their own dashboard
-(so probing `/platform` reveals nothing), and a record belonging to another
+(so probing `/super-admin` reveals nothing), and a record belonging to another
 school renders the 404 page — indistinguishable from one that does not exist.
 
 Passwords are bcrypt, cost 12. The login path runs a dummy comparison when an
@@ -158,8 +158,8 @@ Queries that want the flat shape read the enrollment for the active session.
 src/app/
   (marketing)/              # schoolos.app — the SaaS product site. Not a school.
   (auth)/login
-  (platform)/platform/...   # SUPER_ADMIN only
-  (app)/admin/...           # SCHOOL_ADMIN
+  (platform)/super-admin/...  # SUPER_ADMIN only
+  (app)/school-admin/...      # SCHOOL_ADMIN
   (app)/teacher/...
   (app)/student/...
   (app)/parent/...
@@ -196,6 +196,7 @@ src/
     people/     students, guardians, teachers, and each role's own view
     attendance/ registers, staff attendance, reports
     timetable/  weekly periods and clash checks
+    classwork/  what a teacher records: lesson records, homework, remarks
     admissions/ public applications and their review
     communication/ notices and events
     website/    the school's public site, read and edit sides
@@ -231,8 +232,13 @@ data access layer rather than in the screens:
 | Question | Where |
 | --- | --- |
 | May this teacher touch this section? | `teacher-access.ts` — a subject assignment or class-teachership |
+| May this teacher set work in this subject? | `teacher-access.ts#requireSubjectAssignment` — the assignment itself; class-teachership is not enough |
 | May this guardian open this child? | `portal.ts#requireChildOfParent` — the `ParentStudent` link |
 | May this teacher still change this register? | `attendance/service.ts` — today and the last 7 days; admins any day in the session |
+| May this teacher still write up this lesson? | `classwork/activities.ts` — the same seven days, so a register and its lesson record age together |
+| May this teacher change *this* homework or remark? | `classwork/` — authorship. A colleague teaching the same class may read it and not edit it |
+| May this teacher write up a period that is not theirs? | `classwork/activities.ts` — only if the office named them the stand-in for that date. `assignSubstitute` is the School Admin's to call |
+| May this parent open this child? | `portal.ts#requireChildOfParent` — the `ParentStudent` link. A parent writes nothing |
 
 Timetabling a teacher for a period also assigns them that subject in that
 section, so the right to mark a register follows from the timetable rather than
@@ -258,23 +264,34 @@ Three route groups are readable without signing in, and none of them can reach
 private data:
 
 * `(marketing)` — the platform's own site and school registration. A
-  registration is a `School` row in PENDING status; no user account exists
-  until a Super Admin approves it.
+  registration is a `School` row in PENDING status plus the administrator's own
+  account, with the password they chose. Neither grants anything: sign-in
+  refuses every school that is not ACTIVE, and so does session validation on
+  each later request, so the account is dormant until the school is approved.
 
   Getting a school onto the platform takes three steps, in this order:
 
-  1. **Register.** The form creates the PENDING school and emails a six-digit
-     code to the contact address.
+  1. **Register.** The form takes the school's details, the contact's, and the
+     password that contact will sign in with. It creates the PENDING school and
+     their `SCHOOL_ADMIN` user in one transaction, and emails a six-digit code
+     to the contact address. An email already in use is refused here rather
+     than at approval time, when it would be far more annoying.
   2. **Verify that address.** Until `contactEmailVerifiedAt` is set, approval
      is refused — otherwise anyone could register a school in someone else's
      name and have it approved for them. The code is stored only as a SHA-256
      hash, expires in ten minutes, is consumed on use, dies after five wrong
      guesses, and resending is throttled. Wrong, expired, consumed and "no such
      registration" all answer identically.
-  3. **Approval.** The Super Admin approves; that provisions the school,
-     creates the first administrator and emails them their sign-in. Only now
-     can anyone sign in, because `validateSessionToken` refuses every school
-     that is not ACTIVE.
+  3. **Approval.** The Super Admin approves; that provisions the school and
+     emails the contact to say they can sign in. Only now does their account
+     work, because `validateSessionToken` refuses every school that is not
+     ACTIVE. (A password is generated and shown once *only* when the school has
+     no administrator yet — a Super Admin adding one by hand.)
+
+  Someone who signs in before approval is told so — "waiting for approval",
+  "suspended" — rather than "incorrect password". Their password was right;
+  being vague there would only confuse the person who owns the account, and
+  tells an attacker nothing they could not already see.
 
   A Super Admin can mark an address verified by hand for a school that
   confirmed itself another way. It is audited with their name, because it

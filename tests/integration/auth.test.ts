@@ -116,19 +116,29 @@ describe("authenticate()", () => {
     });
   });
 
-  it("rejects a user whose school is suspended", async () => {
+  it("rejects a user whose school is suspended, and says which state it is in", async () => {
     await prisma.school.update({
       where: { id: schoolB.schoolId },
       data: { status: "SUSPENDED" },
     });
 
-    const outcome = await authenticate(await adminEmail("b"), PASSWORD);
-    expect(outcome).toEqual({ ok: false, reason: "SCHOOL_NOT_ACTIVE" });
-
-    await prisma.school.update({
-      where: { id: schoolB.schoolId },
-      data: { status: "ACTIVE" },
-    });
+    try {
+      // The status comes back so the sign-in screen can say "suspended"
+      // rather than "wrong password" to someone holding the right one.
+      const outcome = await authenticate(await adminEmail("b"), PASSWORD);
+      expect(outcome).toEqual({
+        ok: false,
+        reason: "SCHOOL_NOT_ACTIVE",
+        schoolStatus: "SUSPENDED",
+      });
+    } finally {
+      // Restored even if the assertion fails, so one failure here does not
+      // leave every later test looking at a suspended school.
+      await prisma.school.update({
+        where: { id: schoolB.schoolId },
+        data: { status: "ACTIVE" },
+      });
+    }
   });
 
   it("lets a SUPER_ADMIN in despite having no school", async () => {

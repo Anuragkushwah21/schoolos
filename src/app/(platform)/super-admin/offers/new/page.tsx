@@ -10,7 +10,7 @@ export default async function NewOfferPage() {
   await requireSuperAdmin();
   return (
     <>
-      <PageHeader back={{ href: "/platform/offers", label: "Offers" }} title="New offer" />
+      <PageHeader back={{ href: "/super-admin/offers", label: "Offers" }} title="New offer" />
       <OfferForm />
     </>
   );

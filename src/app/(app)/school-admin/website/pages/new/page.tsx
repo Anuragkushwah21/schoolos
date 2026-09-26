@@ -10,7 +10,7 @@ export default async function NewWebsitePage() {
   await requireTenant("SCHOOL_ADMIN");
   return (
     <>
-      <PageHeader back={{ href: "/admin/website", label: "Website" }} title="New page" />
+      <PageHeader back={{ href: "/school-admin/website", label: "Website" }} title="New page" />
       <PageForm />
     </>
   );

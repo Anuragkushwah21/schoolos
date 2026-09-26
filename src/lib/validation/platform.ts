@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { passwordSchema } from "@/lib/validation/auth";
 import {
   checkbox,
   id,
@@ -19,18 +20,30 @@ export const PLAN_TIERS = ["STARTER", "STANDARD", "PRO"] as const;
  * Public school registration. `website` is a honeypot: it is hidden from people
  * and left blank by them, so anything in it came from a bot.
  */
-export const registerSchoolSchema = z.object({
-  name: requiredText("the school's name", 120),
-  city: requiredText("a city", 80),
-  state: requiredText("a state", 80),
-  affiliationBoard: optionalText(60),
-  establishedYear: optionalInt(1800, new Date().getFullYear()),
-  contactName: requiredText("your name", 120),
-  contactEmail: requiredEmail,
-  contactPhone: requiredPhone,
-  plan: optionalEnum(PLAN_TIERS),
-  website: z.string().optional(),
-});
+export const registerSchoolSchema = z
+  .object({
+    name: requiredText("the school's name", 120),
+    city: requiredText("a city", 80),
+    state: requiredText("a state", 80),
+    affiliationBoard: optionalText(60),
+    establishedYear: optionalInt(1800, new Date().getFullYear()),
+    contactName: requiredText("your name", 120),
+    contactEmail: requiredEmail,
+    contactPhone: requiredPhone,
+    /**
+     * The administrator's own password, chosen here rather than generated and
+     * emailed later — one less secret in an inbox, and nothing to hand over.
+     * It unlocks nothing until the school is approved.
+     */
+    password: passwordSchema,
+    confirmPassword: z.string().min(1, "Confirm your password"),
+    plan: optionalEnum(PLAN_TIERS),
+    website: z.string().optional(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
 
 export type RegisterSchoolInput = z.infer<typeof registerSchoolSchema>;
 

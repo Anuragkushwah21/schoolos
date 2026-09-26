@@ -24,7 +24,7 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
   );
 }
 
-export default async function AdmissionPage(props: PageProps<"/admin/admissions/[applicationId]">) {
+export default async function AdmissionPage(props: PageProps<"/school-admin/admissions/[applicationId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { applicationId } = await props.params;
 
@@ -38,7 +38,7 @@ export default async function AdmissionPage(props: PageProps<"/admin/admissions/
   return (
     <>
       <PageHeader
-        back={{ href: "/admin/admissions", label: "Admissions" }}
+        back={{ href: "/school-admin/admissions", label: "Admissions" }}
         title={`${application.studentFirstName} ${application.studentLastName}`}
         description={
           <span className="inline-flex flex-wrap items-center gap-2">
@@ -50,7 +50,7 @@ export default async function AdmissionPage(props: PageProps<"/admin/admissions/
         actions={
           application.createdStudent ? (
             <Button asChild variant="outline">
-              <Link href={`/admin/students/${application.createdStudent.id}`}>Open student record</Link>
+              <Link href={`/school-admin/students/${application.createdStudent.id}`}>Open student record</Link>
             </Button>
           ) : null
         }
@@ -73,7 +73,7 @@ export default async function AdmissionPage(props: PageProps<"/admin/admissions/
               </Detail>
               <Detail label="Gender">{application.gender ? humanize(application.gender) : null}</Detail>
               <Detail label="Previous school">{application.previousSchool}</Detail>
-              <Detail label="Guardian">
+              <Detail label="Parent">
                 {application.parentName} ({humanize(application.parentRelationship)})
               </Detail>
               <Detail label="Phone">{application.parentPhone}</Detail>

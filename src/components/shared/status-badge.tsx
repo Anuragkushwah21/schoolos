@@ -34,6 +34,12 @@ const STATUS_TONE: Record<string, Tone> = {
   LATE: "warning",
   EXCUSED: "info",
   ON_LEAVE: "info",
+  // class records — COMPLETED is shared with enrollments above, where neutral
+  // is right; a finished lesson is not an achievement either.
+  SUBSTITUTE: "info",
+  REMOTE: "info",
+  MISSED: "negative",
+  SCHEDULED: "neutral",
   // admissions
   SUBMITTED: "warning",
   ACCEPTED: "positive",
@@ -42,6 +48,16 @@ const STATUS_TONE: Record<string, Tone> = {
   PUBLISHED: "positive",
   DRAFT: "neutral",
   ARCHIVED: "neutral",
+  // teacher remarks — the three bands read as a traffic light, so a parent
+  // scanning a year of them sees the shape without reading every word.
+  GOOD: "positive",
+  NEEDS_ATTENTION: "warning",
+  REGULAR: "positive",
+  SOMETIMES_MISSING: "warning",
+  FREQUENTLY_MISSING: "negative",
+  NEEDS_IMPROVEMENT: "warning",
+  // AVERAGE and ACTIVE are deliberately absent: AVERAGE is neither good nor
+  // bad, and ACTIVE already reads as positive from the school statuses above.
   // students
   TRANSFERRED: "neutral",
   GRADUATED: "info",

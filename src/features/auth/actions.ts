@@ -23,8 +23,23 @@ import {
 } from "@/server/auth/session";
 import { prisma } from "@/server/db/prisma";
 
-/** The one message every failed sign-in returns, whatever actually went wrong. */
+/** What an unknown email or a wrong password gets, and nothing more. */
 const GENERIC_LOGIN_ERROR = "Incorrect email or password.";
+
+/**
+ * Why a correct password still did not let someone in.
+ *
+ * Saying this much reveals nothing to an attacker — they would have to know
+ * the password already — and saves a school that has just registered from
+ * being told its own password is wrong.
+ */
+const BLOCKED_MESSAGE: Record<string, string> = {
+  PENDING: "Your school is registered and waiting for approval. We will email you as soon as it is approved.",
+  UNDER_REVIEW: "Your school's registration is being reviewed. We will email you as soon as it is approved.",
+  REJECTED: "This school's registration was not approved. Reply to our email if you think that is a mistake.",
+  SUSPENDED: "Your school's access is suspended. Please contact SchoolOS.",
+  INACTIVE: "Your school is not active. Please contact SchoolOS.",
+};
 
 async function requestMetadata() {
   const headerList = await headers();
@@ -75,6 +90,17 @@ export async function loginAction(
         metadata: { email, reason: outcome.reason },
         ipAddress,
       });
+
+      if (outcome.reason === "ACCOUNT_DISABLED") {
+        return errorResult("This account has been deactivated. Ask your school office to restore it.");
+      }
+
+      if (outcome.reason === "SCHOOL_NOT_ACTIVE") {
+        return errorResult(
+          BLOCKED_MESSAGE[outcome.schoolStatus ?? ""] ??
+            "Your school cannot be used yet. Please contact SchoolOS.",
+        );
+      }
 
       return errorResult(GENERIC_LOGIN_ERROR);
     }

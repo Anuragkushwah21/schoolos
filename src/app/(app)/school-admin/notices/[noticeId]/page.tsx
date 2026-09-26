@@ -11,7 +11,7 @@ import { orNotFound } from "@/server/page-helpers";
 
 export const metadata: Metadata = { title: "Edit notice" };
 
-export default async function EditNoticePage(props: PageProps<"/admin/notices/[noticeId]">) {
+export default async function EditNoticePage(props: PageProps<"/school-admin/notices/[noticeId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { noticeId } = await props.params;
   const notice = await orNotFound(getNotice(ctx, noticeId));
@@ -19,7 +19,7 @@ export default async function EditNoticePage(props: PageProps<"/admin/notices/[n
   return (
     <>
       <PageHeader
-        back={{ href: "/admin/notices", label: "Notices" }}
+        back={{ href: "/school-admin/notices", label: "Notices" }}
         title={notice.title}
         actions={
           <ActionButton

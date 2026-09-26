@@ -11,7 +11,7 @@ export default async function NewTeacherPage() {
   return (
     <>
       <PageHeader
-        back={{ href: "/admin/teachers", label: "Teachers" }}
+        back={{ href: "/school-admin/teachers", label: "Teachers" }}
         title="Add teacher"
         description="Creates the staff record and the teacher's sign-in together."
       />

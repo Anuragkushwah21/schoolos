@@ -36,16 +36,21 @@ export function verificationCodeEmail(input: {
   };
 }
 
+/**
+ * `password` is present only when the platform generated one — normally the
+ * administrator chose their own while registering, and there is no secret to
+ * put in an email at all.
+ */
 export function schoolApprovedEmail(input: {
   to: string;
   contactName: string;
   schoolName: string;
   email: string;
-  password: string;
+  password?: string;
 }): Mail {
   return {
     to: input.to,
-    subject: `${input.schoolName} is approved — your SchoolOS sign-in`,
+    subject: `${input.schoolName} is approved — you can sign in now`,
     text: [
       `Hello ${input.contactName},`,
       "",
@@ -57,9 +62,13 @@ export function schoolApprovedEmail(input: {
       `    ${env.APP_URL}/login`,
       "",
       `    Email:    ${input.email}`,
-      `    Password: ${input.password}`,
-      "",
-      "Please change this password after your first sign-in, under Account.",
+      ...(input.password
+        ? [
+            `    Password: ${input.password}`,
+            "",
+            "Please change this password after your first sign-in, under Account.",
+          ]
+        : ["    Password: the one you chose when you registered."]),
       "",
       "From there you can add sections, staff and students, and hand out",
       "sign-ins to your teachers, students and parents.",

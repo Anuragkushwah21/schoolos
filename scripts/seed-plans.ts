@@ -12,11 +12,12 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { PrismaClient, PlanTier } from "../src/generated/prisma/client";
+import { connectionConfig } from "../src/server/db/connection";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is not set.");
 
-const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
+const prisma = new PrismaClient({ adapter: new PrismaPg(connectionConfig(connectionString)) });
 
 /** Prices are in paise, so money stays in integers. */
 const PLANS = [

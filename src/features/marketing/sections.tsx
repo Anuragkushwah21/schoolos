@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import Link from "next/link";
 import {
   ArrowRightIcon,
@@ -65,7 +66,7 @@ export function Hero({ offer }: { offer: LiveOffer | undefined }) {
         <div className="flex flex-col items-start gap-6">
           {offer ? (
             <Link
-              href={offer.ctaHref ?? "/register"}
+              href={(offer.ctaHref ?? "/register") as Route}
               className="bg-primary/10 text-primary hover:bg-primary/15 inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium transition-colors"
             >
               <SparklesIcon className="size-4" aria-hidden />
@@ -159,7 +160,7 @@ export function OfferBand({ offers }: { offers: LiveOffer[] }) {
                 <p className="text-3xl font-semibold tabular-nums">{offer.priceLabel}</p>
               ) : null}
               <Button asChild size="lg" variant="secondary" className="h-10 px-5">
-                <Link href={offer.ctaHref ?? "/register"}>
+                <Link href={(offer.ctaHref ?? "/register") as Route}>
                   {offer.ctaLabel ?? "Get started"}
                   <ArrowRightIcon data-icon="inline-end" />
                 </Link>

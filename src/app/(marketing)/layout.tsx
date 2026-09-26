@@ -1,7 +1,8 @@
 import Link from "next/link";
 
 import { Logo } from "@/components/shared/logo";
-import { Button } from "@/components/ui/button";
+import { MobileHeaderMenu } from "@/components/shared/mobile-header-menu";
+import { SiteHeaderAccount } from "@/features/auth/site-header-account";
 
 /**
  * Frame for the platform's own public pages: the product homepage and school
@@ -35,13 +36,18 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
             </Link>
           </nav>
 
-          <div className="flex items-center gap-2">
-            <Button asChild variant="ghost" size="lg">
-              <Link href="/login">Sign in</Link>
-            </Button>
-            <Button asChild size="lg" className="hidden px-4 sm:inline-flex">
-              <Link href="/register">Register your school</Link>
-            </Button>
+          {/* Resolved on the server from the session itself, so the corner
+              cannot claim a sign-in that the guards would refuse. It also means
+              signing in or out updates it without a manual refresh: the layout
+              renders again on navigation and the corner renders with it. */}
+          <div className="hidden items-center gap-2 sm:flex">
+            <SiteHeaderAccount />
+          </div>
+
+          <div className="sm:hidden">
+            <MobileHeaderMenu>
+              <SiteHeaderAccount mobile />
+            </MobileHeaderMenu>
           </div>
         </div>
       </header>

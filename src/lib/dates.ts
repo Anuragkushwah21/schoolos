@@ -148,6 +148,15 @@ export function formatDate(date: Date | null | undefined): string {
   }).format(date);
 }
 
+/** "September 2026". Names the calendar month a stored date falls in. */
+export function formatMonth(date: Date): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "UTC",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
 /** "Fri, 18 Sep". */
 export function formatDayShort(date: Date): string {
   return new Intl.DateTimeFormat("en-IN", {

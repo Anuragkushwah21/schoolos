@@ -18,7 +18,14 @@ export type LoginFailureReason =
 
 export type LoginOutcome =
   | { ok: true; userId: string; schoolId: string | null }
-  | { ok: false; reason: LoginFailureReason };
+  | { ok: false; reason: "INVALID_CREDENTIALS" | "ACCOUNT_DISABLED" }
+  /**
+   * The password was right, so there is nothing to protect by being vague:
+   * the caller already holds the credential. The school's status comes back so
+   * the screen can say "waiting for approval" rather than "wrong password",
+   * which for a school that has just registered is simply untrue.
+   */
+  | { ok: false; reason: "SCHOOL_NOT_ACTIVE"; schoolStatus: SchoolStatus | null };
 
 export async function authenticate(
   email: string,
@@ -55,7 +62,7 @@ export async function authenticate(
   if (user.role !== "SUPER_ADMIN") {
     const status: SchoolStatus | undefined = user.school?.status;
     if (!user.schoolId || status !== "ACTIVE") {
-      return { ok: false, reason: "SCHOOL_NOT_ACTIVE" };
+      return { ok: false, reason: "SCHOOL_NOT_ACTIVE", schoolStatus: status ?? null };
     }
   }
 

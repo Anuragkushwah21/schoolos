@@ -1,6 +1,6 @@
 import "server-only";
 
-import { env } from "@/lib/env";
+import { env, isProduction } from "@/lib/env";
 import { resendTransport } from "@/server/mail/resend";
 
 /**
@@ -24,14 +24,14 @@ export type Mail = {
 
 export type MailTransport = (mail: Mail & { from: string }) => Promise<void>;
 
-/** The placeholder: log it, clearly marked, so nobody mistakes it for delivery. */
-const consoleTransport: MailTransport = async (mail) => {
+/** Print a message to the server log, banner and all. */
+function logMail(mail: Mail & { from: string }, reason: string): void {
   const rule = "─".repeat(60);
   console.info(
     [
       "",
       rule,
-      `[mail] NOT DELIVERED — no provider configured`,
+      `[mail] NOT DELIVERED — ${reason}`,
       `To:      ${mail.to}`,
       `From:    ${mail.from}`,
       `Subject: ${mail.subject}`,
@@ -41,6 +41,11 @@ const consoleTransport: MailTransport = async (mail) => {
       "",
     ].join("\n"),
   );
+}
+
+/** The placeholder: log it, clearly marked, so nobody mistakes it for delivery. */
+const consoleTransport: MailTransport = async (mail) => {
+  logMail(mail, "no provider configured");
 };
 
 /** Set by tests, and by anyone wiring a different provider. Wins over env. */
@@ -66,6 +71,13 @@ export function resetMailTransport(): void {
  * registered, or an account is created, whether or not the email goes out.
  * Failures are logged and swallowed, and the caller is told nothing it would
  * have to handle.
+ *
+ * When the provider refuses in development, the message is printed instead.
+ * A verification code the provider would not carry is otherwise unrecoverable
+ * — it is stored only as a hash — so the registration is stuck with nobody
+ * able to finish it. That is a dead end while building, and no help at all in
+ * production, where printing a one-time code to the server log would be a
+ * leak. Hence development only.
  */
 export async function sendMail(mail: Mail): Promise<{ delivered: boolean }> {
   const from = env.MAIL_FROM;
@@ -75,6 +87,7 @@ export async function sendMail(mail: Mail): Promise<{ delivered: boolean }> {
     return { delivered: true };
   } catch (error) {
     console.error("[mail] failed to send", mail.subject, "to", mail.to, error);
+    if (!isProduction) logMail({ ...mail, from }, "the provider refused it");
     return { delivered: false };
   }
 }

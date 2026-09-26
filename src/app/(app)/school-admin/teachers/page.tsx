@@ -23,7 +23,7 @@ import { listTeachers } from "@/server/people/teachers";
 
 export const metadata: Metadata = { title: "Teachers" };
 
-export default async function TeachersPage(props: PageProps<"/admin/teachers">) {
+export default async function TeachersPage(props: PageProps<"/school-admin/teachers">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
   const q = param(search.q);
@@ -41,13 +41,13 @@ export default async function TeachersPage(props: PageProps<"/admin/teachers">) 
         title="Teachers"
         actions={
           <Button asChild>
-            <Link href="/admin/teachers/new">Add teacher</Link>
+            <Link href="/school-admin/teachers/new">Add teacher</Link>
           </Button>
         }
       />
 
       <FilterBar
-        action="/admin/teachers"
+        action="/school-admin/teachers"
         search={{ defaultValue: q, placeholder: "Name, employee ID or email" }}
         selects={[
           {
@@ -76,7 +76,7 @@ export default async function TeachersPage(props: PageProps<"/admin/teachers">) 
               {rows.map((teacher) => (
                 <TableRow key={teacher.id}>
                   <TableCell>
-                    <Link href={`/admin/teachers/${teacher.id}`} className="font-medium hover:underline">
+                    <Link href={`/school-admin/teachers/${teacher.id}`} className="font-medium hover:underline">
                       {teacher.firstName} {teacher.lastName}
                     </Link>
                     <p className="text-muted-foreground text-xs">{teacher.employeeId}</p>
@@ -108,13 +108,13 @@ export default async function TeachersPage(props: PageProps<"/admin/teachers">) 
           title="No teachers match"
           action={
             <Button asChild size="sm">
-              <Link href="/admin/teachers/new">Add a teacher</Link>
+              <Link href="/school-admin/teachers/new">Add a teacher</Link>
             </Button>
           }
         />
       )}
 
-      <Pager page={page} pageCount={pageCount} total={total} basePath="/admin/teachers" params={{ q, status }} />
+      <Pager page={page} pageCount={pageCount} total={total} basePath="/school-admin/teachers" params={{ q, status }} />
     </>
   );
 }

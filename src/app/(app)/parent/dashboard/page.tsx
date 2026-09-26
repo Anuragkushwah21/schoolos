@@ -1,133 +1,237 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 
-import { Meter, Sparkline } from "@/components/charts/bars";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { EventList, NoticeList } from "@/features/communication/feed";
-import { formatDayShort } from "@/lib/dates";
-import { formatPercent, humanize } from "@/lib/format";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { NoticeList } from "@/features/communication/feed";
+import { ChildCard, ChildSwitcher } from "@/features/parent/child-nav";
+import { AlertList, FocusList, TodaysUpdate } from "@/features/parent/today";
+import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
-import { upcomingEvents } from "@/server/communication/events";
+import { attendedShare, emptyCounts } from "@/server/attendance/service";
 import { noticesFor } from "@/server/communication/notices";
-import { getParentChildren } from "@/server/people/portal";
+import { listMyChildren } from "@/server/parent/access";
+import { getParentAlerts } from "@/server/parent/alerts";
+import { getChildFocus, getChildToday } from "@/server/parent/child";
+import { orNotFound } from "@/server/page-helpers";
+import { today } from "@/lib/dates";
 
 export const metadata: Metadata = { title: "Parent dashboard" };
 
-export default async function ParentDashboardPage() {
+function greeting(now = new Date()): string {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-GB", {
+      hour: "numeric",
+      hour12: false,
+      timeZone: "Asia/Kolkata",
+    }).format(now),
+  );
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+/**
+ * What a guardian sees on signing in.
+ *
+ * Built from the school's own operational records, so nothing here can disagree
+ * with the register a teacher took. The children listed come from the
+ * `ParentStudent` table and the `?child=` parameter can only ever select one of
+ * them — an id belonging to somebody else's child resolves to a 404 in
+ * `getChildToday`, which re-checks the link itself.
+ */
+export default async function ParentDashboardPage(props: PageProps<"/parent/dashboard">) {
   const ctx = await requireTenant("PARENT");
-  const [{ children, session, date }, notices, events] = await Promise.all([
-    getParentChildren(ctx),
-    noticesFor(ctx, { take: 5 }),
-    upcomingEvents(ctx, 4),
+  const search = await props.searchParams;
+
+  const [{ parent, children }, alerts, notices] = await Promise.all([
+    listMyChildren(ctx),
+    getParentAlerts(ctx),
+    noticesFor(ctx, { take: 4 }),
   ]);
+
+  if (children.length === 0) {
+    return (
+      <>
+        <PageHeader title={`${greeting()}, ${parent.firstName}`} />
+        <EmptyState title="No children are linked to your account yet">
+          The school office links a guardian to their children. Ask them to add yours, and
+          everything about their day appears here.
+        </EmptyState>
+      </>
+    );
+  }
+
+  const placed = children.filter((child) => child.sectionId !== null);
+
+  // The child being looked at: the one asked for, if it is one of theirs, else
+  // the first placed child. An unrelated id simply does not match.
+  const requested = param(search.child);
+  const selected = placed.find((child) => child.id === requested) ?? placed[0] ?? null;
+
+  const attendance = await attendanceByChild(ctx, children.map((child) => child.id));
+
+  const detail = selected
+    ? await Promise.all([
+        orNotFound(getChildToday(ctx, selected.id)),
+        orNotFound(getChildFocus(ctx, selected.id)),
+      ])
+    : null;
 
   return (
     <>
       <PageHeader
-        title={`Welcome, ${ctx.user.firstName}`}
+        title={`${greeting()}, ${parent.firstName}`}
         description={
-          children.length
-            ? `${children.length === 1 ? "Your child" : "Your children"} at ${ctx.schoolName}${session ? ` · ${session.name}` : ""}`
-            : undefined
+          children.length === 1
+            ? "Your child's day at school, as their teachers recorded it."
+            : `Your ${children.length} children's days at school, as their teachers recorded it.`
+        }
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/parent/notices">Notices</Link>
+          </Button>
         }
       />
 
-      {children.length ? (
-        <div className="mb-8 grid gap-4 md:grid-cols-2">
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Needs your attention</CardTitle>
+          <CardDescription>Taken from today&apos;s records, not a separate list.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AlertList alerts={alerts} />
+        </CardContent>
+      </Card>
+
+      <section className="mb-6">
+        <h2 className="mb-3 font-semibold">
+          {children.length === 1 ? "My child" : `My children (${children.length})`}
+        </h2>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {children.map((child) => (
-            <Card key={child.id}>
-              <CardHeader className="flex flex-row items-start justify-between gap-3">
-                <div>
-                  <CardTitle>{child.name}</CardTitle>
-                  <p className="text-muted-foreground text-sm">
-                    {child.sectionLabel ?? "Not placed this session"}
-                    {child.rollNumber ? ` · roll ${child.rollNumber}` : ""}
-                  </p>
-                </div>
-                <span className="text-muted-foreground text-xs">{humanize(child.relationship)}</span>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div className="rounded-lg border p-3">
-                    <p className="text-muted-foreground text-xs">{formatDayShort(date)}</p>
-                    <p className="mt-1">
-                      {child.todayStatus ? (
-                        <StatusBadge status={child.todayStatus} />
-                      ) : (
-                        <span className="text-muted-foreground text-sm">Not marked</span>
-                      )}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border p-3">
-                    <p className="text-muted-foreground text-xs">Attendance</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums">
-                      {formatPercent(child.counts.PRESENT + child.counts.LATE, child.counts.total)}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border p-3">
-                    <p className="text-muted-foreground text-xs">Days absent</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums">{child.counts.ABSENT}</p>
-                  </div>
-                </div>
-
-                {child.counts.total ? (
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <Meter
-                        label="Days attended this session"
-                        value={child.counts.PRESENT + child.counts.LATE}
-                        max={child.counts.total}
-                        tone={(child.share ?? 0) >= 0.75 ? "good" : "warning"}
-                      />
-                    </div>
-                    {child.spark.length > 1 ? (
-                      <Sparkline
-                        values={child.spark}
-                        ariaLabel={`${child.name}: attendance over the last ${child.spark.length} marked days`}
-                      />
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <Button asChild variant="outline" size="sm" className="w-fit">
-                  <Link href={`/parent/children/${child.id}`}>Attendance and timetable</Link>
-                </Button>
-              </CardContent>
-            </Card>
+            <ChildCard
+              key={child.id}
+              child={child}
+              attendanceShare={attendance.get(child.id)?.share ?? null}
+              todayStatus={attendance.get(child.id)?.todayStatus ?? null}
+            />
           ))}
         </div>
+      </section>
+
+      {selected && detail ? (
+        <>
+          <ChildSwitcher options={placed} activeId={selected.id} tab="" />
+
+          <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
+            <TodaysUpdate today={detail[0]} studentId={selected.id} />
+
+            <div className="flex flex-col gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>What to help with at home</CardTitle>
+                  <CardDescription>
+                    Drawn from what {selected.name.split(" ")[0]}&apos;s teachers recorded — each
+                    line points at a lesson, a mark or a due date.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <FocusList items={detail[1].items} />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between gap-2">
+                  <CardTitle>School notices</CardTitle>
+                  <Button asChild variant="ghost" size="sm">
+                    <Link href="/parent/notices">All</Link>
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  <NoticeList notices={notices} compact />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>{selected.name.split(" ")[0]}&apos;s record</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      ["attendance", "Attendance"],
+                      ["timetable", "Timetable"],
+                      ["activity", "Class activity"],
+                      ["homework", "Homework"],
+                      ["results", "Tests & results"],
+                      ["fees", "Fees & payments"],
+                      ["remarks", "Teacher remarks"],
+                      ["reports", "Reports"],
+                    ] as const
+                  ).map(([slug, label]) => (
+                    <Button key={slug} asChild size="sm" variant="outline">
+                      <Link href={`/parent/children/${selected.id}/${slug}` as Route}>{label}</Link>
+                    </Button>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </>
       ) : (
-        <EmptyState title="No children linked to your account yet">
-          Ask the school office to link your children to your account.
+        <EmptyState title="Not placed in a class this session">
+          The school has not put {children.length === 1 ? "your child" : "any of your children"} in a
+          section for the current academic year yet. Their day appears here once it does.
         </EmptyState>
       )}
-
-      <div className="grid gap-6 xl:grid-cols-[1.3fr_1fr]">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Notices</CardTitle>
-            <Button asChild variant="ghost" size="sm">
-              <Link href="/parent/notices">All</Link>
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <NoticeList notices={notices} compact />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Upcoming events</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <EventList events={events} />
-          </CardContent>
-        </Card>
-      </div>
     </>
+  );
+}
+
+/**
+ * Attendance headline per child, in two queries rather than two per child.
+ *
+ * Scoped by the ids the link table already produced, so this cannot widen to a
+ * child who is not this guardian's.
+ */
+async function attendanceByChild(
+  ctx: Awaited<ReturnType<typeof requireTenant>>,
+  studentIds: string[],
+): Promise<Map<string, { share: number | null; todayStatus: string | null }>> {
+  if (studentIds.length === 0) return new Map();
+
+  const [totals, todayMarks] = await Promise.all([
+    ctx.db.studentAttendance.groupBy({
+      by: ["studentId", "status"],
+      where: { studentId: { in: studentIds }, academicSession: { isCurrent: true } },
+      _count: { _all: true },
+    }),
+    ctx.db.studentAttendance.findMany({
+      where: { studentId: { in: studentIds }, date: today() },
+      select: { studentId: true, status: true },
+    }),
+  ]);
+
+  const counts = new Map<string, ReturnType<typeof emptyCounts>>();
+  for (const row of totals) {
+    const entry = counts.get(row.studentId) ?? emptyCounts();
+    entry[row.status] += row._count._all;
+    entry.total += row._count._all;
+    counts.set(row.studentId, entry);
+  }
+
+  const todayByChild = new Map(todayMarks.map((row) => [row.studentId, row.status as string]));
+
+  return new Map(
+    studentIds.map((id) => [
+      id,
+      {
+        share: counts.has(id) ? attendedShare(counts.get(id)!) : null,
+        todayStatus: todayByChild.get(id) ?? null,
+      },
+    ]),
   );
 }

@@ -13,7 +13,7 @@ import { performAction } from "@/server/perform-action";
 type Result = ActionResult<undefined>;
 
 /** Notices and events show on every dashboard and the public website. */
-const EVERYWHERE = ["/admin", "/teacher", "/student", "/parent", "/schools/[slug]"];
+const EVERYWHERE = ["/school-admin", "/teacher", "/student", "/parent", "/schools/[slug]"];
 
 export async function saveNoticeAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
@@ -22,7 +22,7 @@ export async function saveNoticeAction(_p: Result, formData: FormData): Promise<
       await saveNotice(ctx, parseFormData(noticeSchema, formData));
       return successResult("Notice saved.");
     },
-    { revalidate: EVERYWHERE, redirectTo: "/admin/notices" },
+    { revalidate: EVERYWHERE, redirectTo: "/school-admin/notices" },
   );
 }
 
@@ -34,7 +34,7 @@ export async function deleteNoticeAction(_p: Result, formData: FormData): Promis
       await deleteNotice(ctx, noticeId);
       return successResult("Notice deleted.");
     },
-    { revalidate: EVERYWHERE, redirectTo: "/admin/notices" },
+    { revalidate: EVERYWHERE, redirectTo: "/school-admin/notices" },
   );
 }
 
@@ -45,7 +45,7 @@ export async function saveEventAction(_p: Result, formData: FormData): Promise<R
       await saveEvent(ctx, parseFormData(eventSchema, formData));
       return successResult("Event saved.");
     },
-    { revalidate: EVERYWHERE, redirectTo: "/admin/events" },
+    { revalidate: EVERYWHERE, redirectTo: "/school-admin/events" },
   );
 }
 
@@ -57,6 +57,6 @@ export async function deleteEventAction(_p: Result, formData: FormData): Promise
       await deleteEvent(ctx, eventId);
       return successResult("Event deleted.");
     },
-    { revalidate: EVERYWHERE, redirectTo: "/admin/events" },
+    { revalidate: EVERYWHERE, redirectTo: "/school-admin/events" },
   );
 }

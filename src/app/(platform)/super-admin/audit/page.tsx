@@ -22,7 +22,7 @@ import { listAuditLog } from "@/server/platform/audit";
 
 export const metadata: Metadata = { title: "Audit log" };
 
-export default async function AuditPage(props: PageProps<"/platform/audit">) {
+export default async function AuditPage(props: PageProps<"/super-admin/audit">) {
   const user = await requireSuperAdmin();
   const search = await props.searchParams;
 
@@ -44,7 +44,7 @@ export default async function AuditPage(props: PageProps<"/platform/audit">) {
       />
 
       <FilterBar
-        action="/platform/audit"
+        action="/super-admin/audit"
         hidden={{ schoolId }}
         search={{ defaultValue: q, placeholder: "Search summaries" }}
         selects={[
@@ -59,7 +59,7 @@ export default async function AuditPage(props: PageProps<"/platform/audit">) {
       />
       {schoolId ? (
         <p className="text-muted-foreground mb-4 text-sm">
-          Showing one school only. <Link href="/platform/audit" className="underline">Show all</Link>
+          Showing one school only. <Link href="/super-admin/audit" className="underline">Show all</Link>
         </p>
       ) : null}
 
@@ -85,7 +85,7 @@ export default async function AuditPage(props: PageProps<"/platform/audit">) {
                   <TableCell className="max-w-md whitespace-normal">{row.summary}</TableCell>
                   <TableCell>
                     {row.school ? (
-                      <Link href={`/platform/schools/${row.school.id}`} className="hover:underline">
+                      <Link href={`/super-admin/schools/${row.school.id}`} className="hover:underline">
                         {row.school.name}
                       </Link>
                     ) : (
@@ -108,7 +108,7 @@ export default async function AuditPage(props: PageProps<"/platform/audit">) {
         page={page}
         pageCount={pageCount}
         total={total}
-        basePath="/platform/audit"
+        basePath="/super-admin/audit"
         params={{ action, q, schoolId }}
       />
     </>

@@ -13,8 +13,19 @@ import {
   createSection,
   setCurrentSession,
 } from "@/server/academics/structure";
-import { createStudent, enrollStudent, grantParentPortal, linkGuardian } from "@/server/people/students";
-import { assignSubject, createTeacher, updateTeacher } from "@/server/people/teachers";
+import {
+  createStudent,
+  deleteStudent,
+  enrollStudent,
+  grantParentPortal,
+  linkGuardian,
+} from "@/server/people/students";
+import {
+  assignSubject,
+  createTeacher,
+  deleteTeacher,
+  updateTeacher,
+} from "@/server/people/teachers";
 
 import { adminOf, teacherOf } from "../helpers/context";
 import {
@@ -26,11 +37,22 @@ import {
 let schoolA: SeededSchool;
 let schoolB: SeededSchool;
 
+let guardianSeq = 0;
+
+/**
+ * A student always arrives with somebody responsible for them, so the helper
+ * supplies a fresh guardian unless a test names an existing one.
+ */
 function studentInput(overrides: Record<string, string>) {
+  guardianSeq += 1;
   return createStudentSchema.parse({
     firstName: "New",
     lastName: "Student",
-    guardianMode: "none",
+    guardianMode: "new",
+    parentFirstName: "Helper",
+    parentLastName: `Guardian${guardianSeq}`,
+    parentPhone: `+91 90000 0${String(1000 + guardianSeq).slice(-4)}`,
+    relationship: "FATHER",
     ...overrides,
   });
 }
@@ -189,6 +211,12 @@ describe("teachers", () => {
       employeeId: null,
       phone: null,
       qualification: null,
+      designation: null,
+      dateOfBirth: null,
+      addressLine: null,
+      city: null,
+      state: null,
+      postalCode: null,
       joiningDate: null,
     });
 
@@ -206,6 +234,12 @@ describe("teachers", () => {
         employeeId: null,
         phone: null,
         qualification: null,
+        designation: null,
+        dateOfBirth: null,
+        addressLine: null,
+        city: null,
+        state: null,
+        postalCode: null,
         joiningDate: null,
       }),
     ).rejects.toBeInstanceOf(ConflictError);
@@ -237,6 +271,12 @@ describe("teachers", () => {
       employeeId: null,
       phone: null,
       qualification: null,
+      designation: null,
+      dateOfBirth: null,
+      addressLine: null,
+      city: null,
+      state: null,
+      postalCode: null,
       joiningDate: null,
     });
 
@@ -245,15 +285,277 @@ describe("teachers", () => {
       teacherId,
       firstName: teacher.firstName,
       lastName: teacher.lastName,
+      email: credentials.email,
       gender: null,
       employeeId: teacher.employeeId,
       phone: null,
       qualification: null,
+      designation: null,
+      dateOfBirth: null,
+      addressLine: null,
+      city: null,
+      state: null,
+      postalCode: null,
       joiningDate: null,
       status: "INACTIVE",
     });
 
     expect((await authenticate(credentials.email, credentials.password)).ok).toBe(false);
+  });
+
+  it("moves the sign-in address when the admin corrects it", async () => {
+    const { teacherId, credentials } = await createTeacher(adminOf(schoolA), {
+      firstName: "Typo",
+      lastName: "Address",
+      email: "tpyo@people-test.test",
+      gender: null,
+      employeeId: null,
+      phone: null,
+      qualification: null,
+      designation: null,
+      dateOfBirth: null,
+      addressLine: null,
+      city: null,
+      state: null,
+      postalCode: null,
+      joiningDate: null,
+    });
+
+    const teacher = await prisma.teacher.findUniqueOrThrow({ where: { id: teacherId } });
+    await updateTeacher(adminOf(schoolA), {
+      teacherId,
+      firstName: teacher.firstName,
+      lastName: teacher.lastName,
+      email: "typo@people-test.test",
+      gender: null,
+      employeeId: teacher.employeeId,
+      phone: null,
+      qualification: null,
+      designation: null,
+      dateOfBirth: null,
+      addressLine: null,
+      city: null,
+      state: null,
+      postalCode: null,
+      joiningDate: null,
+      status: "ACTIVE",
+    });
+
+    // The password is untouched, so the old address simply stops working and
+    // the new one starts.
+    expect((await authenticate("tpyo@people-test.test", credentials.password)).ok).toBe(false);
+    expect((await authenticate("typo@people-test.test", credentials.password)).ok).toBe(true);
+    // Both copies moved: the staff record's own address and the login's.
+    await expect(
+      prisma.teacher.findUniqueOrThrow({ where: { id: teacherId }, select: { email: true } }),
+    ).resolves.toEqual({ email: "typo@people-test.test" });
+  });
+
+  it("refuses an address another account already uses", async () => {
+    const { teacherId } = await createTeacher(adminOf(schoolA), {
+      firstName: "Wants",
+      lastName: "Taken",
+      email: "wants.taken@people-test.test",
+      gender: null,
+      employeeId: null,
+      phone: null,
+      qualification: null,
+      designation: null,
+      dateOfBirth: null,
+      addressLine: null,
+      city: null,
+      state: null,
+      postalCode: null,
+      joiningDate: null,
+    });
+    const teacher = await prisma.teacher.findUniqueOrThrow({ where: { id: teacherId } });
+
+    await expect(
+      updateTeacher(adminOf(schoolA), {
+        teacherId,
+        firstName: teacher.firstName,
+        lastName: teacher.lastName,
+        // Already the corrected teacher's address, from the test above.
+        email: "typo@people-test.test",
+        gender: null,
+        employeeId: teacher.employeeId,
+        phone: null,
+        qualification: null,
+        designation: null,
+        dateOfBirth: null,
+        addressLine: null,
+        city: null,
+        state: null,
+        postalCode: null,
+        joiningDate: null,
+        status: "ACTIVE",
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+describe("deleting a student", () => {
+  async function freshStudent(suffix: string) {
+    return createStudent(
+      adminOf(schoolA),
+      studentInput({ firstName: "Typed", lastName: `ByMistake${suffix}`, sectionId: schoolA.sectionId }),
+    );
+  }
+
+  it("erases the student, their placement, their parent links and their login", async () => {
+    const studentId = await freshStudent("A");
+    await linkGuardian(adminOf(schoolA), {
+      studentId,
+      guardianMode: "existing",
+      existingParentId: schoolA.parentId,
+      parentFirstName: null,
+      parentLastName: null,
+      parentPhone: null,
+      parentEmail: null,
+      occupation: null,
+      relationship: "FATHER",
+      isPrimary: false,
+    });
+
+    await deleteStudent(adminOf(schoolA), studentId);
+
+    await expect(prisma.student.findUnique({ where: { id: studentId } })).resolves.toBeNull();
+    await expect(prisma.studentEnrollment.count({ where: { studentId } })).resolves.toBe(0);
+    await expect(prisma.parentStudent.count({ where: { studentId } })).resolves.toBe(0);
+    // The guardian is a person of their own and keeps their other children.
+    await expect(prisma.parent.findUnique({ where: { id: schoolA.parentId } })).resolves.not.toBeNull();
+  });
+
+  it("refuses to erase a child who is already in a register", async () => {
+    const studentId = await freshStudent("B");
+    await prisma.studentAttendance.create({
+      data: {
+        schoolId: schoolA.schoolId,
+        academicSessionId: schoolA.academicSessionId,
+        studentId,
+        sectionId: schoolA.sectionId,
+        date: new Date(Date.UTC(2026, 8, 2)),
+        status: "PRESENT",
+      },
+    });
+
+    await expect(deleteStudent(adminOf(schoolA), studentId)).rejects.toBeInstanceOf(ConflictError);
+    await expect(prisma.student.findUnique({ where: { id: studentId } })).resolves.not.toBeNull();
+  });
+
+  it("hides a student in another school behind a missing row", async () => {
+    await expect(deleteStudent(adminOf(schoolA), schoolB.studentIds[0]!)).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    await expect(
+      prisma.student.findUnique({ where: { id: schoolB.studentIds[0]! } }),
+    ).resolves.not.toBeNull();
+  });
+
+  it("is closed to a teacher", async () => {
+    await expect(deleteStudent(teacherOf(schoolA), schoolA.studentIds[0]!)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+  });
+});
+
+describe("deleting a teacher", () => {
+  /** A teacher with nothing attached, as an admin who mistyped would have. */
+  async function freshTeacher(suffix: string) {
+    return createTeacher(adminOf(schoolA), {
+      firstName: "Added",
+      lastName: "ByMistake",
+      email: `mistake-${suffix}@people-test.test`,
+      gender: null,
+      employeeId: null,
+      phone: null,
+      qualification: null,
+      designation: null,
+      dateOfBirth: null,
+      addressLine: null,
+      city: null,
+      state: null,
+      postalCode: null,
+      joiningDate: null,
+    });
+  }
+
+  it("erases the staff record, the login and the subject assignments together", async () => {
+    const { teacherId, credentials } = await freshTeacher("clean");
+    const user = await prisma.teacher.findUniqueOrThrow({
+      where: { id: teacherId },
+      select: { userId: true },
+    });
+    await assignSubject(adminOf(schoolA), {
+      teacherId,
+      subjectId: schoolA.subjectId,
+      sectionId: schoolA.sectionId,
+    });
+
+    await deleteTeacher(adminOf(schoolA), teacherId);
+
+    await expect(prisma.teacher.findUnique({ where: { id: teacherId } })).resolves.toBeNull();
+    await expect(prisma.user.findUnique({ where: { id: user.userId } })).resolves.toBeNull();
+    // An assignment is a permission, not a record, so it goes with them.
+    await expect(
+      prisma.teacherSubjectAssignment.count({ where: { teacherId } }),
+    ).resolves.toBe(0);
+    expect((await authenticate(credentials.email, credentials.password)).ok).toBe(false);
+  });
+
+  it("refuses to erase a teacher who has a record in the school", async () => {
+    const { teacherId } = await freshTeacher("history");
+    await prisma.homework.create({
+      data: {
+        schoolId: schoolA.schoolId,
+        academicSessionId: schoolA.academicSessionId,
+        sectionId: schoolA.sectionId,
+        subjectId: schoolA.subjectId,
+        teacherId,
+        title: "Something they set",
+        assignedOn: new Date(Date.UTC(2026, 8, 1)),
+        dueOn: new Date(Date.UTC(2026, 8, 2)),
+      },
+    });
+
+    await expect(deleteTeacher(adminOf(schoolA), teacherId)).rejects.toBeInstanceOf(ConflictError);
+    // Still there, and still able to be deactivated instead.
+    await expect(prisma.teacher.findUnique({ where: { id: teacherId } })).resolves.not.toBeNull();
+  });
+
+  it("refuses while a live responsibility is still theirs", async () => {
+    const { teacherId } = await freshTeacher("live");
+    const section = await prisma.section.create({
+      data: {
+        schoolId: schoolA.schoolId,
+        academicSessionId: schoolA.academicSessionId,
+        classId: schoolA.classId,
+        name: "DEL",
+        classTeacherId: teacherId,
+      },
+    });
+
+    await expect(deleteTeacher(adminOf(schoolA), teacherId)).rejects.toBeInstanceOf(ConflictError);
+
+    // Handed over, and the same delete now goes through.
+    await prisma.section.update({ where: { id: section.id }, data: { classTeacherId: null } });
+    await deleteTeacher(adminOf(schoolA), teacherId);
+    await expect(prisma.teacher.findUnique({ where: { id: teacherId } })).resolves.toBeNull();
+  });
+
+  it("hides a teacher in another school behind a missing row", async () => {
+    await expect(deleteTeacher(adminOf(schoolA), schoolB.teacherId)).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    await expect(
+      prisma.teacher.findUnique({ where: { id: schoolB.teacherId } }),
+    ).resolves.not.toBeNull();
+  });
+
+  it("is closed to a teacher, who cannot delete themselves or a colleague", async () => {
+    await expect(deleteTeacher(teacherOf(schoolA), schoolA.teacherId)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
   });
 });
 

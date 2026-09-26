@@ -1,3 +1,5 @@
+import type { Route } from "next";
+
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/shared/page-header";
@@ -9,7 +11,7 @@ import { getStudentProfile } from "@/server/people/students";
 
 export const metadata: Metadata = { title: "Edit student" };
 
-export default async function EditStudentPage(props: PageProps<"/admin/students/[studentId]/edit">) {
+export default async function EditStudentPage(props: PageProps<"/school-admin/students/[studentId]/edit">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { studentId } = await props.params;
   const { student } = await orNotFound(getStudentProfile(ctx, studentId));
@@ -17,7 +19,7 @@ export default async function EditStudentPage(props: PageProps<"/admin/students/
   return (
     <>
       <PageHeader
-        back={{ href: `/admin/students/${student.id}`, label: `${student.firstName} ${student.lastName}` }}
+        back={{ href: `/school-admin/students/${student.id}` as Route, label: `${student.firstName} ${student.lastName}` }}
         title="Edit student"
       />
       <EditStudentForm

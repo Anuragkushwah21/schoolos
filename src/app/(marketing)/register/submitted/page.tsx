@@ -30,8 +30,9 @@ export default async function RegistrationSubmittedPage(
       <h1 className="text-3xl font-semibold tracking-tight">Email verified</h1>
       <p className="text-muted-foreground text-lg">
         Thank you. Your registration is now with the SchoolOS team for review.
-        Once it is approved, your sign-in details arrive by email at the address
-        you just verified.
+        We will email you at the address you just verified as soon as it is
+        approved — then sign in with the password you chose, and you will land
+        on your school&apos;s dashboard.
       </p>
       {reference ? (
         <p className="bg-muted rounded-lg px-4 py-2 text-sm">

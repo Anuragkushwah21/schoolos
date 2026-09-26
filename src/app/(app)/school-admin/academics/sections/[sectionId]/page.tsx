@@ -24,7 +24,7 @@ import { teacherOptions } from "@/server/people/teachers";
 
 export const metadata: Metadata = { title: "Section" };
 
-export default async function SectionPage(props: PageProps<"/admin/academics/sections/[sectionId]">) {
+export default async function SectionPage(props: PageProps<"/school-admin/academics/sections/[sectionId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { sectionId } = await props.params;
 
@@ -37,16 +37,16 @@ export default async function SectionPage(props: PageProps<"/admin/academics/sec
   return (
     <>
       <PageHeader
-        back={{ href: `/admin/academics/classes?session=${section.academicSession.id}`, label: "Classes & sections" }}
+        back={{ href: `/school-admin/academics/classes?session=${section.academicSession.id}`, label: "Classes & sections" }}
         title={sectionLabel(section)}
         description={`${section.academicSession.name} · ${section.enrollments.length}${section.capacity ? ` of ${section.capacity}` : ""} students`}
         actions={
           <>
             <Button asChild variant="outline" size="sm">
-              <Link href={`/admin/timetable?section=${section.id}`}>Timetable</Link>
+              <Link href={`/school-admin/timetable?section=${section.id}`}>Timetable</Link>
             </Button>
             <Button asChild variant="outline" size="sm">
-              <Link href={`/admin/attendance?section=${section.id}`}>Attendance</Link>
+              <Link href={`/school-admin/attendance?section=${section.id}`}>Attendance</Link>
             </Button>
           </>
         }
@@ -73,7 +73,7 @@ export default async function SectionPage(props: PageProps<"/admin/academics/sec
                     <TableRow key={enrollment.id}>
                       <TableCell className="tabular-nums">{enrollment.rollNumber ?? "—"}</TableCell>
                       <TableCell>
-                        <Link href={`/admin/students/${enrollment.student.id}`} className="font-medium hover:underline">
+                        <Link href={`/school-admin/students/${enrollment.student.id}`} className="font-medium hover:underline">
                           {enrollment.student.firstName} {enrollment.student.lastName}
                         </Link>
                       </TableCell>
@@ -90,7 +90,7 @@ export default async function SectionPage(props: PageProps<"/admin/academics/sec
                 title="No students yet"
                 action={
                   <Button asChild size="sm">
-                    <Link href="/admin/students/new">Add a student</Link>
+                    <Link href="/school-admin/students/new">Add a student</Link>
                   </Button>
                 }
               />
@@ -129,7 +129,7 @@ export default async function SectionPage(props: PageProps<"/admin/academics/sec
                   {section.teacherAssignments.map((assignment) => (
                     <li key={assignment.id} className="flex justify-between gap-3">
                       <span>{assignment.subject.name}</span>
-                      <Link href={`/admin/teachers/${assignment.teacher.id}`} className="text-muted-foreground hover:underline">
+                      <Link href={`/school-admin/teachers/${assignment.teacher.id}`} className="text-muted-foreground hover:underline">
                         {assignment.teacher.firstName} {assignment.teacher.lastName}
                       </Link>
                     </li>

@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { UserRole } from "@/generated/prisma/enums";
 import { ForbiddenError } from "@/lib/errors";
-import { ROLE_HOME, isTenantRole, roleHomePath } from "@/lib/roles";
+import { ROLE_HOME, ROLE_PATH_PREFIX, isTenantRole, roleHomePath } from "@/lib/roles";
 import type { TenantContext } from "@/server/auth/current-user";
 import type { SessionUser } from "@/server/auth/session";
 import {
@@ -75,11 +75,21 @@ describe("role routing", () => {
   });
 
   it("maps each role to its own dashboard", () => {
-    expect(roleHomePath("SUPER_ADMIN")).toBe("/platform");
-    expect(roleHomePath("SCHOOL_ADMIN")).toBe("/admin");
-    expect(roleHomePath("TEACHER")).toBe("/teacher");
-    expect(roleHomePath("STUDENT")).toBe("/student");
-    expect(roleHomePath("PARENT")).toBe("/parent");
+    // The four signed-in roles of the product each land on their own
+    // dashboard, one level under the area they own.
+    expect(roleHomePath("SUPER_ADMIN")).toBe("/super-admin/dashboard");
+    expect(roleHomePath("SCHOOL_ADMIN")).toBe("/school-admin/dashboard");
+    expect(roleHomePath("TEACHER")).toBe("/teacher/dashboard");
+    expect(roleHomePath("PARENT")).toBe("/parent/dashboard");
+    expect(roleHomePath("STUDENT")).toBe("/student/dashboard");
+  });
+
+  it("guards each role's whole area, not just its landing page", () => {
+    // A landing page deeper than the area would make the prefix too narrow and
+    // leave every other page in that area unprotected by the proxy.
+    for (const role of ["SUPER_ADMIN", "SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT"] as const) {
+      expect(roleHomePath(role).startsWith(`${ROLE_PATH_PREFIX[role]}/`)).toBe(true);
+    }
   });
 
   it("treats SUPER_ADMIN as the only non-tenant role", () => {

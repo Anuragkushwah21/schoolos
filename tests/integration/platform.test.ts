@@ -22,15 +22,25 @@ const PREFIX = "platform-test";
 
 let superAdmin: SessionUser;
 
+/**
+ * A registration now creates the administrator's account too, and an email
+ * address belongs to exactly one account — so each call gets its own unless
+ * the test is specifically about a clash.
+ */
+let registrations = 0;
+
 function registration(overrides: Record<string, string> = {}) {
+  registrations += 1;
   const form = new FormData();
   const values: Record<string, string> = {
     name: `${PREFIX} Academy`,
     city: "Indore",
     state: "Madhya Pradesh",
     contactName: "Kavita Joshi",
-    contactEmail: `kavita@${PREFIX}.test`,
+    contactEmail: `kavita${registrations}@${PREFIX}.test`,
     contactPhone: "+91 98765 43210",
+    password: "correct-horse-9",
+    confirmPassword: "correct-horse-9",
     ...overrides,
   };
   for (const [key, value] of Object.entries(values)) form.set(key, value);
@@ -86,16 +96,55 @@ afterAll(async () => {
 });
 
 describe("registration", () => {
-  it("creates a PENDING school with a unique slug and no user account", async () => {
+  it("creates a PENDING school with a unique slug, and its dormant administrator", async () => {
     const first = await registerSchool(registration(), { ipAddress: "10.0.0.1" });
     const second = await registerSchool(registration(), { ipAddress: "10.0.0.2" });
 
     expect(first.reference).toBe(`${PREFIX}-academy`);
     expect(second.reference).toBe(`${PREFIX}-academy-2`);
 
-    const school = await prisma.school.findUniqueOrThrow({ where: { slug: first.reference } });
+    const school = await prisma.school.findUniqueOrThrow({
+      where: { slug: first.reference },
+      include: { users: true },
+    });
     expect(school.status).toBe("PENDING");
-    expect(await prisma.user.count({ where: { schoolId: school.id } })).toBe(0);
+
+    // The account exists with the password they chose, and cannot be used yet.
+    expect(school.users).toHaveLength(1);
+    expect(school.users[0]?.role).toBe("SCHOOL_ADMIN");
+    const blocked = await authenticate(school.users[0]!.email, "correct-horse-9");
+    expect(blocked).toMatchObject({ ok: false, reason: "SCHOOL_NOT_ACTIVE", schoolStatus: "PENDING" });
+  });
+
+  it("refuses a second registration on the same email address", async () => {
+    const email = `taken@${PREFIX}.test`;
+    await registerSchool(registration({ name: `${PREFIX} First`, contactEmail: email }), {
+      ipAddress: "10.0.0.5",
+    });
+
+    await expect(
+      registerSchool(registration({ name: `${PREFIX} Second`, contactEmail: email }), {
+        ipAddress: "10.0.0.6",
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("lets the administrator in with their own password once approved", async () => {
+    const email = `owner2@${PREFIX}.test`;
+    const { reference } = await registerSchool(
+      registration({ name: `${PREFIX} Self Serve`, contactEmail: email }),
+      { ipAddress: "10.0.0.7" },
+    );
+    await markVerified(reference);
+
+    const school = await prisma.school.findUniqueOrThrow({ where: { slug: reference } });
+    const { credentials } = await transitionSchool(superAdmin, school.id, "approve");
+
+    // Nothing was generated — they already had a password of their own.
+    expect(credentials).toBeUndefined();
+
+    const login = await authenticate(email, "correct-horse-9");
+    expect(login.ok).toBe(true);
   });
 
   it("silently discards a submission that fills the honeypot", async () => {
@@ -139,7 +188,7 @@ describe("registration", () => {
 });
 
 describe("approval", () => {
-  it("activates, provisions the school and issues its first administrator once", async () => {
+  it("activates and provisions the school, and opens its administrator's account", async () => {
     const { reference } = await registerSchool(
       registration({ name: `${PREFIX} Approve Me`, contactEmail: `owner@${PREFIX}.test` }),
       { ipAddress: "10.0.1.1" },
@@ -147,9 +196,7 @@ describe("approval", () => {
     const school = await prisma.school.findUniqueOrThrow({ where: { slug: reference } });
     await markVerified(reference);
 
-    const { credentials } = await transitionSchool(superAdmin, school.id, "approve");
-    expect(credentials?.email).toBe(`owner@${PREFIX}.test`);
-    expect(credentials?.password).toMatch(/^(?=.*[a-zA-Z])(?=.*\d).{12}$/);
+    await transitionSchool(superAdmin, school.id, "approve");
 
     const approved = await prisma.school.findUniqueOrThrow({ where: { id: school.id } });
     expect(approved.status).toBe("ACTIVE");
@@ -160,8 +207,8 @@ describe("approval", () => {
     expect(session.isCurrent).toBe(true);
     expect(session.name).toBe(currentAcademicYear().name);
 
-    // The issued password really works.
-    const login = await authenticate(credentials!.email, credentials!.password);
+    // The password they chose at registration now works.
+    const login = await authenticate(`owner@${PREFIX}.test`, "correct-horse-9");
     expect(login.ok).toBe(true);
 
     // Approving again is refused rather than re-provisioning.

@@ -1,202 +1,268 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 
-import { ColumnChart, Meter } from "@/components/charts/bars";
-import { ChartFigure } from "@/components/charts/chart-figure";
-import { attendanceLegend, attendanceSegments } from "@/components/charts/attendance-colors";
-import { StackedBar } from "@/components/charts/bars";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { EventList, NoticeList } from "@/features/communication/feed";
-import { DAY_LABEL, dayOfWeek, formatDayShort, formatMinutes, today } from "@/lib/dates";
-import { formatPercent } from "@/lib/format";
+import { NoticeList } from "@/features/communication/feed";
+import { StudentTabs } from "@/features/student/nav";
+import { formatDate, formatMinutes } from "@/lib/dates";
+import { humanize, pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
-import { studentHistory } from "@/server/attendance/service";
-import { monthlyAttendance } from "@/server/analytics/student";
-import { upcomingEvents } from "@/server/communication/events";
 import { noticesFor } from "@/server/communication/notices";
-import { getSectionWeek, getStudentPlacement } from "@/server/people/portal";
+import { findStudentSelf } from "@/server/student/access";
+import {
+  getMyAttendance,
+  getMyDay,
+  getMyHomework,
+  getMyResults,
+  getMyUpcomingLessons,
+} from "@/server/student/me";
 
-export const metadata: Metadata = { title: "Student dashboard" };
+export const metadata: Metadata = { title: "Today" };
 
+function greeting(now = new Date()): string {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-GB", { hour: "numeric", hour12: false, timeZone: "Asia/Kolkata" })
+      .format(now),
+  );
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+/**
+ * A student's own day.
+ *
+ * Every figure comes from the rows their teachers wrote — the register, each
+ * period's write-up, the homework set, the marks entered. Nothing here is
+ * hardcoded, and a period a teacher has not written up says exactly that rather
+ * than being counted as anything.
+ */
 export default async function StudentDashboardPage() {
   const ctx = await requireTenant("STUDENT");
-  const { student, session, enrollment } = await getStudentPlacement(ctx);
+  const me = await findStudentSelf(ctx);
 
-  const [notices, events] = await Promise.all([noticesFor(ctx, { take: 4 }), upcomingEvents(ctx, 4)]);
-
-  if (!session || !enrollment) {
+  if (!me.placement) {
     return (
       <>
-        <PageHeader title={`Welcome, ${student.firstName}`} />
+        <PageHeader title={`${greeting()}, ${me.student.firstName}`} />
         <EmptyState title="You are not placed in a class yet">
-          Your school will place you in a section for the current session.
+          Your school will put you in a section for the current session. Your timetable, classes and
+          homework appear here once they do.
         </EmptyState>
       </>
     );
   }
 
-  const date = today();
-  const day = dayOfWeek(date);
-  const [history, week] = await Promise.all([
-    studentHistory(ctx, student.id, session.id),
-    getSectionWeek(ctx, enrollment.section.id, session.id),
+  const [day, homework, results, attendance, upcoming, notices] = await Promise.all([
+    getMyDay(ctx),
+    getMyHomework(ctx),
+    getMyResults(ctx),
+    getMyAttendance(ctx),
+    getMyUpcomingLessons(ctx, { days: 7 }),
+    noticesFor(ctx, { take: 4 }),
   ]);
 
-  const todaysPeriods = week.filter((slot) => slot.dayOfWeek === day);
-  const todayMark = history.rows.find((row) => row.date.toISOString().slice(0, 10) === history.todayKey);
-  const months = monthlyAttendance(history.rows);
-  const attended = history.counts.PRESENT + history.counts.LATE;
+  const outstanding = homework.overdue.length + homework.dueToday.length + homework.dueSoon.length;
+  const latest = results.past.find((entry) => entry.sat) ?? null;
 
   return (
     <>
       <PageHeader
-        title={`Welcome, ${student.firstName}`}
-        description={`${enrollment.section.class.name} – ${enrollment.section.name}${
-          enrollment.rollNumber ? `, roll ${enrollment.rollNumber}` : ""
-        } · ${session.name}`}
-        actions={
-          <Button asChild variant="outline">
-            <Link href="/student/timetable">Timetable</Link>
-          </Button>
-        }
+        title={`${greeting()}, ${me.student.firstName}`}
+        description={`${me.placement.sectionLabel}${me.placement.rollNumber ? `, roll ${me.placement.rollNumber}` : ""} · ${me.placement.sessionName}`}
       />
+      <StudentTabs active="dashboard" />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
+          label="Today"
+          value={day.attendance ? humanize(day.attendance.status) : "Not marked"}
+          hint={`${day.tally.scheduled} ${day.tally.scheduled === 1 ? "class" : "classes"}`}
+        />
+        <StatCard
           label="Attendance"
-          value={history.counts.total ? formatPercent(attended, history.counts.total) : "—"}
-          hint={`${history.counts.total} days marked`}
+          value={attendance.share === null ? "—" : `${Math.round(attendance.share * 100)}%`}
+          hint={`${attendance.counts.total} days marked`}
           href="/student/attendance"
         />
-        <StatCard label="Days absent" value={history.counts.ABSENT} href="/student/attendance" />
         <StatCard
-          label="Today"
-          value={todayMark ? <StatusBadge status={todayMark.status} className="text-base" /> : "—"}
-          hint={formatDayShort(date)}
+          label="Homework"
+          value={outstanding}
+          hint={homework.overdue.length ? `${homework.overdue.length} overdue` : "nothing overdue"}
+          href="/student/homework"
         />
         <StatCard
-          label="Class teacher"
-          value={enrollment.section.classTeacher?.firstName ?? "—"}
-          hint={enrollment.section.classTeacher?.lastName ?? undefined}
+          label="Latest test"
+          value={latest ? `${latest.marksObtained}/${latest.maxMarks}` : "—"}
+          hint={latest ? latest.subject : "no marks yet"}
+          href="/student/results"
         />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
+      <div className="grid gap-6 xl:grid-cols-[1.5fr_1fr]">
         <div className="flex flex-col gap-6">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Today&apos;s classes</CardTitle>
-                <CardDescription>{DAY_LABEL[day]}</CardDescription>
-              </div>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/student/timetable">Full week</Link>
-              </Button>
+            <CardHeader>
+              <CardTitle>Today&apos;s classes</CardTitle>
+              <CardDescription>
+                {day.tally.scheduled
+                  ? `${day.tally.completed + day.tally.substitute} of ${pluralize(day.tally.scheduled, "class")} written up so far.`
+                  : "Nothing on the timetable today."}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {todaysPeriods.length ? (
+              {day.periods.length ? (
                 <ul className="divide-y">
-                  {todaysPeriods.map((slot) => (
-                    <li key={slot.id} className="flex items-center gap-4 py-3">
-                      <span className="text-muted-foreground w-20 shrink-0 text-sm tabular-nums">
-                        {formatMinutes(slot.startMinute)}
+                  {day.periods.map((period) => (
+                    <li
+                      key={period.slotId}
+                      className="flex flex-wrap items-center gap-x-4 gap-y-1 py-3"
+                    >
+                      <span className="text-muted-foreground w-28 shrink-0 text-sm tabular-nums">
+                        {formatMinutes(period.startMinute)}
                       </span>
-                      <span className="min-w-0">
-                        <span className="block font-medium">{slot.subject.name}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">{period.subject}</span>
                         <span className="text-muted-foreground block text-xs">
-                          {slot.teacher.firstName} {slot.teacher.lastName}
-                          {slot.room ? ` · ${slot.room}` : ""}
+                          {period.topic ?? "Topic not recorded yet"} · {period.teacher}
+                          {period.room ? ` · ${period.room}` : ""}
                         </span>
                       </span>
+                      {period.written ? (
+                        <StatusBadge status={period.status!} />
+                      ) : period.upcoming ? (
+                        <StatusBadge status="SCHEDULED" label="Upcoming" tone="info" />
+                      ) : (
+                        <StatusBadge status="SCHEDULED" label="Not recorded" />
+                      )}
+                      {period.lessonId && period.written ? (
+                        <Button asChild variant="ghost" size="sm">
+                          <Link href={`/student/lessons/${period.lessonId}` as Route}>Open</Link>
+                        </Button>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="text-muted-foreground text-sm">No classes scheduled today.</p>
+                <p className="text-muted-foreground text-sm">No classes on the timetable today.</p>
               )}
             </CardContent>
           </Card>
 
           <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
+              <div>
+                <CardTitle>Homework</CardTitle>
+                <CardDescription>
+                  {outstanding
+                    ? `${pluralize(outstanding, "assignment")} needing attention.`
+                    : "Nothing outstanding."}
+                </CardDescription>
+              </div>
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/student/homework">All</Link>
+              </Button>
+            </CardHeader>
             <CardContent>
-              <ChartFigure
-                title="Your attendance by month"
-                subtitle="How many of the days marked each month you were present or late."
-                table={{
-                  head: ["Month", "Attended", "Present", "Late", "Excused", "Absent"],
-                  rows: [...months].reverse().map((month) => [
-                    month.fullLabel,
-                    month.share === null ? "—" : `${Math.round(month.share * 100)}%`,
-                    month.counts.PRESENT,
-                    month.counts.LATE,
-                    month.counts.EXCUSED,
-                    month.counts.ABSENT,
-                  ]),
-                }}
-              >
-                <ColumnChart
-                  // A single column is a stat tile pretending to be a chart;
-                  // the card below already carries this session's number.
-                  data={
-                    months.length > 1
-                      ? months.map((month) => ({
-                          key: month.key,
-                          label: month.label,
-                          value: month.share === null ? 0 : Math.round(month.share * 100),
-                          detail: `${month.counts.PRESENT + month.counts.LATE} of ${month.counts.total} days`,
-                        }))
-                      : []
-                  }
-                  formatValue={(value) => `${value}%`}
-                  emptyMessage={
-                    months.length === 1
-                      ? "Your month-by-month trend appears once a second month has been marked."
-                      : "Nothing marked yet this session."
-                  }
-                />
-              </ChartFigure>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent>
-              <ChartFigure
-                title="This session so far"
-                subtitle={`${history.counts.total} days marked.`}
-                legend={attendanceLegend(history.counts)}
-                table={{
-                  head: ["Status", "Days"],
-                  rows: attendanceSegments(history.counts).map((segment) => [segment.label, segment.value]),
-                }}
-              >
-                <StackedBar
-                  segments={attendanceSegments(history.counts)}
-                  emptyMessage="Nothing marked yet this session."
-                />
-              </ChartFigure>
-
-              {history.counts.total ? (
-                <div className="mt-6">
-                  <Meter
-                    label="Days attended"
-                    value={attended}
-                    max={history.counts.total}
-                    tone={attended / history.counts.total >= 0.75 ? "good" : "warning"}
-                  />
-                </div>
-              ) : null}
+              {outstanding ? (
+                <ul className="divide-y">
+                  {[...homework.overdue, ...homework.dueToday, ...homework.dueSoon]
+                    .slice(0, 5)
+                    .map((work) => (
+                      <li key={work.id} className="flex items-baseline justify-between gap-3 py-2.5">
+                        <span className="min-w-0 text-sm">
+                          <span className="font-medium">{work.subject}</span> — {work.title}
+                        </span>
+                        <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                          due {formatDate(work.dueOn)}
+                        </span>
+                      </li>
+                    ))}
+                </ul>
+              ) : (
+                <p className="text-muted-foreground text-sm">Nothing due in the next few days.</p>
+              )}
             </CardContent>
           </Card>
         </div>
 
         <div className="flex flex-col gap-6">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
+              <div>
+                <CardTitle>Coming up</CardTitle>
+                <CardDescription>Lessons your teachers have planned.</CardDescription>
+              </div>
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/student/upcoming">All</Link>
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {upcoming.lessons.length ? (
+                <ul className="divide-y">
+                  {upcoming.lessons.slice(0, 4).map((lesson) => (
+                    <li key={lesson.id} className="flex flex-col gap-0.5 py-2.5">
+                      <span className="text-sm font-medium">
+                        {lesson.subject}
+                        {lesson.plannedTopic ? ` — ${lesson.plannedTopic}` : ""}
+                      </span>
+                      <span className="text-muted-foreground text-xs">
+                        {formatDate(lesson.date)} · {formatMinutes(lesson.startMinute)}
+                      </span>
+                      {lesson.preparation ? (
+                        <span className="text-xs">Prepare: {lesson.preparation}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  Nothing planned yet. Your teachers add upcoming lessons here when they set them.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
+              <div>
+                <CardTitle>My progress</CardTitle>
+                <CardDescription>Averages from marks your teachers entered.</CardDescription>
+              </div>
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/student/results">All</Link>
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {results.progress.length ? (
+                <ul className="divide-y">
+                  {results.progress.map((subject) => (
+                    <li
+                      key={subject.subjectId}
+                      className="flex items-center justify-between gap-3 py-2.5"
+                    >
+                      <span className="min-w-0 text-sm font-medium">{subject.subject}</span>
+                      <span className="shrink-0 text-sm tabular-nums">
+                        {subject.average === null ? "—" : `${Math.round(subject.average * 100)}%`}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  No marks yet. Subject averages appear once you have sat a test.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
               <CardTitle>Notices</CardTitle>
               <Button asChild variant="ghost" size="sm">
                 <Link href="/student/notices">All</Link>
@@ -204,38 +270,6 @@ export default async function StudentDashboardPage() {
             </CardHeader>
             <CardContent>
               <NoticeList notices={notices} compact />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Upcoming events</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <EventList events={events} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Recent days</CardTitle>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/student/attendance">All</Link>
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {history.rows.length ? (
-                <ul className="divide-y text-sm">
-                  {history.rows.slice(0, 8).map((row) => (
-                    <li key={row.date.toISOString()} className="flex items-center justify-between gap-3 py-2">
-                      <span>{formatDayShort(row.date)}</span>
-                      <StatusBadge status={row.status} />
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-muted-foreground text-sm">Nothing marked yet.</p>
-              )}
             </CardContent>
           </Card>
         </div>

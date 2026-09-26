@@ -60,6 +60,23 @@ export async function listStudents(
             { firstName: { contains: filters.q, mode: "insensitive" } },
             { lastName: { contains: filters.q, mode: "insensitive" } },
             { admissionNumber: { contains: filters.q, mode: "insensitive" } },
+            // The parent is often what the office has been given — a mobile
+            // number from a caller, or a father's name — so the same box finds
+            // the child through them.
+            {
+              parents: {
+                some: {
+                  parent: {
+                    OR: [
+                      { firstName: { contains: filters.q, mode: "insensitive" } },
+                      { lastName: { contains: filters.q, mode: "insensitive" } },
+                      { phone: { contains: filters.q } },
+                      { email: { contains: filters.q, mode: "insensitive" } },
+                    ],
+                  },
+                },
+              },
+            },
           ],
         }
       : {}),
@@ -89,9 +106,52 @@ export async function listStudents(
           },
         },
         parents: {
-          where: { isPrimary: true },
-          take: 1,
-          select: { parent: { select: { firstName: true, lastName: true, phone: true } } },
+          // Primary first, but all of them: the dialog shows the whole family
+          // and the cell needs the count.
+          orderBy: { isPrimary: "desc" },
+          select: {
+            relationship: true,
+            isPrimary: true,
+            parent: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                phone: true,
+                email: true,
+                user: { select: { id: true, isActive: true } },
+                children: {
+                  orderBy: { isPrimary: "desc" },
+                  select: {
+                    relationship: true,
+                    isPrimary: true,
+                    student: {
+                      select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        admissionNumber: true,
+                        status: true,
+                        enrollments: {
+                          where: { academicSession: { isCurrent: true } },
+                          select: {
+                            rollNumber: true,
+                            section: {
+                              select: {
+                                name: true,
+                                class: { select: { name: true } },
+                                stream: { select: { name: true } },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       },
     }),
@@ -387,6 +447,75 @@ export async function enrollStudent(
   });
 }
 
+/**
+ * What stands between a student and being erased.
+ *
+ * The same split as a teacher's. History cannot be undone, so a child who has
+ * any is kept and marked Transferred or Graduated instead. A placement and a
+ * parent link are not history: they exist only because the student row does,
+ * and a child admitted by mistake has both within a second of being added.
+ */
+async function studentDeletionBlockers(ctx: TenantContext, studentId: string) {
+  const [attendance, remarks, results, application] = await Promise.all([
+    ctx.db.studentAttendance.count({ where: { studentId } }),
+    ctx.db.studentRemark.count({ where: { studentId } }),
+    ctx.db.assessmentResult.count({ where: { studentId } }),
+    ctx.db.admissionApplication.count({ where: { createdStudentId: studentId } }),
+  ]);
+
+  const history: string[] = [];
+  if (attendance) history.push(`${attendance} attendance ${attendance === 1 ? "record" : "records"}`);
+  if (remarks) history.push(`${remarks} ${remarks === 1 ? "remark" : "remarks"}`);
+  if (results) history.push(`${results} assessment ${results === 1 ? "result" : "results"}`);
+  if (application) history.push("an admission application on file");
+
+  return history;
+}
+
+/**
+ * Erase a student, their placements, their parent links and their login.
+ *
+ * For a child admitted by mistake — a duplicate row, a typed-in test record.
+ * Anyone who has been in a register is kept: `status` is how a child who has
+ * left is recorded, and it keeps their year intact.
+ *
+ * The parent row itself survives. A guardian is a person in their own right and
+ * usually has siblings still enrolled; only the link to this child goes.
+ */
+export async function deleteStudent(ctx: TenantContext, studentId: string): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
+  const student = await ctx.db.student.findFirst({
+    where: { id: studentId },
+    select: { id: true, userId: true, firstName: true, lastName: true, admissionNumber: true },
+  });
+  if (!student) throw new NotFoundError();
+
+  const history = await studentDeletionBlockers(ctx, student.id);
+  if (history.length) {
+    throw new ConflictError(
+      `${student.firstName} ${student.lastName} has ${history.join(", ")}, which cannot be undone. Set their status to Transferred or Graduated instead — that keeps the record and closes their sign-in.`,
+    );
+  }
+
+  await ctx.db.$transaction(async (tx) => {
+    await tx.parentStudent.deleteMany({ where: { studentId: student.id } });
+    await tx.studentEnrollment.deleteMany({ where: { studentId: student.id } });
+    await tx.student.deleteMany({ where: { id: student.id } });
+    // Sessions and tokens cascade from the user, so this also signs them out.
+    if (student.userId) await tx.user.deleteMany({ where: { id: student.userId } });
+  });
+
+  await recordAudit({
+    action: "STUDENT_DELETED",
+    entityType: "Student",
+    entityId: student.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Student ${student.firstName} ${student.lastName} (${student.admissionNumber}) deleted.`,
+  });
+}
+
 // -----------------------------------------------------------------------------
 // Guardians
 // -----------------------------------------------------------------------------
@@ -477,7 +606,7 @@ export async function linkGuardian(
     entityId: input.studentId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: "Guardian linked to student.",
+    summary: "Parent linked to student.",
   });
 }
 
@@ -547,12 +676,14 @@ export async function grantParentPortal(
   parentId: string,
   email: string,
 ): Promise<Credentials> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
   const parent = await ctx.db.parent.findFirst({
     where: { id: parentId },
     select: { id: true, firstName: true, lastName: true, phone: true, userId: true },
   });
   if (!parent) throw new NotFoundError();
-  if (parent.userId) throw new ConflictError("This guardian already has a login. Reset its password instead.");
+  if (parent.userId) throw new ConflictError("This parent already has a login. Reset its password instead.");
 
   const { userId, credentials } = await createPortalUser(ctx, {
     email,
@@ -569,7 +700,7 @@ export async function grantParentPortal(
     entityId: parent.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Guardian login ${email} issued.`,
+    summary: `Parent login ${email} issued.`,
   });
 
   return { ...credentials, label: `Sign-in for ${parent.firstName} ${parent.lastName}` };

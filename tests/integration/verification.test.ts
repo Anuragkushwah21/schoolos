@@ -8,9 +8,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { ConflictError, RateLimitedError } from "@/lib/errors";
+import { roleHomePath } from "@/lib/roles";
 import { registerSchoolSchema } from "@/lib/validation/platform";
+import { authenticate } from "@/server/auth/login";
 import { __resetAllRateLimits } from "@/server/auth/rate-limit";
-import type { SessionUser } from "@/server/auth/session";
+import { createSession, validateSessionToken, type SessionUser } from "@/server/auth/session";
 import { prisma } from "@/server/db/prisma";
 import { type Mail, resetMailTransport, setMailTransport } from "@/server/mail/mailer";
 import { registerSchool } from "@/server/platform/registration";
@@ -43,6 +45,8 @@ async function registerOne(name: string, email: string) {
     contactName: "Kavita Joshi",
     contactEmail: email,
     contactPhone: "+91 98765 43210",
+    password: "correct-horse-9",
+    confirmPassword: "correct-horse-9",
   });
   const { reference } = await registerSchool(input, { ipAddress: "10.1.1.1" });
   return reference;
@@ -213,24 +217,32 @@ describe("approval", () => {
 
     const after = await prisma.school.findUniqueOrThrow({ where: { id: school.id } });
     expect(after.status).toBe("PENDING");
-    expect(await prisma.user.count({ where: { schoolId: school.id } })).toBe(0);
+
+    // The administrator's account exists from registration, and stays shut.
+    const blocked = await authenticate(`unverified@${PREFIX}.test`, "correct-horse-9");
+    expect(blocked).toMatchObject({ ok: false, reason: "SCHOOL_NOT_ACTIVE" });
   });
 
-  it("approves once verified, and emails the sign-in to the contact", async () => {
+  it("approves once verified, and tells the contact they can sign in", async () => {
     const reference = await registerOne(`${PREFIX} Ready`, `ready@${PREFIX}.test`);
     await verifyCode(reference, codeFrom(sent[0]));
 
     const school = await prisma.school.findUniqueOrThrow({ where: { slug: reference } });
     const { credentials } = await transitionSchool(superAdmin, school.id, "approve");
 
-    expect(credentials?.email).toBe(`ready@${PREFIX}.test`);
+    // They chose their own password, so nothing is generated or emailed.
+    expect(credentials).toBeUndefined();
 
     const handover = sent.find((mail) => mail.subject.includes("approved"));
     expect(handover?.to).toBe(`ready@${PREFIX}.test`);
-    expect(handover?.text).toContain(credentials!.password);
+    expect(handover?.text).toContain("the one you chose when you registered");
+    expect(handover?.text).not.toMatch(/Password:\s+\S{10,}/);
 
     const after = await prisma.school.findUniqueOrThrow({ where: { id: school.id } });
     expect(after.status).toBe("ACTIVE");
+
+    const login = await authenticate(`ready@${PREFIX}.test`, "correct-horse-9");
+    expect(login.ok).toBe(true);
   });
 
   it("lets the Super Admin verify by hand, and records that they did", async () => {
@@ -261,5 +273,59 @@ describe("approval", () => {
     const mail = sent.find((message) => message.subject.includes("About your SchoolOS registration"));
     expect(mail?.to).toBe(`nope@${PREFIX}.test`);
     expect(mail?.text).toContain("Could not verify the school.");
+  });
+});
+
+/**
+ * The whole journey in one test, because the interesting part is the joint.
+ *
+ * Every step below is covered on its own elsewhere; what is not covered
+ * anywhere else is that they connect — that the account registration creates
+ * is the same one approval opens, and that signing in to it lands on the
+ * dashboard its role owns rather than a generic home page.
+ */
+describe("registration to dashboard", () => {
+  it("makes the contact a SCHOOL_ADMIN who lands on /admin once approved", async () => {
+    const email = `journey@${PREFIX}.test`;
+    const reference = await registerOne(`${PREFIX} Journey`, email);
+
+    // 1. Registration created the account, already SCHOOL_ADMIN.
+    const school = await prisma.school.findUniqueOrThrow({
+      where: { slug: reference },
+      include: { users: true },
+    });
+    expect(school.status).toBe("PENDING");
+    expect(school.users).toHaveLength(1);
+    expect(school.users[0]?.role).toBe("SCHOOL_ADMIN");
+    expect(school.users[0]?.email).toBe(email);
+
+    // 2. It does not work yet, and the refusal says why rather than blaming
+    //    the password — which was right.
+    expect(await authenticate(email, "correct-horse-9")).toMatchObject({
+      ok: false,
+      reason: "SCHOOL_NOT_ACTIVE",
+      schoolStatus: "PENDING",
+    });
+
+    // 3. The code from the email they actually received.
+    await verifyCode(reference, codeFrom(sent[0]));
+
+    // 4. The Super Admin approves. No password is generated — theirs already
+    //    exists, so there is no one-time secret to show or to email.
+    const { credentials } = await transitionSchool(superAdmin, school.id, "approve");
+    expect(credentials).toBeUndefined();
+
+    // 5. The same password now works.
+    const login = await authenticate(email, "correct-horse-9");
+    expect(login).toMatchObject({ ok: true });
+    if (!login.ok) throw new Error("unreachable");
+
+    // 6. And the session it opens — the thing every later request is checked
+    //    against — carries the role that decides the destination.
+    const { token } = await createSession(login.userId, { ipAddress: "10.1.1.1" });
+    const session = await validateSessionToken(token);
+    expect(session?.role).toBe("SCHOOL_ADMIN");
+    expect(session?.schoolId).toBe(school.id);
+    expect(roleHomePath(session!.role)).toBe("/school-admin/dashboard");
   });
 });

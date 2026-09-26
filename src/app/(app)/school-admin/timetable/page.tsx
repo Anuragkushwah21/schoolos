@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 
 import { ActionButton } from "@/components/forms/action-button";
-import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
+import { SetupNotice } from "@/components/shared/setup-notice";
 import { TimetableGrid } from "@/components/shared/timetable-grid";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { deleteSlotAction } from "@/features/timetable/actions";
@@ -17,7 +17,7 @@ import { getSectionTimetable, getTeacherTimetable } from "@/server/timetable/ser
 
 export const metadata: Metadata = { title: "Timetable" };
 
-export default async function AdminTimetablePage(props: PageProps<"/admin/timetable">) {
+export default async function AdminTimetablePage(props: PageProps<"/school-admin/timetable">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
   const session = await getCurrentSession(ctx);
@@ -26,7 +26,7 @@ export default async function AdminTimetablePage(props: PageProps<"/admin/timeta
     return (
       <>
         <PageHeader title="Timetable" />
-        <EmptyState title="No current academic session">Set one under Academics first.</EmptyState>
+        <SetupNotice title="Timetable" need="session" />
       </>
     );
   }
@@ -57,11 +57,11 @@ export default async function AdminTimetablePage(props: PageProps<"/admin/timeta
 
       <div className="mb-2 flex flex-wrap gap-x-6">
         <FilterBar
-          action="/admin/timetable"
+          action="/school-admin/timetable"
           selects={[{ name: "section", label: "Section", defaultValue: section?.value, options: sections }]}
         />
         <FilterBar
-          action="/admin/timetable"
+          action="/school-admin/timetable"
           selects={[
             { name: "teacher", label: "Teacher", defaultValue: teacher?.value, allLabel: "View by teacher…", options: teachers },
           ]}
@@ -69,7 +69,9 @@ export default async function AdminTimetablePage(props: PageProps<"/admin/timeta
       </div>
 
       {!sections.length ? (
-        <EmptyState title="No sections yet">Create sections under Academics to build a timetable.</EmptyState>
+        <SetupNotice title="Timetable" need="sections">
+          A timetable is drawn for one section at a time, and {session.name} has none yet.
+        </SetupNotice>
       ) : (
         <div className="flex flex-col gap-6">
           <div>

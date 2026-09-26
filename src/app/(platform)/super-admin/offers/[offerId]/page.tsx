@@ -10,7 +10,7 @@ import { getOffer } from "@/server/platform/offers";
 
 export const metadata: Metadata = { title: "Edit offer" };
 
-export default async function EditOfferPage(props: PageProps<"/platform/offers/[offerId]">) {
+export default async function EditOfferPage(props: PageProps<"/super-admin/offers/[offerId]">) {
   const user = await requireSuperAdmin();
   const { offerId } = await props.params;
   const offer = await getOffer(user, offerId).catch((error) => {
@@ -20,7 +20,7 @@ export default async function EditOfferPage(props: PageProps<"/platform/offers/[
 
   return (
     <>
-      <PageHeader back={{ href: "/platform/offers", label: "Offers" }} title={offer.title} />
+      <PageHeader back={{ href: "/super-admin/offers", label: "Offers" }} title={offer.title} />
       <OfferForm
         offer={{
           id: offer.id,

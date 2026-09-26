@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -30,7 +31,7 @@ export default async function WebsitePage() {
         description={`Your public site lives at ${base}. Everything here is visible to anyone.`}
         actions={
           <Button asChild variant="outline">
-            <Link href={base} target="_blank">
+            <Link href={base as Route} target="_blank">
               View website
             </Link>
           </Button>
@@ -56,7 +57,7 @@ export default async function WebsitePage() {
                 <CardDescription>About, Academics, Facilities and anything else.</CardDescription>
               </div>
               <Button asChild size="sm">
-                <Link href="/admin/website/pages/new">New page</Link>
+                <Link href="/school-admin/website/pages/new">New page</Link>
               </Button>
             </CardHeader>
             <CardContent>
@@ -65,7 +66,7 @@ export default async function WebsitePage() {
                   {pages.map((page) => (
                     <li key={page.id} className="flex items-center justify-between gap-3 px-4 py-3">
                       <div className="min-w-0">
-                        <Link href={`/admin/website/pages/${page.id}`} className="font-medium hover:underline">
+                        <Link href={`/school-admin/website/pages/${page.id}`} className="font-medium hover:underline">
                           {page.title}
                         </Link>
                         <p className="text-muted-foreground truncate text-xs">

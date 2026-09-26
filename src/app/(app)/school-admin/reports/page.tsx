@@ -4,6 +4,7 @@ import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
+import { SetupNotice } from "@/components/shared/setup-notice";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -46,7 +47,7 @@ function Bar({ value }: { value: number | null }) {
   );
 }
 
-export default async function ReportsPage(props: PageProps<"/admin/reports">) {
+export default async function ReportsPage(props: PageProps<"/school-admin/reports">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
   const session = await getCurrentSession(ctx);
@@ -54,8 +55,7 @@ export default async function ReportsPage(props: PageProps<"/admin/reports">) {
   if (!session) {
     return (
       <>
-        <PageHeader title="Reports" />
-        <EmptyState title="No current academic session" />
+        <SetupNotice title="Reports" need="session" />
       </>
     );
   }
@@ -76,7 +76,7 @@ export default async function ReportsPage(props: PageProps<"/admin/reports">) {
         actions={
           sectionId ? (
             <Button asChild variant="outline">
-              <Link href={`/admin/reports/export?section=${sectionId}&from=${range.from}&to=${range.to}`} prefetch={false}>
+              <Link href={`/school-admin/reports/export?section=${sectionId}&from=${range.from}&to=${range.to}`} prefetch={false}>
                 Download CSV
               </Link>
             </Button>
@@ -85,7 +85,7 @@ export default async function ReportsPage(props: PageProps<"/admin/reports">) {
       />
 
       <FilterBar
-        action="/admin/reports"
+        action="/school-admin/reports"
         selects={[
           { name: "section", label: "Section", defaultValue: sectionId, allLabel: "Whole school", options: sections },
         ]}
@@ -138,7 +138,7 @@ async function SchoolReport({
             <TableRow key={row.id}>
               <TableCell>
                 <Link
-                  href={`/admin/reports?section=${row.id}&from=${range.from}&to=${range.to}`}
+                  href={`/school-admin/reports?section=${row.id}&from=${range.from}&to=${range.to}`}
                   className="font-medium hover:underline"
                 >
                   {row.label}
@@ -214,7 +214,7 @@ async function SectionReport({
             {report.students.map((student) => (
               <TableRow key={student.studentId}>
                 <TableCell>
-                  <Link href={`/admin/students/${student.studentId}`} className="font-medium hover:underline">
+                  <Link href={`/school-admin/students/${student.studentId}`} className="font-medium hover:underline">
                     {student.name}
                   </Link>
                   {student.rollNumber ? (

@@ -64,19 +64,19 @@ export default async function PlatformDashboardPage() {
         description="Every school on SchoolOS."
         actions={
           <Button asChild variant="outline">
-            <Link href="/platform/schools?status=REVIEW">Review queue</Link>
+            <Link href="/super-admin/schools?status=REVIEW">Review queue</Link>
           </Button>
         }
       />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <StatCard label="Schools" value={status.total} href="/platform/schools" />
+        <StatCard label="Schools" value={status.total} href="/super-admin/schools" />
         <StatCard
           label="Awaiting review"
           value={status.awaitingReview}
-          href="/platform/schools?status=REVIEW"
+          href="/super-admin/schools?status=REVIEW"
         />
-        <StatCard label="Active" value={status.active} href="/platform/schools?status=ACTIVE" />
+        <StatCard label="Active" value={status.active} href="/super-admin/schools?status=ACTIVE" />
         <StatCard
           label="Students"
           value={totals.students.toLocaleString("en-IN")}
@@ -168,7 +168,7 @@ export default async function PlatformDashboardPage() {
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Review queue</CardTitle>
               <Button asChild variant="ghost" size="sm">
-                <Link href="/platform/schools?status=REVIEW">View all</Link>
+                <Link href="/super-admin/schools?status=REVIEW">View all</Link>
               </Button>
             </CardHeader>
             <CardContent>
@@ -178,7 +178,7 @@ export default async function PlatformDashboardPage() {
                     <li key={school.id} className="flex items-center justify-between gap-3 py-3">
                       <div className="min-w-0">
                         <Link
-                          href={`/platform/schools/${school.id}`}
+                          href={`/super-admin/schools/${school.id}`}
                           className="font-medium hover:underline"
                         >
                           {school.name}
@@ -234,7 +234,7 @@ export default async function PlatformDashboardPage() {
                 <CardDescription>{pluralize(totals.liveTokens, "live API token")}.</CardDescription>
               </div>
               <Button asChild variant="ghost" size="sm">
-                <Link href="/platform/audit">Audit log</Link>
+                <Link href="/super-admin/audit">Audit log</Link>
               </Button>
             </CardHeader>
             <CardContent>

@@ -24,7 +24,7 @@ export const metadata: Metadata = { title: "Admissions" };
 
 const STATUSES = ["SUBMITTED", "UNDER_REVIEW", "WAITLISTED", "ACCEPTED", "REJECTED"] as const;
 
-export default async function AdmissionsPage(props: PageProps<"/admin/admissions">) {
+export default async function AdmissionsPage(props: PageProps<"/school-admin/admissions">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
   const status = enumParam(search.status, STATUSES);
@@ -45,7 +45,7 @@ export default async function AdmissionsPage(props: PageProps<"/admin/admissions
       />
 
       <FilterBar
-        action="/admin/admissions"
+        action="/school-admin/admissions"
         selects={[
           {
             name: "status",
@@ -64,7 +64,7 @@ export default async function AdmissionsPage(props: PageProps<"/admin/admissions
               <TableRow>
                 <TableHead>Applicant</TableHead>
                 <TableHead>Class</TableHead>
-                <TableHead className="hidden md:table-cell">Guardian</TableHead>
+                <TableHead className="hidden md:table-cell">Parent</TableHead>
                 <TableHead>Received</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
@@ -73,7 +73,7 @@ export default async function AdmissionsPage(props: PageProps<"/admin/admissions
               {applications.map((application) => (
                 <TableRow key={application.id}>
                   <TableCell>
-                    <Link href={`/admin/admissions/${application.id}`} className="font-medium hover:underline">
+                    <Link href={`/school-admin/admissions/${application.id}`} className="font-medium hover:underline">
                       {application.studentFirstName} {application.studentLastName}
                     </Link>
                     <p className="text-muted-foreground font-mono text-xs">{application.applicationNumber}</p>

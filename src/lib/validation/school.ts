@@ -115,7 +115,12 @@ export const createStudentSchema = z
     ...studentFields,
     sectionId: id,
     rollNumber: optionalText(10),
-    guardianMode: z.enum(["none", "existing", "new"]).default("none"),
+    /**
+     * A student cannot be admitted without somebody responsible for them, so
+     * there is no "none": every child gets at least one parent or guardian, and
+     * an existing parent is linked rather than duplicated.
+     */
+    guardianMode: z.enum(["existing", "new"]).default("new"),
     existingParentId: optionalId,
     parentFirstName: optionalText(60),
     parentLastName: optionalText(60),
@@ -208,6 +213,13 @@ export const teacherFields = {
   employeeId: optionalText(30),
   phone: optionalPhone,
   qualification: optionalText(120),
+  /** What the school calls the post — "Senior Teacher", "Head of Science". */
+  designation: optionalText(80),
+  dateOfBirth: optionalDate,
+  addressLine: optionalText(200),
+  city: optionalText(80),
+  state: optionalText(80),
+  postalCode: optionalText(12),
   joiningDate: optionalDate,
 };
 
@@ -222,6 +234,11 @@ export const updateTeacherSchema = z.object({
   teacherId: id,
   ...teacherFields,
   employeeId: requiredText("an employee ID", 30),
+  /**
+   * The address they sign in with, editable because a typo here would
+   * otherwise lock a teacher out of the school for good.
+   */
+  email: requiredEmail,
   status: z.enum(TEACHER_STATUSES),
 });
 
@@ -231,4 +248,85 @@ export const assignmentSchema = z.object({
   teacherId: id,
   subjectId: id,
   sectionId: id,
+});
+
+
+// -----------------------------------------------------------------------------
+// Salary and fees
+// -----------------------------------------------------------------------------
+
+export const SALARY_TYPES = ["MONTHLY", "ANNUAL", "HOURLY"] as const;
+
+export const PAYMENT_METHODS = [
+  "CASH",
+  "CHEQUE",
+  "BANK_TRANSFER",
+  "UPI",
+  "CARD",
+  "OTHER",
+] as const;
+
+/**
+ * Money is entered in rupees and stored in paise.
+ *
+ * The form takes what a person would type — 25000, or 25000.50 — and this turns
+ * it into an integer before it reaches the database, so no float ever gets near
+ * a stored amount.
+ */
+const rupees = (label: string, { min = 0 } = {}) =>
+  z.preprocess(
+    (value) => (value === "" || value === null || value === undefined ? undefined : value),
+    z.coerce
+      .number({ error: `Enter ${label}` })
+      .min(min, `${label} cannot be negative`)
+      .max(100_000_000, "That amount is too large"),
+  ).transform((value) => Math.round(value * 100));
+
+export const salarySchema = z.object({
+  teacherId: id,
+  salaryType: z.enum(SALARY_TYPES),
+  amountMinor: rupees("a salary", { min: 1 }),
+  allowancesMinor: rupees("allowances").optional().default(0),
+  deductionsMinor: rupees("deductions").optional().default(0),
+  effectiveFrom: requiredDate("the date it takes effect"),
+  notes: optionalText(500),
+});
+
+export type SalaryFormInput = z.infer<typeof salarySchema>;
+
+export const feeHeadSchema = z.object({
+  name: requiredText("a name", 60),
+  note: optionalText(200),
+});
+
+export const chargeStudentSchema = z.object({
+  studentId: id,
+  feeHeadId: id,
+  amountMinor: rupees("an amount", { min: 1 }),
+  dueOn: requiredDate("a due date"),
+  notes: optionalText(200),
+});
+
+export const chargeSectionSchema = z.object({
+  sectionId: id,
+  feeHeadId: id,
+  amountMinor: rupees("an amount", { min: 1 }),
+  dueOn: requiredDate("a due date"),
+});
+
+export const paymentSchema = z.object({
+  studentId: id,
+  amountMinor: rupees("an amount", { min: 1 }),
+  paidOn: requiredDate("the date it was paid"),
+  method: z.enum(PAYMENT_METHODS),
+  receiptNo: requiredText("a receipt number", 40),
+  notes: optionalText(200),
+});
+
+/** Linking an existing parent to another child. */
+export const linkExistingParentSchema = z.object({
+  studentId: id,
+  parentId: id,
+  relationship: z.enum(RELATIONSHIPS),
+  isPrimary: z.coerce.boolean().optional().default(false),
 });

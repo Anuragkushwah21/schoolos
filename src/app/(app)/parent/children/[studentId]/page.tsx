@@ -2,90 +2,77 @@ import type { Metadata } from "next";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { StatCard } from "@/components/shared/stat-card";
-import { TimetableGrid } from "@/components/shared/timetable-grid";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AttendanceHistory } from "@/features/attendance/history";
-import { dayOfWeek, today } from "@/lib/dates";
-import { formatPercent } from "@/lib/format";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChildSwitcher, ChildTabs } from "@/features/parent/child-nav";
+import { FocusList, TodaysUpdate } from "@/features/parent/today";
 import { requireTenant } from "@/server/auth/current-user";
-import { studentHistory } from "@/server/attendance/service";
-import { getSectionWeek, requireChildOfParent } from "@/server/people/portal";
-import { sectionLabel } from "@/server/academics/structure";
 import { orNotFound } from "@/server/page-helpers";
+import { findChild, listMyChildren } from "@/server/parent/access";
+import { getChildFocus, getChildToday } from "@/server/parent/child";
 
 export const metadata: Metadata = { title: "Child" };
 
+/**
+ * One child's day, and the way into the rest of their record.
+ *
+ * The guardian link is checked in the database by `findChild`: being in the same
+ * school is not enough to open another family's child, and an id that is not
+ * linked answers exactly as one that does not exist.
+ */
 export default async function ParentChildPage(props: PageProps<"/parent/children/[studentId]">) {
   const ctx = await requireTenant("PARENT");
   const { studentId } = await props.params;
 
-  // The guardian link is checked in the database; being in the same school is
-  // not enough to open another family's child.
-  const child = await orNotFound(requireChildOfParent(ctx, studentId));
-  const current = child.enrollments.find((enrollment) => enrollment.academicSession.isCurrent);
+  const child = await orNotFound(findChild(ctx, studentId));
 
-  if (!current) {
+  if (!child.placement) {
     return (
       <>
         <PageHeader
-          back={{ href: "/parent/children", label: "Children" }}
-          title={`${child.firstName} ${child.lastName}`}
+          back={{ href: "/parent/dashboard", label: "Dashboard" }}
+          title={child.student.name}
         />
-        <EmptyState title="Not placed in a class this session" />
+        <EmptyState title="Not placed in a class this session">
+          The school has not put {child.student.name.split(" ")[0]} in a section for the current
+          academic year. Their day appears here once it does.
+        </EmptyState>
       </>
     );
   }
 
-  const [history, week] = await Promise.all([
-    studentHistory(ctx, child.id, current.academicSession.id),
-    getSectionWeek(ctx, current.section.id, current.academicSession.id),
+  const [{ children }, today, focus] = await Promise.all([
+    listMyChildren(ctx),
+    orNotFound(getChildToday(ctx, studentId)),
+    orNotFound(getChildFocus(ctx, studentId)),
   ]);
+
+  const placed = children.filter((sibling) => sibling.sectionId !== null);
 
   return (
     <>
       <PageHeader
-        back={{ href: "/parent/children", label: "Children" }}
-        title={`${child.firstName} ${child.lastName}`}
-        description={`${sectionLabel(current.section)}${current.rollNumber ? `, roll ${current.rollNumber}` : ""} · ${current.academicSession.name}`}
+        back={{ href: "/parent/dashboard", label: "Dashboard" }}
+        title={child.student.name}
+        description={`${child.placement.sectionLabel}${child.placement.rollNumber ? `, roll ${child.placement.rollNumber}` : ""} · ${child.placement.sessionName} · ${child.student.admissionNumber}`}
       />
 
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard
-          label="Attended"
-          value={formatPercent(history.counts.PRESENT + history.counts.LATE, history.counts.total)}
-          hint={`${history.counts.total} days marked`}
-        />
-        <StatCard label="Present" value={history.counts.PRESENT} />
-        <StatCard label="Late" value={history.counts.LATE} />
-        <StatCard label="Absent" value={history.counts.ABSENT} />
-      </div>
+      <ChildSwitcher options={placed} activeId={studentId} tab="" />
+      <ChildTabs studentId={studentId} active="" />
 
-      <div className="flex flex-col gap-6">
+      <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
+        <TodaysUpdate today={today} studentId={studentId} />
+
         <Card>
           <CardHeader>
-            <CardTitle>Timetable</CardTitle>
+            <CardTitle>What to help with at home</CardTitle>
+            <CardDescription>
+              Each line points at something a teacher recorded — a lesson, a mark or a due date.
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <TimetableGrid
-              today={dayOfWeek(today())}
-              slots={week.map((slot) => ({
-                id: slot.id,
-                dayOfWeek: slot.dayOfWeek,
-                startMinute: slot.startMinute,
-                endMinute: slot.endMinute,
-                title: slot.subject.name,
-                subtitle: `${slot.teacher.firstName} ${slot.teacher.lastName}`,
-                meta: slot.room,
-              }))}
-            />
+            <FocusList items={focus.items} />
           </CardContent>
         </Card>
-
-        <div>
-          <h2 className="mb-3 font-semibold">Attendance record</h2>
-          <AttendanceHistory rows={history.rows} />
-        </div>
       </div>
     </>
   );

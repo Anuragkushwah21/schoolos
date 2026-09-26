@@ -40,7 +40,7 @@ export default async function OffersPage() {
         description="Promotions on the homepage. They show only between their dates."
         actions={
           <Button asChild>
-            <Link href="/platform/offers/new">New offer</Link>
+            <Link href="/super-admin/offers/new">New offer</Link>
           </Button>
         }
       />
@@ -62,7 +62,7 @@ export default async function OffersPage() {
                 return (
                   <TableRow key={offer.id}>
                     <TableCell>
-                      <Link href={`/platform/offers/${offer.id}`} className="font-medium hover:underline">
+                      <Link href={`/super-admin/offers/${offer.id}`} className="font-medium hover:underline">
                         {offer.title}
                       </Link>
                       {offer.priceLabel ? (
@@ -78,7 +78,7 @@ export default async function OffersPage() {
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
                         <Button asChild variant="outline" size="sm">
-                          <Link href={`/platform/offers/${offer.id}`}>Edit</Link>
+                          <Link href={`/super-admin/offers/${offer.id}`}>Edit</Link>
                         </Button>
                         <ActionButton
                           action={deleteOfferAction}

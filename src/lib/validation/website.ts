@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   checkbox,
   id,
-  optionalDate,
+  optionalPastDate,
   optionalEmail,
   optionalEnum,
   optionalId,
@@ -84,7 +84,7 @@ export const mediaSchema = z.object({
 export const admissionApplicationSchema = z.object({
   studentFirstName: requiredText("the child's first name", 60),
   studentLastName: requiredText("the child's last name", 60),
-  dateOfBirth: optionalDate,
+  dateOfBirth: optionalPastDate("A date of birth"),
   gender: optionalEnum(GENDERS),
   previousSchool: optionalText(150),
   requestedClassId: id,

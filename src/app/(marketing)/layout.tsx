@@ -28,11 +28,17 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
             <Link href="/#roles" className="hover:text-foreground transition-colors">
               For your staff
             </Link>
+            <Link href="/#offers" className="hover:text-foreground transition-colors">
+              Offers
+            </Link>
             <Link href="/#pricing" className="hover:text-foreground transition-colors">
               Pricing
             </Link>
             <Link href="/#faq" className="hover:text-foreground transition-colors">
               FAQ
+            </Link>
+            <Link href="/contact" className="hover:text-foreground transition-colors">
+              Contact
             </Link>
           </nav>
 
@@ -46,6 +52,11 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
 
           <div className="sm:hidden">
             <MobileHeaderMenu>
+              <nav aria-label="Primary" className="mb-4 flex flex-col gap-3 text-sm">
+                <Link href="/#offers">Offers</Link>
+                <Link href="/#pricing">Pricing</Link>
+                <Link href="/contact">Contact us</Link>
+              </nav>
               <SiteHeaderAccount mobile />
             </MobileHeaderMenu>
           </div>
@@ -84,6 +95,9 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
             </Link>
             <Link href="/login" className="text-muted-foreground hover:text-foreground">
               Sign in
+            </Link>
+            <Link href="/contact" className="text-muted-foreground hover:text-foreground">
+              Contact us
             </Link>
           </div>
         </div>

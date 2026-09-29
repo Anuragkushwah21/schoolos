@@ -9,11 +9,13 @@ import {
   getStaffRegister,
   markStaffAttendance,
 } from "@/server/attendance/service";
+import { schoolClosureOn } from "@/server/calendar/holidays";
 
 export const GET = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }) => {
   const { date } = readQuery(request, staffRegisterQuery);
   const on = date ?? today();
-  return apiSuccess(await getStaffRegister(ctx, on), { meta: { date: on } });
+  const [rows, closure] = await Promise.all([getStaffRegister(ctx, on), schoolClosureOn(ctx, on)]);
+  return apiSuccess(rows, { meta: { date: on, closure: closure ? { kind: closure.kind, label: closure.label } : null } });
 });
 
 const staffBody = z.object({

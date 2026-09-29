@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { LiveOffer, PublicPlan } from "@/server/platform/marketing";
+import type { LiveOffer, PublicPlan, UpcomingOffer } from "@/server/platform/marketing";
 
 import { ProductPreview } from "./product-preview";
 
@@ -130,45 +130,104 @@ export function Hero({ offer }: { offer: LiveOffer | undefined }) {
 // Offer band
 // -----------------------------------------------------------------------------
 
-export function OfferBand({ offers }: { offers: LiveOffer[] }) {
-  if (!offers.length) return null;
-
+/**
+ * The Super Admin's offers, live and upcoming.
+ *
+ * Always rendered, so the "Offers" link in the header has somewhere to land:
+ * with nothing running it says so and points at the contact page instead.
+ */
+export function OffersSection({
+  offers,
+  upcoming,
+}: {
+  offers: LiveOffer[];
+  upcoming: UpcomingOffer[];
+}) {
   return (
-    <section className="mx-auto w-full max-w-6xl px-4 sm:px-6" aria-label="Current offers">
-      <div className="grid gap-4">
-        {offers.map((offer) => (
-          <div
-            key={offer.id}
-            className="from-primary relative flex flex-col gap-4 overflow-hidden rounded-2xl bg-gradient-to-r to-sky-600 p-6 text-white sm:flex-row sm:items-center sm:justify-between sm:p-8"
-          >
-            <div
-              aria-hidden
-              className="absolute -top-16 -right-10 size-56 rounded-full bg-white/10 blur-2xl"
-            />
-            <div className="relative flex flex-col gap-1">
-              <p className="text-sm font-medium text-white/80">Limited-time offer</p>
-              <p className="text-2xl font-semibold">{offer.title}</p>
-              {offer.description ? (
-                <p className="text-white/85">{offer.description}</p>
-              ) : null}
-              {offer.endsAt ? (
-                <p className="text-sm text-white/70">Valid until {formatDate(offer.endsAt)}</p>
-              ) : null}
-            </div>
-            <div className="relative flex flex-col items-start gap-3 sm:items-end">
-              {offer.priceLabel ? (
-                <p className="text-3xl font-semibold tabular-nums">{offer.priceLabel}</p>
-              ) : null}
-              <Button asChild size="lg" variant="secondary" className="h-10 px-5">
-                <Link href={(offer.ctaHref ?? "/register") as Route}>
-                  {offer.ctaLabel ?? "Get started"}
-                  <ArrowRightIcon data-icon="inline-end" />
-                </Link>
-              </Button>
-            </div>
-          </div>
-        ))}
+    <section id="offers" className="mx-auto w-full max-w-6xl scroll-mt-20 px-4 sm:px-6" aria-labelledby="offers-heading">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <p className="text-primary text-sm font-semibold tracking-wide uppercase">Offers</p>
+          <h2 id="offers-heading" className="text-2xl font-semibold tracking-tight sm:text-3xl">
+            Current offers for schools
+          </h2>
+        </div>
+        <Link href="/contact" className="text-primary text-sm font-medium hover:underline">
+          Ask us about an offer →
+        </Link>
       </div>
+
+      {offers.length === 0 && upcoming.length === 0 ? (
+        <div className="bg-muted/40 flex flex-col items-start gap-3 rounded-2xl border p-6 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-muted-foreground">
+            No offer is running right now. Talk to us for a price that fits your school.
+          </p>
+          <Button asChild variant="outline">
+            <Link href="/contact">Contact us</Link>
+          </Button>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {offers.map((offer) => (
+            <div
+              key={offer.id}
+              className="from-primary relative flex flex-col gap-4 overflow-hidden rounded-2xl bg-gradient-to-r to-sky-600 p-6 text-white sm:flex-row sm:items-center sm:justify-between sm:p-8"
+            >
+              <div
+                aria-hidden
+                className="absolute -top-16 -right-10 size-56 rounded-full bg-white/10 blur-2xl"
+              />
+              <div className="relative flex flex-col gap-1">
+                <p className="text-sm font-medium text-white/80">Limited-time offer</p>
+                <p className="text-2xl font-semibold">{offer.title}</p>
+                {offer.description ? <p className="text-white/85">{offer.description}</p> : null}
+                {offer.endsAt ? (
+                  <p className="text-sm text-white/70">Valid until {formatDate(offer.endsAt)}</p>
+                ) : null}
+              </div>
+              <div className="relative flex flex-col items-start gap-3 sm:items-end">
+                {offer.priceLabel ? (
+                  <p className="text-3xl font-semibold tabular-nums">{offer.priceLabel}</p>
+                ) : null}
+                <Button asChild size="lg" variant="secondary" className="h-10 px-5">
+                  <Link href={(offer.ctaHref ?? "/register") as Route}>
+                    {offer.ctaLabel ?? "Get started"}
+                    <ArrowRightIcon data-icon="inline-end" />
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          {upcoming.map((offer) => (
+            <div
+              key={offer.id}
+              className="border-primary/30 bg-primary/5 flex flex-col gap-4 rounded-2xl border border-dashed p-6 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="flex flex-col gap-1">
+                <p className="text-primary text-sm font-medium">
+                  Coming soon · starts {formatDate(offer.startsAt)}
+                </p>
+                <p className="text-xl font-semibold">{offer.title}</p>
+                {offer.description ? (
+                  <p className="text-muted-foreground">{offer.description}</p>
+                ) : null}
+                {offer.endsAt ? (
+                  <p className="text-muted-foreground text-sm">Runs until {formatDate(offer.endsAt)}</p>
+                ) : null}
+              </div>
+              <div className="flex flex-col items-start gap-3 sm:items-end">
+                {offer.priceLabel ? (
+                  <p className="text-2xl font-semibold tabular-nums">{offer.priceLabel}</p>
+                ) : null}
+                <Button asChild variant="outline">
+                  <Link href="/contact?topic=PRICING">Reserve this offer</Link>
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

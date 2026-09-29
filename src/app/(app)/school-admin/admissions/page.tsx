@@ -1,3 +1,4 @@
+import { UserPlusIcon } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -32,7 +33,7 @@ export default async function AdmissionsPage(props: PageProps<"/school-admin/adm
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={UserPlusIcon} tone="blue"
         title="Admissions"
         description="Applications from your school's website."
         actions={

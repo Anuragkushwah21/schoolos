@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-import { STUDENT_STATUSES, TEACHER_STATUSES } from "@/lib/validation/school";
+import { GENDERS, STUDENT_STATUSES, TEACHER_STATUSES } from "@/lib/validation/school";
 import { NOTICE_STATUSES } from "@/lib/validation/communication";
-import { AUDIT_ACTIONS } from "@/lib/audit-actions";
+import { PLATFORM_AUDIT_ACTIONS } from "@/lib/audit-actions";
 import { parseDateInput } from "@/lib/dates";
 
 /**
@@ -36,6 +36,7 @@ export const studentsQuery = pageQuery.extend({
   section: trimmed.optional(),
   class: trimmed.optional(),
   status: z.enum(STUDENT_STATUSES).optional(),
+  gender: z.enum(GENDERS).optional(),
 });
 
 export const teachersQuery = pageQuery.extend({
@@ -50,6 +51,7 @@ export const sectionsQuery = z.object({ session: trimmed.optional() });
 export const timetableQuery = z.object({
   section: trimmed.optional(),
   teacher: trimmed.optional(),
+  room: trimmed.optional(),
   session: trimmed.optional(),
 });
 
@@ -62,6 +64,13 @@ export const reportQuery = z.object({
   from: dateQuery.optional(),
   to: dateQuery.optional(),
 });
+
+export const holidaysQuery = z
+  .object({ from: dateQuery.optional(), to: dateQuery.optional() })
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: "`from` must be on or before `to`",
+    path: ["to"],
+  });
 
 export const noticesQuery = z.object({ status: z.enum(NOTICE_STATUSES).optional() });
 
@@ -79,7 +88,7 @@ export const schoolsQuery = pageQuery.extend({
 export const auditQuery = pageQuery.extend({
   q: trimmed.optional(),
   schoolId: trimmed.optional(),
-  action: z.enum(AUDIT_ACTIONS).optional(),
+  action: z.enum(PLATFORM_AUDIT_ACTIONS).optional(),
 });
 
 /** Parent portal reads. None of these carries a `parentId` or a `schoolId`. */

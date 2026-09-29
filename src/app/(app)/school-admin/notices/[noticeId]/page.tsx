@@ -4,9 +4,9 @@ import { ActionButton } from "@/components/forms/action-button";
 import { PageHeader } from "@/components/shared/page-header";
 import { deleteNoticeAction } from "@/features/communication/actions";
 import { NoticeForm } from "@/features/communication/forms";
-import { toDateInput } from "@/lib/dates";
+import { today, toDateInput } from "@/lib/dates";
 import { requireTenant } from "@/server/auth/current-user";
-import { getNotice } from "@/server/communication/notices";
+import { getNotice, noticeTargetOptions } from "@/server/communication/notices";
 import { orNotFound } from "@/server/page-helpers";
 
 export const metadata: Metadata = { title: "Edit notice" };
@@ -14,7 +14,7 @@ export const metadata: Metadata = { title: "Edit notice" };
 export default async function EditNoticePage(props: PageProps<"/school-admin/notices/[noticeId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { noticeId } = await props.params;
-  const notice = await orNotFound(getNotice(ctx, noticeId));
+  const [notice, options] = await Promise.all([orNotFound(getNotice(ctx, noticeId)), noticeTargetOptions(ctx)]);
 
   return (
     <>
@@ -37,6 +37,7 @@ export default async function EditNoticePage(props: PageProps<"/school-admin/not
         }
       />
       <NoticeForm
+        minExpiry={toDateInput(notice.expiresAt && notice.expiresAt < today() ? notice.expiresAt : today())}
         notice={{
           id: notice.id,
           title: notice.title,
@@ -46,7 +47,13 @@ export default async function EditNoticePage(props: PageProps<"/school-admin/not
           isPublic: notice.isPublic,
           publishAt: notice.publishAt ? toDateInput(notice.publishAt) : "",
           expiresAt: notice.expiresAt ? toDateInput(notice.expiresAt) : "",
+          scope: notice.scope,
+          classId: notice.classId,
+          sectionId: notice.sectionId,
+          admissionNumbers: notice.recipients.map((row) => row.student.admissionNumber).join(", "),
         }}
+        classes={options.classes}
+        sections={options.sections}
       />
     </>
   );

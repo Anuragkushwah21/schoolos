@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { ActionForm } from "@/components/forms/action-form";
 import {
@@ -10,12 +10,17 @@ import {
   TextField,
   TextareaField,
 } from "@/components/forms/fields";
+import { ActionButton } from "@/components/forms/action-button";
+import { Button } from "@/components/ui/button";
 import {
+  addHomeworkResourceAction,
   addLessonMaterialAction,
   addRemarkAction,
   planLessonAction,
   recordActivityAction,
+  removeHomeworkResourceAction,
   saveHomeworkAction,
+  updateHomeworkResourceAction,
   updateRemarkAction,
 } from "@/features/classwork/actions";
 import type { DayOfWeek } from "@/generated/prisma/enums";
@@ -70,6 +75,8 @@ export function ClassActivityForm({
     topic: string | null;
     notes: string | null;
     importantPoints: string | null;
+    preparation?: string | null;
+    homework?: { title: string; description: string | null; dueOn: string } | null;
   };
 }) {
   const [date, setDate] = useState(activity?.date ?? defaultDate);
@@ -135,6 +142,39 @@ export function ClassActivityForm({
         placeholder="Practice questions 1-10. Learn the formula."
         hint="The short list a student revises from."
       />
+      <TextareaField
+        name="preparation"
+        label="Preparation instructions"
+        rows={2}
+        defaultValue={activity?.preparation ?? ""}
+        placeholder="Read chapter 5 before the next class."
+        hint="What students should do before the next class."
+      />
+      <fieldset className="flex flex-col gap-4 rounded-lg border p-4">
+        <legend className="px-1 text-sm font-medium">Homework (optional)</legend>
+        <FieldRow>
+          <TextField
+            name="homeworkTitle"
+            label="Homework"
+            defaultValue={activity?.homework?.title ?? ""}
+            placeholder="Exercise 4.2, questions 1-8"
+          />
+          <TextField
+            name="homeworkDueOn"
+            label="Due on"
+            type="date"
+            min={date}
+            defaultValue={activity?.homework?.dueOn ?? ""}
+          />
+        </FieldRow>
+        <TextareaField
+          name="homeworkDescription"
+          label="Details"
+          rows={2}
+          defaultValue={activity?.homework?.description ?? ""}
+          hint="Appears on your class's homework list, due on the date above."
+        />
+      </fieldset>
       <div>
         <SubmitButton pendingLabel="Saving…">
           {activity ? "Update record" : "Record class"}
@@ -165,12 +205,16 @@ export function HomeworkForm({
     subjectId: string;
     title: string;
     description: string | null;
+    instructions?: string | null;
     assignedOn: string;
     dueOn: string;
     status: string;
   };
 }) {
   const [sectionId, setSectionId] = useState(homework?.sectionId ?? sections[0]?.value ?? "");
+  const [hasUpload, setHasUpload] = useState(false);
+  // Work cannot be due before it is set; the server enforces the same rule.
+  const [assignedOn, setAssignedOn] = useState(homework?.assignedOn ?? today);
   const subjects = sections.find((section) => section.value === sectionId)?.subjects ?? [];
 
   return (
@@ -212,7 +256,15 @@ export function HomeworkForm({
         label="Details"
         rows={5}
         defaultValue={homework?.description ?? ""}
-        hint="What to do, and anything the class needs to know."
+        hint="What the homework is about."
+      />
+      <TextareaField
+        name="instructions"
+        label="Homework instructions"
+        rows={4}
+        defaultValue={homework?.instructions ?? ""}
+        placeholder="Complete Exercise 4.2, Questions 1-10."
+        hint="Exactly what the student needs to do."
       />
       <FieldRow>
         <TextField
@@ -220,6 +272,7 @@ export function HomeworkForm({
           label="Set on"
           type="date"
           defaultValue={homework?.assignedOn ?? today}
+          onChange={(event) => setAssignedOn(event.currentTarget.value)}
           required
         />
         <TextField
@@ -227,6 +280,7 @@ export function HomeworkForm({
           label="Due on"
           type="date"
           defaultValue={homework?.dueOn ?? today}
+          min={assignedOn || undefined}
           required
         />
       </FieldRow>
@@ -237,10 +291,284 @@ export function HomeworkForm({
         options={HOMEWORK_STATUS_OPTIONS}
         required
       />
+      {homework ? null : <HomeworkResourceBuilder onUploadChange={setHasUpload} />}
       <div>
-        <SubmitButton>{homework ? "Save homework" : "Set homework"}</SubmitButton>
+        <SubmitButton pendingLabel={hasUpload ? "Uploading…" : "Saving…"}>
+          {homework ? "Save homework" : "Set homework"}
+        </SubmitButton>
       </div>
     </ActionForm>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Homework study resources
+// -----------------------------------------------------------------------------
+
+const RESOURCE_TYPES = [
+  { value: "DOCUMENT", label: "PDF / Document" },
+  { value: "VIDEO", label: "Video link" },
+  { value: "LINK", label: "External link" },
+] as const;
+
+type ResourceType = (typeof RESOURCE_TYPES)[number]["value"];
+
+/** Checked here only so the teacher hears at once; the server checks again. */
+function pdfProblem(file: File | undefined): string | null {
+  if (!file) return null;
+  if (!/\.pdf$/i.test(file.name)) return "Only PDF files can be uploaded.";
+  if (file.size > MAX_UPLOAD_BYTES) return "That file is larger than 10 MB. Choose a smaller PDF.";
+  return null;
+}
+
+/** The fields for one resource, named with `prefix` (e.g. `resources.3.`). */
+function ResourceFields({
+  prefix,
+  type,
+  onFileChange,
+}: {
+  prefix: string;
+  type: ResourceType;
+  onFileChange?: (hasFile: boolean) => void;
+}) {
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  return (
+    <>
+      <TextField
+        name={`${prefix}title`}
+        label="Title"
+        placeholder={
+          type === "DOCUMENT"
+            ? "Chapter notes"
+            : type === "VIDEO"
+              ? "Quadratic equations explanation"
+              : "Practice questions"
+        }
+        required
+      />
+      {type === "DOCUMENT" ? (
+        <TextField
+          name={`${prefix}file`}
+          label="Upload PDF"
+          type="file"
+          accept=".pdf,application/pdf"
+          hint={fileError ?? "PDF only, up to 10 MB."}
+          onChange={(event) => {
+            const input = event.currentTarget;
+            const problem = pdfProblem(input.files?.[0]);
+            setFileError(problem);
+            if (problem) input.value = "";
+            onFileChange?.(Boolean(input.files?.length));
+          }}
+          required
+        />
+      ) : (
+        <TextField
+          name={`${prefix}url`}
+          label={type === "VIDEO" ? "Video URL" : "URL"}
+          type="url"
+          placeholder={type === "VIDEO" ? "https://www.youtube.com/watch?v=…" : "https://…"}
+          hint="An https:// link. Only the address is stored."
+          required
+        />
+      )}
+      <TextField name={`${prefix}description`} label="Description (optional)" />
+    </>
+  );
+}
+
+/**
+ * Any number of resources, added and removed before the homework is saved.
+ *
+ * Each row has a stable number, so removing the second of three does not
+ * renumber the third while the teacher is typing in it.
+ */
+function HomeworkResourceBuilder({ onUploadChange }: { onUploadChange: (value: boolean) => void }) {
+  const next = useRef(0);
+  const [rows, setRows] = useState<Array<{ id: number; type: ResourceType; hasFile: boolean }>>([]);
+
+  function update(nextRows: typeof rows) {
+    setRows(nextRows);
+    onUploadChange(nextRows.some((row) => row.type === "DOCUMENT" && row.hasFile));
+  }
+
+  return (
+    <fieldset className="flex flex-col gap-4 rounded-lg border p-4">
+      <legend className="px-1 text-sm font-medium">Study resources (optional)</legend>
+      {rows.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          Attach PDFs, videos or links the class should use for this homework.
+        </p>
+      ) : null}
+      {rows.map((row, position) => (
+        <div key={row.id} className="bg-muted/30 flex flex-col gap-3 rounded-lg border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-medium">Resource {position + 1}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => update(rows.filter((other) => other.id !== row.id))}
+            >
+              Remove
+            </Button>
+          </div>
+          <div role="radiogroup" aria-label="Resource type" className="flex flex-wrap gap-4 text-sm">
+            {RESOURCE_TYPES.map((option) => (
+              <label key={option.value} className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name={`resources.${row.id}.kind`}
+                  value={option.value}
+                  checked={row.type === option.value}
+                  onChange={() =>
+                    update(
+                      rows.map((other) =>
+                        other.id === row.id ? { ...other, type: option.value, hasFile: false } : other,
+                      ),
+                    )
+                  }
+                />
+                {option.label}
+              </label>
+            ))}
+          </div>
+          <ResourceFields
+            // Remounted on a type change, so a PDF picked for "document" is not
+            // posted after switching to "video".
+            key={row.type}
+            prefix={`resources.${row.id}.`}
+            type={row.type}
+            onFileChange={(hasFile) =>
+              update(rows.map((other) => (other.id === row.id ? { ...other, hasFile } : other)))
+            }
+          />
+        </div>
+      ))}
+      <div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={rows.length >= 20}
+          onClick={() => update([...rows, { id: next.current++, type: "DOCUMENT", hasFile: false }])}
+        >
+          + {rows.length ? "Add another resource" : "Add resource"}
+        </Button>
+      </div>
+    </fieldset>
+  );
+}
+
+/** Add one resource to homework that already exists. */
+export function AddHomeworkResourceForm({ homeworkId }: { homeworkId: string }) {
+  const [type, setType] = useState<ResourceType>("DOCUMENT");
+
+  return (
+    <ActionForm action={addHomeworkResourceAction} resetOnSuccess className="gap-3">
+      <input type="hidden" name="homeworkId" value={homeworkId} />
+      <SelectField
+        name="kind"
+        label="Resource type"
+        value={type}
+        onChange={(event) => setType(event.target.value as ResourceType)}
+        options={RESOURCE_TYPES.map((option) => ({ value: option.value, label: option.label }))}
+        required
+      />
+      <ResourceFields key={type} prefix="" type={type} />
+      <div>
+        <SubmitButton variant="outline" pendingLabel={type === "DOCUMENT" ? "Uploading…" : "Saving…"}>
+          Add resource
+        </SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/**
+ * Edit one existing resource: its title and description, the address of a
+ * video or link, or a replacement PDF. Removing it leaves the homework alone.
+ */
+export function HomeworkResourceEditor({
+  resource,
+}: {
+  resource: {
+    id: string;
+    kind: string;
+    title: string;
+    url: string | null;
+    description: string | null;
+    fileName: string | null;
+  };
+}) {
+  const [fileError, setFileError] = useState<string | null>(null);
+  const uploaded = Boolean(resource.fileName);
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border p-3">
+      <ActionForm action={updateHomeworkResourceAction} className="gap-3">
+        <input type="hidden" name="resourceId" value={resource.id} />
+        <FieldRow>
+          <TextField name="title" label="Title" defaultValue={resource.title} required />
+          <TextField name="description" label="Description" defaultValue={resource.description ?? ""} />
+        </FieldRow>
+        {uploaded ? (
+          <TextField
+            name="file"
+            label={`Replace PDF (now: ${resource.fileName})`}
+            type="file"
+            accept=".pdf,application/pdf"
+            hint={fileError ?? "Leave empty to keep the current file."}
+            onChange={(event) => {
+              const input = event.currentTarget;
+              const problem = pdfProblem(input.files?.[0]);
+              setFileError(problem);
+              if (problem) input.value = "";
+            }}
+          />
+        ) : (
+          <TextField
+            name="url"
+            label={resource.kind === "VIDEO" ? "Video URL" : "URL"}
+            type="url"
+            defaultValue={resource.url ?? ""}
+            required
+          />
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <SubmitButton variant="outline" size="sm" pendingLabel={uploaded ? "Uploading…" : "Saving…"}>
+            Save resource
+          </SubmitButton>
+          {uploaded ? (
+            <a
+              href={`/api/v1/lesson-materials/${resource.id}/file`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary text-xs hover:underline"
+            >
+              View current PDF
+            </a>
+          ) : null}
+        </div>
+      </ActionForm>
+      <div>
+        <ActionButton
+          action={removeHomeworkResourceAction}
+          fields={{ resourceId: resource.id }}
+          variant="ghost"
+          size="xs"
+          pendingLabel="Removing…"
+          confirm={{
+            title: "Remove this resource?",
+            description: "Only the resource is removed; the homework stays as it is.",
+            confirmLabel: "Remove",
+          }}
+        >
+          Remove resource
+        </ActionButton>
+      </div>
+    </div>
   );
 }
 
@@ -362,12 +690,14 @@ const MATERIAL_KIND_OPTIONS = [
   { value: "NOTES", label: "Notes" },
   { value: "QUESTIONS", label: "Important questions" },
   { value: "PRACTICE", label: "Practice work" },
-  { value: "LINK", label: "Link" },
-  { value: "DOCUMENT", label: "Document" },
+  { value: "DOCUMENT", label: "PDF / document" },
+  { value: "VIDEO", label: "Video link" },
+  { value: "LINK", label: "External resource link" },
 ];
+const URL_KINDS = ["LINK", "DOCUMENT", "VIDEO"];
 
-/** Kinds that take a web address instead of text. */
-const URL_KINDS = ["LINK", "DOCUMENT"];
+/** Mirrors `MAX_DOCUMENT_BYTES`; checked here only so a teacher hears at once. */
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 /**
  * Planning a lesson the class has not sat yet.
@@ -443,6 +773,7 @@ export function LessonPlanForm({
  */
 export function LessonMaterialForm({ classSessionId }: { classSessionId: string }) {
   const [kind, setKind] = useState("NOTES");
+  const [fileError, setFileError] = useState<string | null>(null);
   const wantsUrl = URL_KINDS.includes(kind);
 
   return (
@@ -457,15 +788,51 @@ export function LessonMaterialForm({ classSessionId }: { classSessionId: string 
           options={MATERIAL_KIND_OPTIONS}
           required
         />
-        <TextField name="title" label="Title" placeholder="Chapter 4 notes" required />
+        <TextField
+          name="title"
+          label="Title"
+          placeholder={kind === "VIDEO" ? "Quadratic equations explained" : "Chapter 4 notes"}
+          required
+        />
       </FieldRow>
-      {wantsUrl ? (
+      {kind === "DOCUMENT" ? (
+        <>
+          <TextField
+            name="file"
+            label="Upload PDF"
+            type="file"
+            accept=".pdf,application/pdf"
+            hint={fileError ?? "PDF only, up to 10 MB. Or give a web address below instead."}
+            onChange={(event) => {
+              const input = event.currentTarget;
+              const file = input.files?.[0];
+              if (file && file.size > MAX_UPLOAD_BYTES) {
+                setFileError("That file is larger than 10 MB. Choose a smaller PDF.");
+                input.value = "";
+                return;
+              }
+              if (file && !/\.pdf$/i.test(file.name)) {
+                setFileError("Only PDF files can be uploaded.");
+                input.value = "";
+                return;
+              }
+              setFileError(null);
+            }}
+          />
+          <TextField
+            name="url"
+            label="…or web address"
+            type="url"
+            placeholder="https://…"
+          />
+        </>
+      ) : wantsUrl ? (
         <TextField
           name="url"
-          label="Web address"
+          label={kind === "VIDEO" ? "Video address" : "Web address"}
           type="url"
-          placeholder="https://…"
-          hint="An https:// link. There is no file upload in this version."
+          placeholder={kind === "VIDEO" ? "https://www.youtube.com/watch?v=…" : "https://…"}
+          hint="An https:// link. Only the address is stored."
           required
         />
       ) : (
@@ -477,8 +844,11 @@ export function LessonMaterialForm({ classSessionId }: { classSessionId: string 
           required
         />
       )}
+      {wantsUrl ? (
+        <TextField name="description" label="Description" placeholder="What students should use it for" />
+      ) : null}
       <div>
-        <SubmitButton variant="outline" pendingLabel="Adding…">
+        <SubmitButton variant="outline" pendingLabel={kind === "DOCUMENT" ? "Uploading…" : "Saving…"}>
           Add material
         </SubmitButton>
       </div>

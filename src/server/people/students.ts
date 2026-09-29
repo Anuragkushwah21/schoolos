@@ -1,7 +1,11 @@
 import "server-only";
 
+import { CURRENT_STUDENT } from "@/lib/validation/lifecycle";
+
+import { today } from "@/lib/dates";
+
 import type { Prisma } from "@/generated/prisma/client";
-import type { ParentRelationship, StudentStatus } from "@/generated/prisma/enums";
+import type { Gender, ParentRelationship, StudentStatus } from "@/generated/prisma/enums";
 import { ConflictError, NotFoundError } from "@/lib/errors";
 import type { CreateStudentInput, UpdateStudentInput } from "@/lib/validation/school";
 import { recordAudit } from "@/server/audit/log";
@@ -12,7 +16,8 @@ import { isUniqueViolation } from "@/server/db/errors";
 import type { TenantDb } from "@/server/tenancy/scope";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
 import type { Credentials } from "@/server/platform/schools";
-import { createPortalUser, setPortalUserActive } from "@/server/people/accounts";
+import { createPortalUser } from "@/server/people/accounts";
+import { changeStudentStatus } from "@/server/people/lifecycle";
 
 /**
  * Students and their guardians, as managed by the School Admin.
@@ -31,7 +36,9 @@ export async function listStudents(
     q?: string;
     sectionId?: string;
     classId?: string;
-    status?: StudentStatus;
+    /** CURRENT = active or on leave — the default list; a single status or none (all) otherwise. */
+    status?: StudentStatus | "CURRENT";
+    gender?: Gender;
     page?: number;
   },
 ) {
@@ -52,7 +59,8 @@ export async function listStudents(
       : undefined;
 
   const where: Prisma.StudentWhereInput = {
-    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.status === "CURRENT" ? { status: { in: [...CURRENT_STUDENT] } } : filters.status ? { status: filters.status } : {}),
+    ...(filters.gender ? { gender: filters.gender } : {}),
     ...(enrollmentFilter ? { enrollments: { some: enrollmentFilter } } : {}),
     ...(filters.q
       ? {
@@ -353,17 +361,13 @@ export async function createStudent(ctx: TenantContext, input: CreateStudentInpu
 
 export async function updateStudent(ctx: TenantContext, input: UpdateStudentInput): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
-  const { studentId, ...data } = input;
+  const { studentId, status, ...data } = input;
 
   const existing = await ctx.db.student.findFirst({
     where: { id: studentId },
     select: { id: true, status: true, userId: true },
   });
   if (!existing) throw new NotFoundError();
-
-  if (data.status === "ACTIVE" && existing.status !== "ACTIVE") {
-    await assertWithinPlanLimit(ctx, "students");
-  }
 
   try {
     await ctx.db.student.updateMany({ where: { id: studentId }, data });
@@ -372,9 +376,10 @@ export async function updateStudent(ctx: TenantContext, input: UpdateStudentInpu
     throw error;
   }
 
-  // A student who has left the school should not keep a working login.
-  if (existing.userId && data.status !== existing.status) {
-    await setPortalUserActive(ctx, existing.userId, data.status === "ACTIVE");
+  // A status sent with the details (older forms, the API) is recorded like
+  // any other change: dated today, with its effect on the login and history.
+  if (status && status !== existing.status) {
+    await changeStudentStatus(ctx, studentId, status, { effectiveDate: today(), reason: "Changed on the student's details", remarks: null, confirmReturn: true });
   }
 
   await recordAudit({
@@ -383,7 +388,7 @@ export async function updateStudent(ctx: TenantContext, input: UpdateStudentInpu
     entityId: studentId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Student ${data.firstName} ${data.lastName} updated${data.status !== existing.status ? ` (now ${data.status.toLowerCase()})` : ""}.`,
+    summary: `Student ${data.firstName} ${data.lastName} updated.`,
   });
 }
 

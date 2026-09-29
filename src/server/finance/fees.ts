@@ -84,6 +84,7 @@ export function summarise(
 // -----------------------------------------------------------------------------
 
 export async function listFeeHeads(ctx: TenantContext, options: { activeOnly?: boolean } = {}) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
   return ctx.db.feeHead.findMany({
     where: options.activeOnly ? { isActive: true } : {},
     orderBy: { name: "asc" },
@@ -328,6 +329,8 @@ export type PaymentInput = {
   paidOn: Date;
   method: "CASH" | "CHEQUE" | "BANK_TRANSFER" | "UPI" | "CARD" | "OTHER";
   receiptNo: string;
+  /** Cheque number, UPI or bank transaction id. */
+  referenceNo?: string | null;
   notes: string | null;
 };
 
@@ -369,6 +372,7 @@ export async function recordPayment(
         paidOn: input.paidOn,
         method: input.method,
         receiptNo: input.receiptNo,
+        referenceNo: input.referenceNo ?? null,
         notes: input.notes,
         recordedById: ctx.user.id,
       },
@@ -422,6 +426,7 @@ export async function removePayment(ctx: TenantContext, paymentId: string): Prom
 
 /** The next receipt number for this school, so the office does not invent one. */
 export async function suggestReceiptNo(ctx: TenantContext): Promise<string> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
   const rows = await ctx.db.feePayment.findMany({
     where: { receiptNo: { startsWith: "REC-" } },
     select: { receiptNo: true },
@@ -510,6 +515,7 @@ export async function readStudentFees(
         paidOn: true,
         method: true,
         receiptNo: true,
+        referenceNo: true,
         notes: true,
       },
     }),

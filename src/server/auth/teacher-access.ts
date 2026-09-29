@@ -53,7 +53,12 @@ export async function canAccessSection(
   ctx: TenantContext,
   sectionId: string,
 ): Promise<boolean> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return true;
+  // An admin reaches every section of their own school — and only that: the
+  // lookup is through the tenant-scoped client, so another school's section id
+  // is "no access" rather than a pass that later queries happen to empty out.
+  if (ctx.user.role === "SCHOOL_ADMIN") {
+    return (await ctx.db.section.count({ where: { id: sectionId } })) > 0;
+  }
   if (ctx.user.role !== "TEACHER") return false;
 
   const teacher = await ctx.db.teacher.findFirst({

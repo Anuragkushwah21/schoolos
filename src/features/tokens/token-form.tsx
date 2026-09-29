@@ -1,6 +1,7 @@
 "use client";
 
 import { ActionForm } from "@/components/forms/action-form";
+import { addDays, today, toDateInput } from "@/lib/dates";
 import { FieldRow, SelectField, SubmitButton, TextField } from "@/components/forms/fields";
 
 import { createApiTokenAction } from "./actions";
@@ -23,7 +24,13 @@ export function CreateTokenForm() {
         />
       </FieldRow>
       <FieldRow>
-        <TextField name="expiresAt" label="Expires" type="date" hint="Leave blank for no expiry." />
+        <TextField
+          name="expiresAt"
+          label="Expires"
+          type="date"
+          min={toDateInput(addDays(today(), 1))}
+          hint="Leave blank for no expiry."
+        />
         <div />
       </FieldRow>
       <div>

@@ -1,8 +1,15 @@
 import "server-only";
 
-import { addDays, today } from "@/lib/dates";
+import { formatSpan } from "@/lib/calendar";
+import { addDays, formatDate, today } from "@/lib/dates";
 import { attendedShare, emptyCounts } from "@/server/attendance/service";
 import type { TenantContext } from "@/server/auth/current-user";
+import { upcomingHolidays } from "@/server/calendar/holidays";
+import { meetingAlerts } from "@/server/communication/meetings";
+import { visibleNoticeWhere } from "@/server/communication/notices";
+import { parentSupportAlerts } from "@/server/support/service";
+import { VISIBLE_PAPER } from "@/server/exams/service";
+import { readStudentFees } from "@/server/finance/fees";
 import { LOW_ATTENDANCE_THRESHOLD } from "@/server/parent/child";
 import { listMyChildren } from "@/server/parent/access";
 
@@ -25,9 +32,15 @@ export const ALERT_KINDS = [
   "absent-today",
   "low-attendance",
   "homework-due",
+  "new-homework",
   "new-result",
   "new-remark",
   "notice",
+  "fee-due",
+  "holiday",
+  "results-published",
+  "meeting",
+  "support",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -49,6 +62,16 @@ export type ParentAlert = {
 const RESULT_WINDOW_DAYS = 7;
 const REMARK_WINDOW_DAYS = 7;
 const NOTICE_WINDOW_DAYS = 7;
+/** Homework set this recently is "new", even if it is not due for a while. */
+const NEW_HOMEWORK_DAYS = 2;
+/** Fees falling due this soon are worth a reminder before they are late. */
+const FEE_REMINDER_DAYS = 7;
+/** Holidays starting this soon are announced on the dashboard. */
+const HOLIDAY_NOTICE_DAYS = 14;
+
+function rupeesText(minor: number): string {
+  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(minor / 100);
+}
 
 export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]> {
   const { children } = await listMyChildren(ctx);
@@ -60,7 +83,7 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
   const sectionIds = [...new Set(placed.map((child) => child.sectionId!))];
   const nameOf = new Map(placed.map((child) => [child.id, child.name]));
 
-  const [todayMarks, sessionMarks, dueSoon, freshResults, freshRemarks, notices] = await Promise.all([
+  const [todayMarks, sessionMarks, dueSoon, freshResults, freshRemarks, notices, newHomework, holidays, fees, exams, meetings] = await Promise.all([
     ctx.db.studentAttendance.findMany({
       where: { studentId: { in: studentIds }, date: now },
       select: { studentId: true, status: true },
@@ -89,7 +112,7 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
       where: {
         studentId: { in: studentIds },
         marksObtained: { not: null },
-        assessment: { date: { gte: addDays(now, -RESULT_WINDOW_DAYS) } },
+        assessment: { date: { gte: addDays(now, -RESULT_WINDOW_DAYS) }, ...VISIBLE_PAPER },
       },
       orderBy: { assessment: { date: "desc" } },
       take: 10,
@@ -118,15 +141,34 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
     ctx.db.notice.findMany({
       where: {
         status: "PUBLISHED",
-        audience: { in: ["ALL", "PARENTS"] },
         OR: [{ publishAt: null }, { publishAt: { lte: new Date() } }],
-        AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gte: new Date() } }] }],
+        AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gte: now } }] }, await visibleNoticeWhere(ctx)],
         updatedAt: { gte: addDays(now, -NOTICE_WINDOW_DAYS) },
       },
       orderBy: { publishAt: "desc" },
       take: 5,
       select: { id: true, title: true, publishAt: true, createdAt: true },
     }),
+    ctx.db.homework.findMany({
+      where: {
+        sectionId: { in: sectionIds },
+        status: "PUBLISHED",
+        createdAt: { gte: addDays(now, -NEW_HOMEWORK_DAYS) },
+        dueOn: { gt: addDays(now, 1) },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, title: true, dueOn: true, createdAt: true, sectionId: true, subject: { select: { name: true } } },
+    }),
+    upcomingHolidays(ctx, 5),
+    // Each child's own fee account, read after `listMyChildren` has resolved
+    // them through the guardian link — never another family's.
+    Promise.all(placed.map(async (child) => ({ child, account: await readStudentFees(ctx, child.id) }))),
+    ctx.db.exam.findMany({
+      where: { sectionId: { in: sectionIds }, status: "PUBLISHED", publishedAt: { gte: addDays(now, -RESULT_WINDOW_DAYS) } },
+      select: { id: true, name: true, sectionId: true, publishedAt: true },
+    }),
+    meetingAlerts(ctx, "/parent/meetings"),
   ]);
 
   const alerts: ParentAlert[] = [];
@@ -223,6 +265,87 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
     });
   }
 
+  // --- a parent-teacher meeting coming up ----------------------------------
+  // --- meetings the school has invited this family to ------------------------
+  for (const meeting of meetings) alerts.push({ ...meeting, childName: null });
+
+  // --- exam results just published -----------------------------------------
+  for (const exam of exams) {
+    for (const child of placed.filter((c) => c.sectionId === exam.sectionId)) {
+      alerts.push({
+        kind: "results-published",
+        childId: child.id,
+        childName: child.name,
+        title: `${exam.name} results are out for ${child.name}`,
+        detail: "The report card is on the results page.",
+        at: exam.publishedAt ?? now,
+        href: `/parent/children/${child.id}/results`,
+        tone: "info",
+      });
+    }
+  }
+
+  // --- homework just set (due later than tomorrow; sooner is "homework-due") --
+  for (const work of newHomework) {
+    for (const child of placed.filter((c) => c.sectionId === work.sectionId)) {
+      alerts.push({
+        kind: "new-homework",
+        childId: child.id,
+        childName: child.name,
+        title: `New homework — ${work.subject.name}: ${work.title}`,
+        detail: `Set for ${child.name}, due ${formatDate(work.dueOn)}.`,
+        at: work.createdAt,
+        href: `/parent/children/${child.id}/homework`,
+        tone: "info",
+      });
+    }
+  }
+
+  // --- fees overdue, or due within the week ---------------------------------
+  for (const { child, account } of fees) {
+    const { summary } = account;
+    if (summary.pendingMinor <= 0 || !summary.dueOn) continue;
+    if (summary.overdue) {
+      alerts.push({
+        kind: "fee-due",
+        childId: child.id,
+        childName: child.name,
+        title: `${rupeesText(summary.pendingMinor)} fees overdue for ${child.name}`,
+        detail: `Was due on ${formatDate(summary.dueOn)}. Please contact the school office.`,
+        at: summary.dueOn,
+        href: `/parent/children/${child.id}/fees`,
+        tone: "warning",
+      });
+    } else if (summary.dueOn <= addDays(now, FEE_REMINDER_DAYS)) {
+      alerts.push({
+        kind: "fee-due",
+        childId: child.id,
+        childName: child.name,
+        title: `${rupeesText(summary.pendingMinor)} fees due for ${child.name}`,
+        detail: `Due on ${formatDate(summary.dueOn)}.`,
+        at: summary.dueOn,
+        href: `/parent/children/${child.id}/fees`,
+        tone: "info",
+      });
+    }
+  }
+
+  // --- holidays coming up ---------------------------------------------------
+  for (const holiday of holidays) {
+    if (holiday.startDate > addDays(now, HOLIDAY_NOTICE_DAYS)) continue;
+    const running = holiday.startDate <= now;
+    alerts.push({
+      kind: "holiday",
+      childId: null,
+      childName: null,
+      title: running ? `School closed: ${holiday.title}` : `Holiday: ${holiday.title}`,
+      detail: `${formatSpan(holiday.startDate, holiday.endDate)}. No classes or attendance.`,
+      at: holiday.startDate,
+      href: "/parent/holidays",
+      tone: "info",
+    });
+  }
+
   // --- school notices -------------------------------------------------------
   for (const notice of notices) {
     alerts.push({
@@ -238,6 +361,9 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
   }
 
   const TONE_ORDER = { critical: 0, warning: 1, info: 2 } as const;
+  // --- support: concerns reviewed and help arranged ----------------------------
+  alerts.push(...(await parentSupportAlerts(ctx, placed)));
+
   return alerts.sort(
     (a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || b.at.getTime() - a.at.getTime(),
   );

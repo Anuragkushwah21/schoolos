@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { ChildSwitcher, ChildTabs } from "@/features/parent/child-nav";
 import { FEE_STATUS_LABEL, FEE_STATUS_TONE, rupees } from "@/features/finance/money";
+import { ReceiptLinks } from "@/features/finance/receipt-links";
 import { formatDate } from "@/lib/dates";
 import { humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
@@ -171,7 +172,7 @@ export default async function ChildFeesPage(
                             {payment.notes ? ` · ${payment.notes}` : ""}
                           </span>
                         </span>
-                        <StatusBadge status="PAID" label="Paid" tone="positive" />
+                        <ReceiptLinks paymentId={payment.id} receiptNo={payment.receiptNo} />
                       </li>
                     ))}
                   </ul>

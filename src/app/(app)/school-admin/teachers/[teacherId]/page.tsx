@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { ActionButton } from "@/components/forms/action-button";
 import { PageHeader } from "@/components/shared/page-header";
+import { LifecyclePanel } from "@/features/people/lifecycle-panel";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,7 +19,7 @@ import { rupees, toRupeeInput } from "@/features/finance/money";
 import { formatDate, formatDateTime, toDateInput, today } from "@/lib/dates";
 import { humanize, pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
-import { listSubjects, sectionLabel, sectionOptions } from "@/server/academics/structure";
+import { classSectionOptions, listSubjects, sectionLabel } from "@/server/academics/structure";
 import { orNotFound } from "@/server/page-helpers";
 import { getTeacherSalary } from "@/server/finance/salary";
 import { getTeacherProfile } from "@/server/people/teachers";
@@ -32,7 +33,7 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
   const { teacher, session, periodsPerWeek } = await orNotFound(getTeacherProfile(ctx, teacherId));
   const [subjects, sections, salary] = await Promise.all([
     listSubjects(ctx, { activeOnly: true }),
-    session ? sectionOptions(ctx, session.id) : Promise.resolve([]),
+    session ? classSectionOptions(ctx, session.id) : Promise.resolve([]),
     getTeacherSalary(ctx, teacherId),
   ]);
 
@@ -64,16 +65,16 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
             <ActionButton
               action={deleteTeacherAction}
               fields={{ teacherId: teacher.id }}
-              variant="destructive"
+              variant="ghost"
               size="default"
               confirm={{
                 title: `Delete ${teacher.firstName} ${teacher.lastName}?`,
                 description:
-                  "This erases the staff record and the sign-in together. It only works for someone added by mistake — once they have taken a register, taught a period or set homework, the delete is refused and you should set their status to Inactive instead.",
+                  "This erases the staff record and the sign-in together. It only works for someone added by mistake — once they have taken a register, taught a period or set homework, the delete is refused and you should use Change status (for example Resigned) instead.",
                 confirmLabel: "Delete",
               }}
             >
-              Delete
+              Delete (added by mistake)
             </ActionButton>
           </>
         }
@@ -142,7 +143,7 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
                   sections={sections}
                 />
               ) : (
-                <p className="text-muted-foreground text-sm">Create sections for the current session to assign subjects.</p>
+                <p className="text-muted-foreground text-sm">Add a class under Academics, or set a current session, to assign subjects.</p>
               )}
             </CardContent>
           </Card>
@@ -163,6 +164,7 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
         </div>
 
         <div className="flex flex-col gap-6">
+          <LifecyclePanel ctx={ctx} person="TEACHER" personId={teacher.id} />
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
               <div>

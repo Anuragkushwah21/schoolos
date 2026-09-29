@@ -3,19 +3,30 @@
 import { z } from "zod";
 
 import { type ActionResult, parseFormData, successResult } from "@/lib/action-result";
+import { ValidationError } from "@/lib/errors";
 import {
   activitySchema,
+  addHomeworkResourceSchema,
   homeworkSchema,
   lessonMaterialSchema,
   lessonPlanSchema,
+  parseHomeworkResources,
   remarkEditSchema,
   remarkSchema,
+  updateHomeworkResourceSchema,
 } from "@/lib/validation/classwork";
 import { id } from "@/lib/validation/common";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import { recordActivity } from "@/server/classwork/activities";
 import { addLessonMaterial, deleteLessonMaterial, planLesson } from "@/server/classwork/lessons";
-import { createHomework, deleteHomework, updateHomework } from "@/server/classwork/homework";
+import {
+  addHomeworkResource,
+  createHomework,
+  deleteHomework,
+  removeHomeworkResource,
+  updateHomework,
+  updateHomeworkResource,
+} from "@/server/classwork/homework";
 import { addRemark, deleteRemark, updateRemark } from "@/server/classwork/remarks";
 import { performAction } from "@/server/perform-action";
 
@@ -91,15 +102,35 @@ export async function saveHomeworkAction(_p: Result, formData: FormData): Promis
   return performAction(
     async () => {
       const ctx = await requireTenantForAction("TEACHER");
-      const { homeworkId, ...input } = parseFormData(homeworkSchema, formData);
+      // Resource rows are checked alongside the homework, so the teacher sees
+      // every problem at once rather than one per submit.
+      const { resources, fieldErrors } = parseHomeworkResources(formData);
+      let parsed;
+      try {
+        parsed = parseFormData(homeworkSchema, formData);
+      } catch (error) {
+        if (error instanceof ValidationError) {
+          throw new ValidationError(error.message, { ...error.fieldErrors, ...fieldErrors });
+        }
+        throw error;
+      }
+      if (Object.keys(fieldErrors).length) {
+        throw new ValidationError("Please correct the highlighted resources.", fieldErrors);
+      }
+      const { homeworkId, ...input } = parsed;
 
       if (homeworkId) {
+        // Resources on existing homework are managed one at a time on its page.
         await updateHomework(ctx, homeworkId, input);
         return successResult("Homework updated.");
       }
 
-      await createHomework(ctx, input);
-      return successResult("Homework set.");
+      await createHomework(ctx, input, resources);
+      return successResult(
+        resources.length
+          ? `Homework set with ${resources.length} resource${resources.length === 1 ? "" : "s"}.`
+          : "Homework set.",
+      );
     },
     { revalidate: CLASSWORK_PAGES, redirectTo: "/teacher/homework" },
   );
@@ -148,6 +179,42 @@ export async function deleteRemarkAction(_p: Result, formData: FormData): Promis
       const { remarkId } = parseFormData(z.object({ remarkId: id }), formData);
       await deleteRemark(ctx, remarkId);
       return successResult("Remark deleted.");
+    },
+    { revalidate: CLASSWORK_PAGES },
+  );
+}
+
+export async function addHomeworkResourceAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("TEACHER");
+      const { homeworkId, ...input } = parseFormData(addHomeworkResourceSchema, formData);
+      await addHomeworkResource(ctx, homeworkId, input);
+      return successResult("Resource added.");
+    },
+    { revalidate: CLASSWORK_PAGES },
+  );
+}
+
+export async function updateHomeworkResourceAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("TEACHER");
+      const { resourceId, ...input } = parseFormData(updateHomeworkResourceSchema, formData);
+      await updateHomeworkResource(ctx, resourceId, input);
+      return successResult("Resource updated.");
+    },
+    { revalidate: CLASSWORK_PAGES },
+  );
+}
+
+export async function removeHomeworkResourceAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("TEACHER");
+      const { resourceId } = parseFormData(z.object({ resourceId: id }), formData);
+      await removeHomeworkResource(ctx, resourceId);
+      return successResult("Resource removed.");
     },
     { revalidate: CLASSWORK_PAGES },
   );

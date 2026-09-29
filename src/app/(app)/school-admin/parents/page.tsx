@@ -1,4 +1,6 @@
-import type { Metadata } from "next";
+import { HeartHandshakeIcon } from "lucide-react";
+import type { Metadata, Route } from "next";
+import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
@@ -34,15 +36,19 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
   const q = param(search.q);
+  // Families with a current child by default; those whose children have all
+  // left stay one filter away rather than cluttering the list.
+  const standingParam = param(search.standing);
+  const standing = standingParam === "ALL" ? undefined : standingParam === "NO_ACTIVE_CHILDREN" ? "NO_ACTIVE_CHILDREN" : "ACTIVE";
 
-  const { rows, total, page, pageCount } = await listParents(ctx, { q, page: pageParam(search.page) });
+  const { rows, total, page, pageCount } = await listParents(ctx, { q, standing, page: pageParam(search.page) });
 
   const multiChild = rows.filter((row) => row.childCount > 1).length;
   const withLogin = rows.filter((row) => row.hasLogin).length;
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={HeartHandshakeIcon} tone="blue"
         title="Parents"
         description="One account per family. Link a sibling to the existing parent rather than adding a second."
       />
@@ -59,6 +65,18 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
           defaultValue: q,
           placeholder: "Parent name, mobile, email — or a child's name or admission no",
         }}
+        selects={[
+          {
+            name: "standing",
+            label: "Standing",
+            defaultValue: standingParam ?? "ACTIVE",
+            options: [
+              { value: "ACTIVE", label: "With a current child" },
+              { value: "NO_ACTIVE_CHILDREN", label: "No active children" },
+              { value: "ALL", label: "All families" },
+            ],
+          },
+        ]}
       />
 
       {rows.length ? (
@@ -81,6 +99,9 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
                     {/* The name opens the family in a dialog: the fastest answer
                         to "how many children does this parent have here?" */}
                     <ParentDetailsDialog parent={parent} />
+                    <Link href={`/school-admin/parents/${parent.id}` as Route} className="text-muted-foreground block text-xs hover:underline">
+                      Profile, status &amp; login
+                    </Link>
                   </TableCell>
                   <TableCell className="tabular-nums">{parent.phone}</TableCell>
                   <TableCell className="text-muted-foreground hidden lg:table-cell">
@@ -91,8 +112,9 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
                     {parent.children.length ? (
                       <ul className="flex flex-col gap-0.5">
                         {parent.children.map((child) => (
-                          <li key={child.id} className="text-xs">
+                          <li key={child.id} className="flex flex-wrap items-center gap-1 text-xs">
                             <span className="font-medium">{child.name}</span>
+                            {child.status !== "ACTIVE" ? <StatusBadge status={child.status} /> : null}
                             <span className="text-muted-foreground">
                               {child.sectionLabel ? ` — ${child.sectionLabel}` : ""} ·{" "}
                               {humanize(child.relationship)}
@@ -105,14 +127,10 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
                     )}
                   </TableCell>
                   <TableCell>
-                    {parent.hasLogin ? (
-                      <StatusBadge
-                        status={parent.loginActive ? "ACTIVE" : "INACTIVE"}
-                        label={parent.loginActive ? "Active" : "Disabled"}
-                      />
-                    ) : (
-                      <StatusBadge status="PENDING" label="Not issued" />
-                    )}
+                    <div className="flex flex-col items-start gap-1">
+                      <StatusBadge status={parent.login} />
+                      {parent.standing !== "ACTIVE" ? <StatusBadge status={parent.standing} /> : null}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -131,7 +149,7 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
         pageCount={pageCount}
         total={total}
         basePath="/school-admin/parents"
-        params={{ q }}
+        params={{ q, standing: standingParam }}
       />
       <p className="text-muted-foreground mt-2 text-xs">
         {pluralize(total, "family", "families")} matched.

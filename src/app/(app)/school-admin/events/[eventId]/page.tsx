@@ -4,7 +4,7 @@ import { ActionButton } from "@/components/forms/action-button";
 import { PageHeader } from "@/components/shared/page-header";
 import { deleteEventAction } from "@/features/communication/actions";
 import { EventForm } from "@/features/communication/forms";
-import { minutesToTime, toDateInput } from "@/lib/dates";
+import { minutesToTime, today, toDateInput } from "@/lib/dates";
 import { requireTenant } from "@/server/auth/current-user";
 import { getEvent } from "@/server/communication/events";
 import { orNotFound } from "@/server/page-helpers";
@@ -33,6 +33,7 @@ export default async function EditEventPage(props: PageProps<"/school-admin/even
         }
       />
       <EventForm
+        minDate={toDateInput(event.date < today() ? event.date : today())}
         event={{
           id: event.id,
           title: event.title,

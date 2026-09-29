@@ -9,6 +9,7 @@ import {
   TextField,
   TextareaField,
 } from "@/components/forms/fields";
+import { today, toDateInput } from "@/lib/dates";
 
 import { acceptApplicationAction, setApplicationStatusAction, submitApplicationAction } from "./actions";
 
@@ -32,7 +33,7 @@ export function ApplicationForm({
           <TextField name="studentLastName" label="Last name" required />
         </FieldRow>
         <FieldRow>
-          <TextField name="dateOfBirth" label="Date of birth" type="date" />
+          <TextField name="dateOfBirth" label="Date of birth" type="date" max={toDateInput(today())} />
           <SelectField
             name="gender"
             label="Gender"

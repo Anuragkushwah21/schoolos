@@ -4,7 +4,11 @@ import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { monthlyAttendance } from "@/server/analytics/student";
+import { homeworkStatus, schoolNow } from "@/lib/time-status";
+import { schoolClosureOn } from "@/server/calendar/holidays";
+import { VISIBLE_PAPER } from "@/server/exams/service";
 import { readStudentFees } from "@/server/finance/fees";
+import { RESOURCE_SELECT } from "@/server/classwork/homework";
 import { type AttendanceCounts, attendedShare, emptyCounts } from "@/server/attendance/service";
 import type { TenantContext } from "@/server/auth/current-user";
 import { type StudentContext, requireStudentSelf } from "@/server/student/access";
@@ -28,12 +32,17 @@ export const LOW_ATTENDANCE_THRESHOLD = 0.75;
 
 const RECENT_DAYS = 30;
 
+// The storage key is deliberately not selected: an uploaded file is reached
+// only through the download route, by material id, after the same checks.
 const MATERIAL_SELECT = {
   id: true,
   kind: true,
   title: true,
   url: true,
   body: true,
+  description: true,
+  fileName: true,
+  fileSize: true,
 } as const;
 
 // -----------------------------------------------------------------------------
@@ -51,7 +60,7 @@ export async function getMyDay(ctx: TenantContext, date: Date = today()) {
   const me = await requireStudentSelf(ctx);
   const { placement } = me;
 
-  const [slots, recorded, attendance] = await Promise.all([
+  const [slots, recorded, attendance, closure] = await Promise.all([
     ctx.db.timetableSlot.findMany({
       where: {
         sectionId: placement.sectionId,
@@ -87,13 +96,14 @@ export async function getMyDay(ctx: TenantContext, date: Date = today()) {
       where: { studentId: me.student.id, date },
       select: { status: true, remarks: true },
     }),
+    schoolClosureOn(ctx, date),
   ]);
 
   const bySlot = new Map(recorded.map((row) => [row.timetableSlotId, row]));
 
   // Minutes since midnight in the school's own timezone, so "already finished"
   // means finished where the school is, not where the server is.
-  const nowMinutes = schoolClockMinutes();
+  const nowMinutes = schoolNow().minutes;
   const isToday = date.getTime() === today().getTime();
 
   const periods = slots.map((slot) => {
@@ -125,6 +135,8 @@ export async function getMyDay(ctx: TenantContext, date: Date = today()) {
     me,
     date,
     attendance,
+    /** A holiday or weekly off: nothing to mark, so "not marked" is not news. */
+    closure: closure ? { kind: closure.kind, label: closure.label } : null,
     periods,
     tally: {
       scheduled: periods.length,
@@ -136,18 +148,6 @@ export async function getMyDay(ctx: TenantContext, date: Date = today()) {
     /** The next period still to come, which is what a student looks for first. */
     next: periods.find((period) => period.upcoming) ?? null,
   };
-}
-
-/** Wall-clock minutes since midnight where the school is. */
-function schoolClockMinutes(now = new Date()): number {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-    timeZone: "Asia/Kolkata",
-  }).format(now);
-  const [hour, minute] = parts.split(":").map(Number);
-  return (hour ?? 0) * 60 + (minute ?? 0);
 }
 
 // -----------------------------------------------------------------------------
@@ -327,9 +327,16 @@ export async function getMyLesson(ctx: TenantContext, classSessionId: string) {
   const homework = await ctx.db.homework.findMany({
     where: {
       sectionId: me.placement.sectionId,
-      subjectId: lesson.timetableSlot.subject.id,
       status: "PUBLISHED",
-      assignedOn: { gte: addDays(lesson.date, -1), lte: addDays(lesson.date, 2) },
+      OR: [
+        // Set from this very class record…
+        { classSessionId: lesson.id },
+        // …or set separately in the same subject around the same day.
+        {
+          subjectId: lesson.timetableSlot.subject.id,
+          assignedOn: { gte: addDays(lesson.date, -1), lte: addDays(lesson.date, 2) },
+        },
+      ],
     },
     orderBy: { dueOn: "asc" },
     select: {
@@ -405,19 +412,30 @@ export async function getMyMaterials(
   return {
     me,
     subjects: await mySubjects(ctx, me),
-    materials: rows.map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      title: row.title,
-      url: row.url,
-      body: row.body,
-      createdAt: row.createdAt,
-      lessonId: row.classSession.id,
-      lessonDate: row.classSession.date,
-      lessonTopic: row.classSession.topic ?? row.classSession.plannedTopic,
-      subject: row.classSession.timetableSlot.subject.name,
-      subjectId: row.classSession.timetableSlot.subject.id,
-    })),
+    // The query only matches class materials, so `classSession` is always set;
+    // the guard keeps the type honest now that a resource may be homework's.
+    materials: rows.flatMap((row) => {
+      const lesson = row.classSession;
+      if (!lesson) return [];
+      return [
+        {
+          id: row.id,
+          kind: row.kind,
+          title: row.title,
+          url: row.url,
+          body: row.body,
+          description: row.description,
+          fileName: row.fileName,
+          fileSize: row.fileSize,
+          createdAt: row.createdAt,
+          lessonId: lesson.id,
+          lessonDate: lesson.date,
+          lessonTopic: lesson.topic ?? lesson.plannedTopic,
+          subject: lesson.timetableSlot.subject.name,
+          subjectId: lesson.timetableSlot.subject.id,
+        },
+      ];
+    }),
   };
 }
 
@@ -452,6 +470,7 @@ export async function getMyHomework(ctx: TenantContext) {
       dueOn: true,
       subject: { select: { id: true, name: true } },
       teacher: { select: { firstName: true, lastName: true } },
+      _count: { select: { resources: true } },
     },
   });
 
@@ -465,6 +484,7 @@ export async function getMyHomework(ctx: TenantContext) {
     subject: row.subject.name,
     subjectId: row.subject.id,
     teacher: fullName(row.teacher),
+    resourceCount: row._count.resources,
   }));
 
   return {
@@ -474,6 +494,57 @@ export async function getMyHomework(ctx: TenantContext) {
     dueSoon: entries.filter((e) => e.dueOn > now && e.dueOn <= soon),
     upcoming: entries.filter((e) => e.dueOn > soon),
     past: entries.filter((e) => e.dueOn < addDays(now, -14)),
+  };
+}
+
+/**
+ * One piece of homework, with its instructions and study resources.
+ *
+ * Only published work set for the student's own section in the current
+ * session. Anything else — a draft, another section, another school — is the
+ * same "not found", so an id changed in the URL reveals nothing.
+ */
+export async function getMyHomeworkItem(ctx: TenantContext, homeworkId: string) {
+  const me = await requireStudentSelf(ctx);
+  const now = today();
+
+  const row = await ctx.db.homework.findFirst({
+    where: {
+      id: homeworkId,
+      sectionId: me.placement.sectionId,
+      academicSessionId: me.placement.sessionId,
+      status: "PUBLISHED",
+    },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      instructions: true,
+      assignedOn: true,
+      dueOn: true,
+      subject: { select: { name: true } },
+      teacher: { select: { firstName: true, lastName: true } },
+      resources: { orderBy: { createdAt: "asc" }, select: RESOURCE_SELECT },
+    },
+  });
+  if (!row) throw new NotFoundError("That homework was not found.");
+
+  return {
+    me,
+    homework: {
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      instructions: row.instructions,
+      assignedOn: row.assignedOn,
+      dueOn: row.dueOn,
+      subject: row.subject.name,
+      teacher: fullName(row.teacher),
+      section: me.placement.sectionLabel,
+      // The same buckets the homework list uses.
+      state: ((status) => (status === "ASSIGNED" ? ("PENDING" as const) : status))(homeworkStatus(row.dueOn, now)),
+      resources: row.resources,
+    },
   };
 }
 
@@ -542,6 +613,8 @@ export async function getMyResults(ctx: TenantContext) {
     where: {
       sectionId: me.placement.sectionId,
       academicSessionId: me.placement.sessionId,
+      // An exam's papers stay hidden until the school publishes its results.
+      ...VISIBLE_PAPER,
     },
     orderBy: { date: "desc" },
     select: {
@@ -673,9 +746,14 @@ export async function getMyRemarks(ctx: TenantContext) {
  *
  * Starts from their own record like everything else here, so there is no id to
  * change. Read-only, and the same rows the office and their parents see.
+ * Null when the school has not turned on fees for students.
  */
 export async function getMyFees(ctx: TenantContext) {
   const me = await requireStudentSelf(ctx);
+  // Parents always see fees; students only when their school has chosen to
+  // show them. Checked here, not just by hiding the page.
+  const school = await ctx.db.school.findFirst({ select: { showFeesToStudents: true } });
+  if (!school?.showFeesToStudents) return null;
   const account = await readStudentFees(ctx, me.student.id, me.placement.sessionId);
   return { me, ...account };
 }

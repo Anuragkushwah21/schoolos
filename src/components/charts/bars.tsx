@@ -397,3 +397,110 @@ export function Sparkline({ values, ariaLabel }: { values: number[]; ariaLabel: 
     </svg>
   );
 }
+
+export type ColumnSeries = { key: string; label: string; color: string };
+
+/**
+ * Several series side by side per category — fees, expenses and salary per
+ * month. Same marks as `ColumnChart`, narrower so a group stays one band.
+ */
+export function GroupedColumnChart({
+  categories,
+  series,
+  values,
+  formatValue = (value: number) => value.toLocaleString("en-IN"),
+  width = 720,
+  emptyMessage = "Nothing to show yet.",
+}: {
+  categories: Array<{ key: string; label: string }>;
+  series: ColumnSeries[];
+  /** `values[categoryIndex][seriesIndex]`. */
+  values: number[][];
+  formatValue?: (value: number) => string;
+  width?: number;
+  emptyMessage?: string;
+}) {
+  const max = Math.max(...values.flat(), 0);
+  if (!categories.length || max === 0) return <ChartEmpty>{emptyMessage}</ChartEmpty>;
+
+  const W = width;
+  const H = 200;
+  const PAD = { top: 16, right: 10, bottom: 26, left: 64 };
+  const plotW = W - PAD.left - PAD.right;
+  const plotH = H - PAD.top - PAD.bottom;
+  const band = plotW / categories.length;
+  const bar = Math.min((band - 16) / series.length, 18);
+  const groupW = bar * series.length;
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="h-auto w-full"
+      role="img"
+      aria-label={`${series.map((s) => s.label).join(", ")} across ${categories.length} periods; highest ${formatValue(max)}.`}
+    >
+      {[0, max / 2, max].map((tick) => (
+        <g key={tick}>
+          <line
+            x1={PAD.left}
+            x2={W - PAD.right}
+            y1={PAD.top + plotH - (tick / max) * plotH}
+            y2={PAD.top + plotH - (tick / max) * plotH}
+            style={{ stroke: "var(--viz-grid)" }}
+            strokeWidth={1}
+          />
+          <text
+            x={PAD.left - 8}
+            y={PAD.top + plotH - (tick / max) * plotH + 4}
+            textAnchor="end"
+            className="fill-muted-foreground text-[11px] tabular-nums"
+          >
+            {formatValue(Math.round(tick))}
+          </text>
+        </g>
+      ))}
+
+      {categories.map((category, ci) => {
+        const x0 = PAD.left + ci * band + (band - groupW) / 2;
+        return (
+          <g key={category.key}>
+            {series.map((s, si) => {
+              const value = values[ci]?.[si] ?? 0;
+              const height = (value / max) * plotH;
+              const x = x0 + si * bar;
+              const y = PAD.top + plotH - height;
+              return (
+                <g key={s.key} className="group">
+                  <rect x={x} y={PAD.top} width={bar} height={plotH} fill="transparent" tabIndex={0}>
+                    <title>{`${category.label} · ${s.label}: ${formatValue(value)}`}</title>
+                  </rect>
+                  {value > 0 ? (
+                    <path
+                      d={barPath(x + 1, y, bar - 2, height, 3, "up")}
+                      style={{ fill: s.color }}
+                      className="transition-opacity group-hover:opacity-85"
+                    />
+                  ) : null}
+                  <Tooltip
+                    x={x + bar / 2}
+                    y={y}
+                    width={W}
+                    lines={[`${category.label} · ${s.label}`, formatValue(value)]}
+                  />
+                </g>
+              );
+            })}
+            <text
+              x={PAD.left + ci * band + band / 2}
+              y={H - 8}
+              textAnchor="middle"
+              className="fill-muted-foreground text-[10px]"
+            >
+              {category.label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}

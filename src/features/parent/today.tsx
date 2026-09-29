@@ -28,6 +28,7 @@ export function TodaysUpdate({
     date: Date;
     child: { student: { name: string }; placement: { sectionLabel: string } };
     attendance: { status: string; remarks: string | null } | null;
+    closure?: { kind: string; label: string } | null;
     periods: Array<{
       slotId: string;
       startMinute: number;
@@ -67,8 +68,16 @@ export function TodaysUpdate({
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatCard
             label="Attendance"
-            value={today.attendance ? humanize(today.attendance.status) : "Not marked"}
-            hint={today.attendance?.remarks ?? undefined}
+            value={
+              today.attendance
+                ? humanize(today.attendance.status)
+                : today.closure
+                  ? today.closure.kind === "HOLIDAY"
+                    ? "Holiday"
+                    : "Weekly off"
+                  : "Not marked"
+            }
+            hint={today.attendance?.remarks ?? today.closure?.label ?? undefined}
           />
           <StatCard label="Classes" value={tally.scheduled} hint="on the timetable" />
           <StatCard
@@ -207,12 +216,14 @@ function Panel({
  * Ordered by how much they need to act: a child absent today first, a notice
  * last. An empty list is the good outcome and says so.
  */
-export function AlertList({ alerts }: { alerts: ParentAlert[] }) {
+export type FeedAlert = Pick<ParentAlert, "title" | "detail" | "href" | "tone"> & { kind: string; childId: string | null };
+
+export function AlertList({ alerts, emptyText = "Nothing needs your attention today." }: { alerts: FeedAlert[]; emptyText?: string }) {
   if (alerts.length === 0) {
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-sm">
         <CheckIcon className="size-4 shrink-0" style={{ color: "var(--viz-good)" }} aria-hidden />
-        Nothing needs your attention today.
+        {emptyText}
       </p>
     );
   }

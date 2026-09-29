@@ -170,6 +170,13 @@ npm test
 npm run build
 ```
 
+Tenant isolation has its own suites. `tests/integration/tenant-audit.test.ts`
+builds **Alpha Public School** and **Beta Public School** (A-/B- teachers,
+students, parents, fees…) and calls the real API route handlers with each
+admin's credentials: lists, direct ids, search, dashboard totals, cross-school
+links and forged `schoolId`s. `tenant-isolation.test.ts` and `rbac.test.ts`
+cover the service layer and roles. See [`docs/AUDIT.md`](docs/AUDIT.md) §10.
+
 ## Database
 
 ```bash

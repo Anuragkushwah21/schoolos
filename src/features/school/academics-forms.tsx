@@ -1,5 +1,6 @@
 "use client";
 
+import { ActionButton } from "@/components/forms/action-button";
 import { ActionForm } from "@/components/forms/action-form";
 import {
   CheckboxField,
@@ -16,7 +17,9 @@ import {
   createSectionAction,
   createStreamAction,
   createSubjectAction,
+  updateClassAction,
   updateSectionAction,
+  setClassTeacherAction,
 } from "./academics-actions";
 
 export function AcademicSessionForm({ suggestion }: { suggestion: { name: string; startDate: string; endDate: string } }) {
@@ -78,6 +81,31 @@ export function InlineCreateForm({
       <div>
         <SubmitButton variant="outline" size="sm">
           Add
+        </SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+export function EditClassForm({ klass }: { klass: { id: string; name: string; level: number } }) {
+  return (
+    <ActionForm action={updateClassAction} className="gap-3">
+      <input type="hidden" name="classId" value={klass.id} />
+      <div className="flex flex-wrap items-start gap-3">
+        <TextField name="name" label="Class name" defaultValue={klass.name} className="min-w-40 flex-1" required />
+        <TextField
+          name="level"
+          label="Order"
+          inputMode="numeric"
+          defaultValue={klass.level}
+          className="w-24"
+          hint="Nursery −3, LKG −2, UKG −1"
+          required
+        />
+      </div>
+      <div>
+        <SubmitButton variant="outline" size="sm">
+          Save class
         </SubmitButton>
       </div>
     </ActionForm>
@@ -147,5 +175,62 @@ export function EditSectionForm({
         <SubmitButton>Save section</SubmitButton>
       </div>
     </ActionForm>
+  );
+}
+
+/**
+ * Assign, change or remove one section's class teacher.
+ *
+ * The options are the school's active teachers; the server checks the teacher
+ * and the section again, inside the admin's own school, whatever is posted.
+ */
+export function ClassTeacherControl({
+  sectionId,
+  sectionLabel,
+  current,
+  teachers,
+}: {
+  sectionId: string;
+  sectionLabel: string;
+  current: { id: string; name: string } | null;
+  teachers: Array<{ value: string; label: string }>;
+}) {
+  const choices = teachers.filter((teacher) => teacher.value !== current?.id);
+
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+      <ActionForm action={setClassTeacherAction} className="flex-1 gap-2 sm:flex-row sm:items-end">
+        <input type="hidden" name="sectionId" value={sectionId} />
+        <SelectField
+          name="teacherId"
+          label={current ? "Change to" : "Teacher"}
+          options={choices}
+          placeholder={choices.length ? "Choose a teacher" : "No other active teacher"}
+          disabled={!choices.length}
+          className="min-w-0 flex-1"
+          aria-label={`${current ? "Change" : "Assign"} class teacher for ${sectionLabel}`}
+          required
+        />
+        <SubmitButton size="sm" variant={current ? "outline" : "default"} pendingLabel="Saving…">
+          {current ? "Change Teacher" : "Assign Teacher"}
+        </SubmitButton>
+      </ActionForm>
+      {current ? (
+        <ActionButton
+          action={setClassTeacherAction}
+          fields={{ sectionId, teacherId: "" }}
+          variant="ghost"
+          pendingLabel="Removing…"
+          confirm={{
+            title: `Remove ${current.name} as class teacher of ${sectionLabel}?`,
+            description:
+              "They keep any subjects they teach this section. The change is kept in the section's class-teacher history.",
+            confirmLabel: "Remove Assignment",
+          }}
+        >
+          Remove Assignment
+        </ActionButton>
+      ) : null}
+    </div>
   );
 }

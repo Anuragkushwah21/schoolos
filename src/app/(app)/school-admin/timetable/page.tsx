@@ -1,3 +1,4 @@
+import { ClockIcon } from "lucide-react";
 import type { Metadata } from "next";
 
 import { ActionButton } from "@/components/forms/action-button";
@@ -13,7 +14,7 @@ import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession, listSubjects, sectionOptions } from "@/server/academics/structure";
 import { teacherOptions } from "@/server/people/teachers";
-import { getSectionTimetable, getTeacherTimetable } from "@/server/timetable/service";
+import { getRoomTimetable, getSectionTimetable, getTeacherTimetable, listRooms } from "@/server/timetable/service";
 
 export const metadata: Metadata = { title: "Timetable" };
 
@@ -25,32 +26,37 @@ export default async function AdminTimetablePage(props: PageProps<"/school-admin
   if (!session) {
     return (
       <>
-        <PageHeader title="Timetable" />
+        <PageHeader icon={ClockIcon} tone="blue" title="Timetable" />
         <SetupNotice title="Timetable" need="session" />
       </>
     );
   }
 
-  const [sections, teachers, subjects] = await Promise.all([
+  const [sections, teachers, subjects, rooms] = await Promise.all([
     sectionOptions(ctx, session.id),
     teacherOptions(ctx),
     listSubjects(ctx, { activeOnly: true }),
+    listRooms(ctx, session.id),
   ]);
 
   const teacherId = param(search.teacher);
   const teacher = teacherId ? teachers.find((t) => t.value === teacherId) : undefined;
-  const sectionId = teacher ? undefined : (param(search.section) ?? sections[0]?.value);
+  const roomParam = param(search.room);
+  const room = !teacher && roomParam ? rooms.find((r) => r.toLowerCase() === roomParam.toLowerCase()) : undefined;
+  const sectionId = teacher || room ? undefined : (param(search.section) ?? sections[0]?.value);
   const section = sections.find((s) => s.value === sectionId);
 
   const slots = teacher
     ? await getTeacherTimetable(ctx, teacher.value, session.id)
-    : section
-      ? await getSectionTimetable(ctx, section.value, session.id)
-      : [];
+    : room
+      ? await getRoomTimetable(ctx, room, session.id)
+      : section
+        ? await getSectionTimetable(ctx, section.value, session.id)
+        : [];
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={ClockIcon} tone="blue"
         title="Timetable"
         description={`Weekly periods for ${session.name}. ${pluralize(slots.length, "period")} shown.`}
       />
@@ -66,6 +72,12 @@ export default async function AdminTimetablePage(props: PageProps<"/school-admin
             { name: "teacher", label: "Teacher", defaultValue: teacher?.value, allLabel: "View by teacher…", options: teachers },
           ]}
         />
+        {rooms.length ? (
+          <FilterBar
+            action="/school-admin/timetable"
+            selects={[{ name: "room", label: "Room", defaultValue: room, allLabel: "View by room…", options: rooms.map((value) => ({ value, label: value })) }]}
+          />
+        ) : null}
       </div>
 
       {!sections.length ? (
@@ -75,7 +87,7 @@ export default async function AdminTimetablePage(props: PageProps<"/school-admin
       ) : (
         <div className="flex flex-col gap-6">
           <div>
-            <h2 className="mb-3 font-semibold">{teacher ? teacher.label : section?.label}</h2>
+            <h2 className="mb-3 font-semibold">{teacher ? teacher.label : room ? `Room ${room}` : section?.label}</h2>
             <TimetableGrid
               slots={slots.map((slot) => ({
                 id: slot.id,

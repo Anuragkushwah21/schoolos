@@ -11,6 +11,7 @@ export const GET = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }
     sectionId: query.section,
     classId: query.class,
     status: query.status,
+    gender: query.gender,
     page: query.page,
   });
   return apiSuccess(rows, { meta: { page, pageCount, total } });

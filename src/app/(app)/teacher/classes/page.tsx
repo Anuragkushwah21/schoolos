@@ -10,6 +10,8 @@ import { pluralize } from "@/lib/format";
 import { NoSessionNotice } from "@/components/shared/no-session-notice";
 import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession } from "@/server/academics/structure";
+import { schoolClosureOn } from "@/server/calendar/holidays";
+import { today } from "@/lib/dates";
 import { getMyClasses } from "@/server/people/teacher-self";
 
 export const metadata: Metadata = { title: "My classes" };
@@ -25,7 +27,7 @@ export default async function TeacherClassesPage() {
   const ctx = await requireTenant("TEACHER");
   if (!(await getCurrentSession(ctx))) return <NoSessionNotice title="My classes" />;
 
-  const classes = await getMyClasses(ctx);
+  const [classes, closedToday] = await Promise.all([getMyClasses(ctx), schoolClosureOn(ctx, today())]);
 
   if (classes.length === 0) {
     return (
@@ -46,9 +48,11 @@ export default async function TeacherClassesPage() {
       <PageHeader
         title="My classes"
         description={
-          pending
-            ? `${pluralize(pending, "register")} still to mark today.`
-            : "Every register is marked today."
+          closedToday
+            ? `${closedToday.label} — no register is needed today.`
+            : pending
+              ? `${pluralize(pending, "register")} still to mark today.`
+              : "Every register is marked today."
         }
       />
 

@@ -1,10 +1,13 @@
 import { z } from "zod";
 
+import { EMPLOYEE_LIFECYCLE, STUDENT_LIFECYCLE } from "@/lib/validation/lifecycle";
+
 import {
   checkbox,
   id,
   optionalDate,
   optionalEmail,
+  optionalPastDate,
   optionalEnum,
   optionalId,
   optionalInt,
@@ -26,8 +29,9 @@ import {
 
 export const GENDERS = ["MALE", "FEMALE", "OTHER"] as const;
 export const RELATIONSHIPS = ["FATHER", "MOTHER", "GUARDIAN"] as const;
-export const STUDENT_STATUSES = ["ACTIVE", "INACTIVE", "TRANSFERRED", "GRADUATED"] as const;
-export const TEACHER_STATUSES = ["ACTIVE", "INACTIVE", "ON_LEAVE"] as const;
+/** Full lifecycles; see `lib/validation/lifecycle.ts` for which count as current. */
+export const STUDENT_STATUSES = STUDENT_LIFECYCLE;
+export const TEACHER_STATUSES = EMPLOYEE_LIFECYCLE;
 
 // -----------------------------------------------------------------------------
 // Academic structure
@@ -62,6 +66,16 @@ export const updateSectionSchema = z.object({
   classTeacherId: optionalId,
 });
 
+/**
+ * Assign or change a section's class teacher; an empty `teacherId` removes it.
+ * No `schoolId`: both ids are resolved inside the admin's own school.
+ */
+export const classTeacherSchema = z.object({
+  sectionId: id,
+  // `null` from the API and "" from the form both mean "remove".
+  teacherId: z.preprocess((value) => (value === null ? undefined : value), optionalId),
+});
+
 export const subjectSchema = z.object({
   name: requiredText("a subject name", 60),
   code: z
@@ -82,6 +96,8 @@ export const classSchema = z.object({
   level: z.coerce.number().int().min(-5).max(20),
 });
 
+export const updateClassSchema = classSchema.extend({ classId: id });
+
 // -----------------------------------------------------------------------------
 // People
 // -----------------------------------------------------------------------------
@@ -95,7 +111,7 @@ const personalFields = {
 export const studentFields = {
   ...personalFields,
   admissionNumber: optionalText(30),
-  dateOfBirth: optionalDate,
+  dateOfBirth: optionalPastDate("A date of birth"),
   admissionDate: optionalDate,
   bloodGroup: optionalText(5),
   addressLine: optionalText(200),
@@ -151,7 +167,8 @@ export const updateStudentSchema = z.object({
   studentId: id,
   ...studentFields,
   admissionNumber: requiredText("an admission number", 30),
-  status: z.enum(STUDENT_STATUSES),
+  /** Optional: status normally changes through "Change status", which records a date and reason. */
+  status: z.enum(STUDENT_STATUSES).optional(),
 });
 
 export type UpdateStudentInput = z.infer<typeof updateStudentSchema>;
@@ -215,7 +232,7 @@ export const teacherFields = {
   qualification: optionalText(120),
   /** What the school calls the post — "Senior Teacher", "Head of Science". */
   designation: optionalText(80),
-  dateOfBirth: optionalDate,
+  dateOfBirth: optionalPastDate("A date of birth"),
   addressLine: optionalText(200),
   city: optionalText(80),
   state: optionalText(80),
@@ -239,7 +256,8 @@ export const updateTeacherSchema = z.object({
    * otherwise lock a teacher out of the school for good.
    */
   email: requiredEmail,
-  status: z.enum(TEACHER_STATUSES),
+  /** Optional: status normally changes through "Change status", which records a date and reason. */
+  status: z.enum(TEACHER_STATUSES).optional(),
 });
 
 export type UpdateTeacherInput = z.infer<typeof updateTeacherSchema>;
@@ -320,7 +338,54 @@ export const paymentSchema = z.object({
   paidOn: requiredDate("the date it was paid"),
   method: z.enum(PAYMENT_METHODS),
   receiptNo: requiredText("a receipt number", 40),
+  /** Cheque number, UPI or bank transaction id. */
+  referenceNo: optionalText(60),
   notes: optionalText(200),
+});
+
+/** What a school prints on its fee receipts, beyond its profile. */
+export const receiptSettingsSchema = z.object({
+  receiptHeaderNote: optionalText(200),
+  receiptFooterNote: optionalText(400),
+  showFeesToStudents: checkbox,
+});
+
+export type ReceiptSettingsInput = z.infer<typeof receiptSettingsSchema>;
+
+export const EXPENSE_CATEGORY_VALUES = [
+  "ELECTRICITY",
+  "RENT",
+  "STATIONERY",
+  "MAINTENANCE",
+  "TRANSPORT",
+  "EVENTS",
+  "EQUIPMENT",
+  "INTERNET",
+  "OTHER",
+] as const;
+
+export const expenseSchema = z.object({
+  category: z.enum(EXPENSE_CATEGORY_VALUES, { error: "Choose a category" }),
+  description: requiredText("what it was for", 160),
+  amountMinor: rupees("an amount", { min: 1 }),
+  spentOn: requiredDate("the date it was spent"),
+  method: z.enum(PAYMENT_METHODS),
+  reference: optionalText(60),
+  notes: optionalText(300),
+});
+
+export const salaryPaymentSchema = z.object({
+  teacherId: id,
+  amountMinor: rupees("an amount", { min: 1 }),
+  paidOn: requiredDate("the date it was paid"),
+  // An `<input type="month">` posts `YYYY-MM`; the first of that month is stored.
+  forMonth: z.preprocess(
+    (value) => (typeof value === "string" && /^\d{4}-\d{2}$/.test(value) ? `${value}-01` : value),
+    requiredDate("the month it is for"),
+  ),
+  method: z.enum(PAYMENT_METHODS),
+  reference: optionalText(60),
+  notes: optionalText(300),
 });
 
 /** Linking an existing parent to another child. */

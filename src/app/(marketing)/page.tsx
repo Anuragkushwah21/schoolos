@@ -5,7 +5,7 @@ import {
   Faq,
   Features,
   Hero,
-  OfferBand,
+  OffersSection,
   Pricing,
   Roles,
   Security,
@@ -40,12 +40,12 @@ export const dynamic = "force-dynamic";
 export default async function HomePage() {
   // Degrades to an empty catalogue rather than a 500 — see the note on
   // `getHomepageCatalogue`.
-  const { offers, plans } = await getHomepageCatalogue();
+  const { offers, upcoming, plans } = await getHomepageCatalogue();
 
   return (
     <main className="flex flex-1 flex-col">
       <Hero offer={offers[0]} />
-      <OfferBand offers={offers} />
+      <OffersSection offers={offers} upcoming={upcoming} />
       <Features />
       <Roles />
       <Steps />

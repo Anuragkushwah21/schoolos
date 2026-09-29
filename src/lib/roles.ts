@@ -16,6 +16,7 @@ export const ROLE_HOME: Record<UserRole, Route> = {
   TEACHER: "/teacher/dashboard",
   STUDENT: "/student/dashboard",
   PARENT: "/parent/dashboard",
+  NON_TEACHING_STAFF: "/staff/dashboard",
 };
 
 export const ROLE_LABEL: Record<UserRole, string> = {
@@ -24,6 +25,7 @@ export const ROLE_LABEL: Record<UserRole, string> = {
   TEACHER: "Teacher",
   STUDENT: "Student",
   PARENT: "Parent",
+  NON_TEACHING_STAFF: "Staff",
 };
 
 /** Where a user lands after signing in, and after hitting a bare `/`. */
@@ -34,7 +36,7 @@ export function roleHomePath(role: UserRole): Route {
 /**
  * Where "My profile" goes for each role.
  *
- * Three roles have a profile page of their own because they have a record the
+ * Four roles have a profile page of their own because they have a record the
  * school holds about them — a staff record, a guardian record, an enrolment.
  * The two administrator roles do not: what they would look at is their own
  * login, which is `/account` and is shared by every role. Pointing them there
@@ -47,6 +49,7 @@ export const ROLE_PROFILE: Record<UserRole, Route> = {
   TEACHER: "/teacher/profile",
   STUDENT: "/student/profile",
   PARENT: "/parent/profile",
+  NON_TEACHING_STAFF: "/staff/profile",
 };
 
 export function roleProfilePath(role: UserRole): Route {
@@ -59,6 +62,7 @@ export const TENANT_ROLES: readonly UserRole[] = [
   "TEACHER",
   "STUDENT",
   "PARENT",
+  "NON_TEACHING_STAFF",
 ];
 
 export function isTenantRole(role: UserRole): boolean {
@@ -70,7 +74,7 @@ export function isTenantRole(role: UserRole): boolean {
  * redirect; the real check still happens server-side on every request.
  *
  * Deliberately separate from `ROLE_HOME`: a role's landing page may sit
- * deeper than the area it owns. The teacher's does — everything under
+ * deeper than the area it owns. The teacher's and the staff member's do — everything under
  * `/teacher` is theirs, and `/teacher/dashboard` is where they start — and
  * aliasing the two would make the prefix `/teacher/dashboard`, which matches
  * none of their other pages.
@@ -81,4 +85,5 @@ export const ROLE_PATH_PREFIX: Record<UserRole, string> = {
   TEACHER: "/teacher",
   STUDENT: "/student",
   PARENT: "/parent",
+  NON_TEACHING_STAFF: "/staff",
 };

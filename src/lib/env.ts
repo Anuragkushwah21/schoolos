@@ -42,6 +42,21 @@ const envSchema = z.object({
    */
   RESEND_API_KEY: z.string().trim().min(1).optional(),
 
+  /**
+   * Where uploaded lesson documents are kept. Defaults to `./uploads`, which is
+   * gitignored. Never inside `public/`: files are served only through the
+   * authorized download route.
+   */
+  UPLOAD_DIR: z.string().trim().min(1).optional(),
+
+  /**
+   * The platform owner's public contact details, shown on /contact. Optional:
+   * without them the page shows only the enquiry form. New enquiries are also
+   * emailed to PLATFORM_CONTACT_EMAIL when it is set.
+   */
+  PLATFORM_CONTACT_EMAIL: z.email().optional(),
+  PLATFORM_CONTACT_PHONE: z.string().trim().min(5).max(30).optional(),
+
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),

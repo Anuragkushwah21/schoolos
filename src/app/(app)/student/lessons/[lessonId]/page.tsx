@@ -4,9 +4,9 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { MATERIAL_KIND_LABEL, MaterialActions } from "@/features/student/material-actions";
 import { StudentTabs } from "@/features/student/nav";
 import { formatDate, formatMinutes } from "@/lib/dates";
-import { humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
 import { getMyLesson } from "@/server/student/me";
@@ -49,10 +49,10 @@ export default async function StudentLessonPage(
 
       <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
         <div className="flex flex-col gap-6">
-          {lesson.preparation && !lesson.taught ? (
+          {lesson.preparation ? (
             <Card>
               <CardHeader>
-                <CardTitle>Prepare before this class</CardTitle>
+                <CardTitle>{lesson.taught ? "Prepare for the next class" : "Prepare before this class"}</CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm whitespace-pre-line">{lesson.preparation}</p>
@@ -110,29 +110,25 @@ export default async function StudentLessonPage(
                         <p className="text-sm font-medium">{material.title}</p>
                         <StatusBadge
                           status="INACTIVE"
-                          label={humanize(material.kind)}
+                          label={MATERIAL_KIND_LABEL[material.kind] ?? material.kind}
                           tone="neutral"
                         />
                       </div>
                       {material.body ? (
                         <p className="mt-2 text-sm whitespace-pre-line">{material.body}</p>
                       ) : null}
-                      {material.url ? (
-                        <a
-                          href={material.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary mt-2 inline-block text-sm hover:underline"
-                        >
-                          Open {humanize(material.kind).toLowerCase()} ↗
-                        </a>
+                      {material.description ? (
+                        <p className="text-muted-foreground mt-2 text-sm">{material.description}</p>
                       ) : null}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <MaterialActions material={material} />
+                      </div>
                     </li>
                   ))}
                 </ul>
               ) : (
                 <p className="text-muted-foreground text-sm">
-                  Notes, links and practice work your teacher attaches appear here.
+                  Notes, PDFs, videos and links your teacher attaches appear here.
                 </p>
               )}
             </CardContent>

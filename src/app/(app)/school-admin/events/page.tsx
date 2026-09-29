@@ -1,9 +1,11 @@
+import { CalendarDaysIcon, PlusIcon } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -13,7 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDate, formatMinutes, today } from "@/lib/dates";
+import { formatDate, formatMinutes } from "@/lib/dates";
+import { schoolNow, sessionStatus } from "@/lib/time-status";
 import { requireTenant } from "@/server/auth/current-user";
 import { listEventsForAdmin } from "@/server/communication/events";
 
@@ -22,16 +25,19 @@ export const metadata: Metadata = { title: "Events" };
 export default async function AdminEventsPage() {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const events = await listEventsForAdmin(ctx);
-  const now = today();
+  const clock = schoolNow();
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={CalendarDaysIcon} tone="blue"
         title="Events"
         description="Published upcoming events appear on dashboards and the school website."
         actions={
           <Button asChild>
-            <Link href="/school-admin/events/new">New event</Link>
+            <Link href="/school-admin/events/new">
+              <PlusIcon aria-hidden />
+              Add event
+            </Link>
           </Button>
         }
       />
@@ -62,13 +68,10 @@ export default async function AdminEventsPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground hidden md:table-cell">{event.location ?? "—"}</TableCell>
                   <TableCell>
-                    {event.date < now ? (
-                      <StatusBadge status="COMPLETED" label="Past" />
-                    ) : event.isPublished ? (
-                      <StatusBadge status="PUBLISHED" />
-                    ) : (
-                      <StatusBadge status="DRAFT" />
-                    )}
+                    <span className="flex flex-wrap gap-1">
+                      <TimeStatusBadge status={sessionStatus(event.date, event.startMinute, event.endMinute, clock)} />
+                      {event.isPublished ? null : <StatusBadge status="DRAFT" />}
+                    </span>
                   </TableCell>
                 </TableRow>
               ))}
@@ -76,7 +79,16 @@ export default async function AdminEventsPage() {
           </Table>
         </div>
       ) : (
-        <EmptyState title="No events yet" />
+        <EmptyState
+          title="No events yet."
+          action={
+            <Button asChild>
+              <Link href="/school-admin/events/new">Add event</Link>
+            </Button>
+          }
+        >
+          Add sports day, annual function or a trip so everyone sees it on the calendar.
+        </EmptyState>
       )}
     </>
   );

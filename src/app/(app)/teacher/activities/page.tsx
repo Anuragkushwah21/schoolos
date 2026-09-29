@@ -139,6 +139,8 @@ export default async function TeacherActivitiesPage(props: PageProps<"/teacher/a
                         <span className="text-muted-foreground block text-xs">
                           {period.section}
                           {period.topic ? ` · ${period.topic}` : ""}
+                          {period.coveringFor ? ` · covering for ${period.coveringFor}` : ""}
+                          {period.coveredBy ? ` · covered by ${period.coveredBy}` : ""}
                         </span>
                       </span>
                       {period.status ? (

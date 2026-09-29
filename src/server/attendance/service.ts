@@ -8,6 +8,8 @@ import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireSectionAccess } from "@/server/auth/teacher-access";
 import { sectionLabel } from "@/server/academics/structure";
+import { describeClosure, schoolClosureOn } from "@/server/calendar/holidays";
+import { approvedLeaveOn } from "@/server/staff/leave";
 
 /**
  * Daily attendance.
@@ -16,12 +18,26 @@ import { sectionLabel } from "@/server/academics/structure";
  * for any section, a teacher only for sections they teach or are class teacher
  * of. On top of that, teachers work within a short window: they can correct
  * the last week, but rewriting last term's registers is an admin's job.
+ *
+ * Dates follow the rules of a historical record: today and earlier are
+ * allowed, a future date never is. A declared holiday is refused outright —
+ * the school was shut, so there is nothing to record and nothing that could
+ * count as an absence. A weekly off is not refused: attendance is not
+ * expected on one, but a special working Saturday can still be recorded.
  */
 
 export const TEACHER_EDIT_WINDOW_DAYS = 7;
 
 export const ATTENDANCE_STATUSES: AttendanceStatus[] = ["PRESENT", "ABSENT", "LATE", "EXCUSED"];
 export const STAFF_ATTENDANCE_STATUSES: TeacherAttendanceStatus[] = ["PRESENT", "ABSENT", "LATE", "ON_LEAVE"];
+
+/** Throws when `date` is a declared holiday. */
+async function assertNotHoliday(ctx: TenantContext, date: Date): Promise<void> {
+  const closure = await schoolClosureOn(ctx, date);
+  if (closure?.kind === "HOLIDAY") {
+    throw new AppError("VALIDATION", `${describeClosure(closure, date)} No attendance is needed.`);
+  }
+}
 
 /** Throws unless `date` is a day this user may mark for this section. */
 function assertMarkableDate(
@@ -59,7 +75,7 @@ export async function getRegister(ctx: TenantContext, sectionId: string, date: D
   });
   if (!section) throw new NotFoundError();
 
-  const [enrollments, marks] = await Promise.all([
+  const [enrollments, marks, closure] = await Promise.all([
     ctx.db.studentEnrollment.findMany({
       where: { sectionId: section.id, status: "ACTIVE", student: { status: "ACTIVE" } },
       select: {
@@ -77,6 +93,7 @@ export async function getRegister(ctx: TenantContext, sectionId: string, date: D
         markedBy: { select: { firstName: true, lastName: true } },
       },
     }),
+    schoolClosureOn(ctx, date),
   ]);
 
   const byStudent = new Map(marks.map((mark) => [mark.studentId, mark]));
@@ -109,6 +126,9 @@ export async function getRegister(ctx: TenantContext, sectionId: string, date: D
   let lockedReason: string | null = null;
   try {
     assertMarkableDate(ctx, date, section.academicSession);
+    if (closure?.kind === "HOLIDAY") {
+      throw new AppError("VALIDATION", `${describeClosure(closure, date)} No attendance is needed.`);
+    }
   } catch (error) {
     editable = false;
     lockedReason = error instanceof AppError ? error.message : null;
@@ -127,6 +147,7 @@ export async function getRegister(ctx: TenantContext, sectionId: string, date: D
       : null,
     editable,
     lockedReason,
+    closure: closure ? { kind: closure.kind, label: closure.label } : null,
   };
 }
 
@@ -156,6 +177,7 @@ export async function markAttendance(
   });
   if (!section) throw new NotFoundError();
   assertMarkableDate(ctx, input.date, section.academicSession);
+  await assertNotHoliday(ctx, input.date);
 
   if (!input.entries.length) {
     throw new ValidationError("Mark at least one student before saving.");
@@ -220,7 +242,7 @@ export async function markAttendance(
 export async function getStaffRegister(ctx: TenantContext, date: Date) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
-  const [teachers, marks] = await Promise.all([
+  const [teachers, marks, leave] = await Promise.all([
     ctx.db.teacher.findMany({
       where: { status: { in: ["ACTIVE", "ON_LEAVE"] } },
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
@@ -230,6 +252,7 @@ export async function getStaffRegister(ctx: TenantContext, date: Date) {
       where: { date },
       select: { teacherId: true, status: true, remarks: true },
     }),
+    approvedLeaveOn(ctx, date),
   ]);
 
   const byTeacher = new Map(marks.map((mark) => [mark.teacherId, mark]));
@@ -240,6 +263,8 @@ export async function getStaffRegister(ctx: TenantContext, date: Date) {
     onLeave: teacher.status === "ON_LEAVE",
     status: byTeacher.get(teacher.id)?.status ?? null,
     remarks: byTeacher.get(teacher.id)?.remarks ?? null,
+    /** Approved leave covering this day: the register pre-fills ON_LEAVE. */
+    onApprovedLeave: leave.has(teacher.id),
   }));
 }
 
@@ -252,6 +277,7 @@ export async function markStaffAttendance(
 ): Promise<{ saved: number }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   if (input.date > today()) throw new AppError("VALIDATION", "Attendance cannot be marked for a future date.");
+  await assertNotHoliday(ctx, input.date);
   if (!input.entries.length) throw new ValidationError("Mark at least one teacher before saving.");
 
   const known = new Set(
@@ -398,7 +424,7 @@ export async function schoolReport(ctx: TenantContext, academicSessionId: string
 /** Today at a glance, for the admin dashboard. */
 export async function todayOverview(ctx: TenantContext, academicSessionId: string) {
   const date = today();
-  const [sections, marked, byStatus, staff] = await Promise.all([
+  const [sections, marked, byStatus, staff, closure] = await Promise.all([
     ctx.db.section.count({ where: { academicSessionId, enrollments: { some: { status: "ACTIVE" } } } }),
     ctx.db.studentAttendance.groupBy({ by: ["sectionId"], where: { academicSessionId, date } }),
     ctx.db.studentAttendance.groupBy({
@@ -407,6 +433,7 @@ export async function todayOverview(ctx: TenantContext, academicSessionId: strin
       _count: { _all: true },
     }),
     ctx.db.teacherAttendance.groupBy({ by: ["status"], where: { date }, _count: { _all: true } }),
+    schoolClosureOn(ctx, date),
   ]);
 
   const counts = emptyCounts();
@@ -419,7 +446,16 @@ export async function todayOverview(ctx: TenantContext, academicSessionId: strin
     .reduce((sum, row) => sum + row._count._all, 0);
   const staffMarked = staff.reduce((sum, row) => sum + row._count._all, 0);
 
-  return { date, sections, sectionsMarked: marked.length, counts, staffPresent, staffMarked };
+  return {
+    date,
+    sections,
+    sectionsMarked: marked.length,
+    counts,
+    staffPresent,
+    staffMarked,
+    /** Set on a holiday or weekly off, when no register is expected. */
+    closure: closure ? { kind: closure.kind, label: closure.label } : null,
+  };
 }
 
 /** A student's own record for a session, newest first, plus totals. */

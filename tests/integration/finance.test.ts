@@ -309,9 +309,13 @@ describe("what a parent can see of fees", () => {
     ).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it("lets a student see their own fees and nobody else's", async () => {
+  it("lets a student see their own fees and nobody else's, once the school allows it", async () => {
     const { getMyFees } = await import("@/server/student/me");
-    const mine = await getMyFees(studentOf(schoolA));
+    // Off by default: parents see fees, students do not.
+    expect(await getMyFees(studentOf(schoolA))).toBeNull();
+    await prisma.school.update({ where: { id: schoolA.schoolId }, data: { showFeesToStudents: true } });
+
+    const mine = (await getMyFees(studentOf(schoolA)))!;
     expect(mine.me.student.id).toBe(schoolA.studentIds[0]);
 
     const office = await getStudentFees(adminOf(schoolA), schoolA.studentIds[0]!);
@@ -319,6 +323,7 @@ describe("what a parent can see of fees", () => {
 
     // There is no id to change: the read starts from the session.
     await expect(getMyFees(parentOf(schoolA))).rejects.toBeInstanceOf(ForbiddenError);
+    await prisma.school.update({ where: { id: schoolA.schoolId }, data: { showFeesToStudents: false } });
   });
 });
 

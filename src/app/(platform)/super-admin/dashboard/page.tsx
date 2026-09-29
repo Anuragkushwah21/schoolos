@@ -4,31 +4,38 @@ import Link from "next/link";
 import { BarChart, ColumnChart, StackedBar } from "@/components/charts/bars";
 import { ChartFigure } from "@/components/charts/chart-figure";
 import { EmptyState } from "@/components/shared/empty-state";
+import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatDateTime } from "@/lib/dates";
+import { formatDate, formatDateTime } from "@/lib/dates";
 import { formatMoney, humanize, pluralize } from "@/lib/format";
+import { param } from "@/lib/search-params";
+import { SchoolTracker } from "@/features/platform/school-tracker";
 import { requireSuperAdmin } from "@/server/auth/current-user";
 import {
   largestSchools,
   planDistribution,
   platformTotals,
   schoolGrowth,
+  schoolTracker,
   schoolsByStatus,
 } from "@/server/analytics/platform";
 import { prisma } from "@/server/db/prisma";
+import { PLATFORM_AUDIT_WHERE } from "@/server/platform/audit";
 
 export const metadata: Metadata = { title: "Platform" };
 
-export default async function PlatformDashboardPage() {
+export default async function PlatformDashboardPage(props: PageProps<"/super-admin/dashboard">) {
   // The Super Admin governs the platform and has no school, so this is the one
   // area that uses the unscoped client directly.
   const user = await requireSuperAdmin();
+  const q = param((await props.searchParams).q);
 
-  const [status, growth, plans, totals, largest, queue, recent] = await Promise.all([
+  const [tracker, status, growth, plans, totals, largest, queue, recent] = await Promise.all([
+    schoolTracker(user, { q }),
     schoolsByStatus(user),
     schoolGrowth(user, 12),
     planDistribution(user),
@@ -41,6 +48,8 @@ export default async function PlatformDashboardPage() {
       select: { id: true, name: true, city: true, state: true, status: true, createdAt: true },
     }),
     prisma.auditLog.findMany({
+      // Platform events only; a school's daily operations are not shown here.
+      where: PLATFORM_AUDIT_WHERE,
       orderBy: { createdAt: "desc" },
       take: 8,
       select: { id: true, action: true, summary: true, createdAt: true },
@@ -69,25 +78,54 @@ export default async function PlatformDashboardPage() {
         }
       />
 
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <StatCard label="Schools" value={status.total} href="/super-admin/schools" />
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard label="Total schools" value={status.total} href="/super-admin/schools" />
+        <StatCard label="Active schools" value={status.active} href="/super-admin/schools?status=ACTIVE" />
         <StatCard
-          label="Awaiting review"
+          label="Pending registrations"
           value={status.awaitingReview}
           href="/super-admin/schools?status=REVIEW"
         />
-        <StatCard label="Active" value={status.active} href="/super-admin/schools?status=ACTIVE" />
         <StatCard
-          label="Students"
-          value={totals.students.toLocaleString("en-IN")}
-          hint="across every school"
-        />
-        <StatCard
-          label="Teachers"
-          value={totals.teachers.toLocaleString("en-IN")}
-          hint={`${totals.users.toLocaleString("en-IN")} accounts in all`}
+          label="Rejected / inactive"
+          value={status.rejected + status.suspended}
+          hint={`${status.rejected} rejected · ${status.suspended} suspended or inactive`}
         />
       </div>
+
+      <section aria-labelledby="school-list-heading" className="mb-8">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 id="school-list-heading" className="text-lg font-semibold">
+              School list
+            </h2>
+            <p className="text-muted-foreground text-sm">
+              {pluralize(tracker.totals.schools, "school")} ·{" "}
+              {tracker.totals.students.toLocaleString("en-IN")} students ·{" "}
+              {tracker.totals.teachers.toLocaleString("en-IN")} teachers ·{" "}
+              {formatMoney(tracker.totals.revenueMinor)} fees collected. Click a school for the
+              owner&apos;s details.
+            </p>
+          </div>
+        </div>
+        <FilterBar
+          action="/super-admin/dashboard"
+          search={{ defaultValue: q, placeholder: "Search name, UDISE code, city…" }}
+        />
+        {tracker.rows.length ? (
+          <SchoolTracker
+            rows={tracker.rows.map((row) => ({
+              ...row,
+              joinedLabel: formatDate(row.joinedOn),
+              revenueLabel: formatMoney(row.revenueMinor),
+            }))}
+          />
+        ) : (
+          <EmptyState title={q ? "No school matches that search" : "No schools yet"}>
+            {q ? "Try another name, UDISE code or city." : "Schools appear here once they register."}
+          </EmptyState>
+        )}
+      </section>
 
       <div className="grid gap-6 xl:grid-cols-[1.45fr_1fr]">
         <div className="flex flex-col gap-6">
@@ -230,7 +268,7 @@ export default async function PlatformDashboardPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle>Recent activity</CardTitle>
+                <CardTitle>Platform activity</CardTitle>
                 <CardDescription>{pluralize(totals.liveTokens, "live API token")}.</CardDescription>
               </div>
               <Button asChild variant="ghost" size="sm">

@@ -10,6 +10,7 @@ import {
   planSchema,
   reviewSchoolSchema,
   subscriptionSchema,
+  udiseSchema,
 } from "@/lib/validation/platform";
 import { requireRoleForAction } from "@/server/auth/current-user";
 import { prisma } from "@/server/db/prisma";
@@ -21,6 +22,7 @@ import {
   markEmailVerified,
   resetSchoolAdminPassword,
   setSchoolAdminActive,
+  setSchoolUdise,
   setSubscription,
   transitionSchool,
 } from "@/server/platform/schools";
@@ -255,5 +257,20 @@ export async function updatePlanAction(
       return successResult("Plan saved.");
     },
     { revalidate: ["/super-admin/dashboard", "/"] },
+  );
+}
+
+export async function setSchoolUdiseAction(
+  _previous: ActionResult<undefined>,
+  formData: FormData,
+): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const actor = await superAdmin();
+      const { schoolId, udiseCode } = parseFormData(udiseSchema, formData);
+      await setSchoolUdise(actor, schoolId, udiseCode);
+      return successResult(udiseCode ? "UDISE code saved." : "UDISE code cleared.");
+    },
+    { revalidate: "/super-admin" },
   );
 }

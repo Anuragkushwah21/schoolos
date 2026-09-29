@@ -91,6 +91,7 @@ When an id appears in both the path and the body, **the path wins**.
 | --- | --- | --- |
 | `GET` | `/me` | anyone signed in — who you are, and how you authenticated |
 | `GET` | `/me/notices` | school roles — notices for your role, plus upcoming events |
+| `GET` | `/me/meetings` | teacher, student, parent, non-teaching staff — meetings you are invited to: `{ upcoming, past }` |
 | `GET` | `/me/timetable` | teacher, student — your own week |
 | `GET` | `/me/attendance` | student — your own record |
 | `GET` | `/me/children` | parent — your own children |
@@ -101,7 +102,7 @@ When an id appears in both the path and the body, **the path wins**.
 | `GET` | `/me/children/{studentId}/results` | parent — every assessment the class sat, with this child's mark. A null mark means they did not sit it, not zero |
 | `GET` | `/me/children/{studentId}/remarks` | parent — structured teacher observations |
 | `GET` | `/me/children/{studentId}/report` | parent — a summary assembled from source rows. `?period=day\|week\|month` |
-| `GET` | `/me/alerts` | parent — derived on each read from real rows; there is no notification table |
+| `GET` | `/me/alerts` | parent, student, teacher, non-teaching staff — derived on each read from real rows; there is no notification table |
 | `GET` | `/me/focus` | parent — what to help with at home. `?child=<studentId>` required |
 
 Every `/me/children/{studentId}` route resolves the child through the
@@ -123,7 +124,7 @@ school; there is no school id to pass, and no way to name another one.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` `POST` | `/students` | `?q=&section=&class=&status=&page=` |
+| `GET` `POST` | `/students` | `?q=&section=&class=&status=&gender=&page=` |
 | `GET` `PUT` `DELETE` | `/students/{id}`. `DELETE` erases a student admitted by mistake and answers 409 once they have a register, a remark or a result — set `status` instead |
 | `POST` | `/students/{id}/enrollments` | Place or promote; a later session keeps this year's record |
 | `POST` `DELETE` | `/students/{id}/guardians`, `/students/{id}/guardians/{linkId}` | |
@@ -158,6 +159,13 @@ school; there is no school id to pass, and no way to name another one.
 | `GET` `POST` | `/attendance?section=&date=` | admin, teacher | Today unless a date is given |
 | `GET` `POST` | `/attendance/staff?date=` | admin | |
 | `GET` | `/reports/attendance?section=&from=&to=` | admin, teacher | Without `section`, the whole school (admin only) |
+| `GET` | `/holidays?from=&to=` | everyone in the school | Holidays touching the range, or all of them |
+| `POST` | `/holidays` | admin | `title`, `startDate`, optional `endDate` (defaults to `startDate`), `description`, `clearAttendance` |
+| `GET` | `/holidays/{id}` | everyone in the school | |
+| `PUT` `DELETE` | `/holidays/{id}` | admin | |
+| `GET` | `/fee-payments/{id}/receipt` | admin, parent, student | Printable receipt data; parents only for linked children, students only their own and only when the school shows fees to students. Same receipt number on every call |
+| `GET` | `/weekly-offs` | everyone in the school | `{ "weeklyOffDays": ["SUNDAY"] }` |
+| `PUT` | `/weekly-offs` | admin | At least one day of the week must stay a working day |
 
 Marking a register:
 
@@ -179,7 +187,18 @@ Rules the server keeps, whatever the client does: no future dates; the date
 must fall inside the section's academic session; teachers may mark the last
 seven days only, while an admin may correct any day in the session; and every
 student in `entries` must be enrolled in that section — one that is not fails
-the whole save rather than being quietly skipped.
+the whole save rather than being quietly skipped. A declared holiday is
+refused outright. A weekly off is allowed (a special working day) but never
+expected, and `GET /attendance` returns a `closure` field saying which it is.
+
+Holidays: a holiday starts today or later (a running holiday keeps its start
+date when edited), the end date may not be before the start date, a single
+holiday is at most 120 days, and two holidays may not overlap. A holiday that
+has fully ended is locked: `PUT` and `DELETE` on it are refused. Declaring a holiday over
+days that already hold attendance returns `409` unless `clearAttendance` is
+`true`, in which case those marks are deleted in the same transaction — no
+attendance row ever exists on a holiday, so a holiday can never count as an
+absence.
 
 ### Communication, admissions, website
 
@@ -202,6 +221,68 @@ the whole save rather than being quietly skipped.
 Page and notice bodies are plain text with a small Markdown subset
 (`#` headings, `-` lists, `**bold**`, `[link](https://…)`). They are rendered
 as React elements and never as HTML, so markup in them is shown, not executed.
+
+### Exams and marks
+
+| Method | Path | Who | Notes |
+| --- | --- | --- | --- |
+| `GET` `POST` | `/exams` | admin | `POST` creates one exam for several sections: `{ name, sectionIds, startDate, endDate, papers: [{ subjectId, maxMarks, passMarks?, date? }] }`; all or nothing |
+| `GET` `PUT` `DELETE` | `/exams/{id}` | admin | Detail with every student's total, %, grade and result. Only drafts can be deleted |
+| `POST` | `/exams/publish` | admin | `{ examIds }` — refused if any paper has marks missing |
+| `POST` | `/exams/{id}/unpublish` | admin | Withdraw results so marks can be corrected |
+| `GET` `PUT` | `/assessments/{id}/marks` | admin, subject teacher | `PUT { entries: [{ studentId, marks, absent?, remark? }] }`; every row validated first; locked once published |
+| `GET` `POST` | `/class-tests` | teacher | The teacher's papers to mark; `POST` sets a class test for a subject they teach |
+| `GET` | `/exams/{id}/report-cards/{studentId}` | admin, parent (linked child), student (self) | Parents and students only once published |
+
+### Leave, cover, payroll
+
+| Method | Path | Who | Notes |
+| --- | --- | --- | --- |
+| `GET` `POST` | `/leave` | teacher (own), admin (all) | `POST { type, startDate, endDate, reason }` — up to 30 days back, 180 ahead, 60 days long, no overlap |
+| `GET` | `/leave/{id}` | admin | With the periods it affects |
+| `POST` | `/leave/{id}/cancel` | teacher | Pending, or approved and not started |
+| `POST` | `/leave/decide` | admin | `{ leaveIds, decision, note? }` — a note is required to reject; approval fills the staff register |
+| `GET` `POST` | `/cover?date=` | admin | Absent teachers' periods and who is free; `POST { timetableSlotId, date, teacherId }` refuses clashes |
+| `DELETE` | `/cover/{classSessionId}` | admin | |
+| `GET` `POST` | `/payroll?month=YYYY-MM` | admin | `POST { month, paidOn, method, reference?, entries: [{ teacherId, amountMinor }] }` — nobody is paid twice |
+
+### Students in bulk
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `POST` | `/students/promote` | `{ fromSessionId, toSectionId, studentIds }` — new placement in the later session, old one closed as COMPLETED |
+| `POST` | `/students/bulk-section` | `{ toSectionId, studentIds }` |
+| `POST` | `/students/bulk-status` | `{ status, studentIds }` — leaving students lose their login |
+| `POST` | `/students/import` | `{ csv }` — the import template; nothing is saved unless every row is valid (422 lists them) |
+
+### Communication
+
+| Method | Path | Who | Notes |
+| --- | --- | --- | --- |
+| `GET` `POST` | `/notices` | admin | Notices now take `scope` (`SCHOOL`, `CLASS`, `SECTION`, `STUDENTS`) with `classId`, `sectionId` or `studentAdmissionNumbers` |
+| `GET` | `/me/alerts` | parent, student, teacher, non-teaching staff | Derived alerts: absence, homework, results, fees, holidays, meetings, leave, cover, marks due |
+| `GET` `POST` | `/meetings` | admin | `?q=&status=UPCOMING\|ONGOING\|COMPLETED\|CANCELLED&type=PTM\|GENERAL&page=`. `POST { title, date, startMinute: "HH:MM", endMinute?, type?, description?, location?, meetingLink?, audiences, scope?, sectionIds?, teacherIds?, staffIds?, studentAdmissionNumbers? }` |
+| `GET` `PUT` `DELETE` | `/meetings/{id}` | admin | `PUT` only while the meeting is upcoming; `DELETE` only once it is cancelled |
+| `POST` | `/meetings/{id}/cancel` | admin | `{ reason? }` — upcoming or ongoing meetings only |
+| `GET` `POST` | `/complaints` | all school roles | Admin all; teacher assigned; parent/student own. `POST` by parent/student |
+| `GET` `PATCH` | `/complaints/{id}` | admin, assigned teacher | `PATCH { status, assignedToId?, response? }` — only the admin reassigns |
+| `GET` | `/audit` | admin | This school's audit trail; `?area=&q=&from=&to=&page=` |
+
+### Staff, transport, library, inventory
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `GET` `POST` | `/staff` | Non-teaching staff (no documents). `permissions` is optional; leaving it out keeps the current grants. Logins are issued from the staff page |
+| `GET` `POST` | `/transport/routes` | Routes with stops, vehicle, driver and riders |
+| `POST` | `/transport/assign` | `{ routeId, stopId?, studentIds, startDate }` — vehicle capacity checked |
+| `GET` `POST` | `/library/books` | Copies available are counted from open loans |
+| `GET` `POST` | `/library/loans` | `POST { bookId, borrowerKind, borrowerCode, issuedOn, dueOn }` |
+| `POST` | `/library/loans/{id}/return` | `{ returnedOn, finePaid? }` — fine at the school's daily rate |
+| `GET` | `/me/library` | Student's own loans |
+| `GET` `POST` | `/assets` | Every change is kept in the asset's history |
+
+All of these are school-scoped: the school always comes from the token's
+user, and another school's ids answer 404.
 
 ### Tokens
 
@@ -288,3 +369,18 @@ code, an expired one and an unknown reference all answer the same way.
 * **Versioning**: breaking changes will appear under a new prefix (`/api/v2`).
   New fields may be added to responses at any time, so ignore what you do not
   recognise.
+
+### Meetings
+
+A meeting is an invitation, not a booking: the office fixes the time and picks
+who is invited, and nobody chooses a slot. `audiences` is any of `PARENTS`,
+`STUDENTS`, `TEACHERS`, `NON_TEACHING_STAFF` (or `ALL`; every group ticked is
+stored as `ALL`). `scope` narrows it: `SCHOOL` (everyone in those groups),
+`SECTIONS` (the students, guardians and teachers of `sectionIds` — refused with
+`NON_TEACHING_STAFF`), or `PEOPLE` (`teacherIds`, `staffIds` with a login, and
+students by admission number — the students themselves with `STUDENTS`, their
+guardians with `PARENTS`).
+
+Only `CANCELLED` is stored. `UPCOMING` → `ONGOING` → `COMPLETED` is worked out
+from the date and times on every read; without `endMinute` a meeting runs to
+the end of its day. A start time that has already passed is refused.

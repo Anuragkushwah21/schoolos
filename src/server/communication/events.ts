@@ -1,7 +1,7 @@
 import "server-only";
 
-import { today } from "@/lib/dates";
-import { NotFoundError } from "@/lib/errors";
+import { isAllowedScheduleDate, today } from "@/lib/dates";
+import { NotFoundError, ValidationError } from "@/lib/errors";
 import type { EventInput } from "@/lib/validation/communication";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
@@ -55,6 +55,17 @@ export async function getEvent(ctx: TenantContext, eventId: string) {
 export async function saveEvent(ctx: TenantContext, input: EventInput): Promise<string> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const { eventId, ...data } = input;
+
+  // An event is a future schedule: a new one, or a moved one, cannot be put in
+  // the past. An event that has already happened keeps its date when edited.
+  const previous = eventId
+    ? (await ctx.db.event.findFirst({ where: { id: eventId }, select: { date: true } }))?.date
+    : null;
+  if (!isAllowedScheduleDate(data.date, previous)) {
+    throw new ValidationError("Please correct the highlighted fields.", {
+      date: ["Choose today or a later date for an event"],
+    });
+  }
 
   let id: string;
   if (eventId) {

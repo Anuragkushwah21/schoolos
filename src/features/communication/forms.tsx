@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { ActionForm } from "@/components/forms/action-form";
 import {
   CheckboxField,
@@ -14,8 +16,60 @@ import { saveEventAction, saveNoticeAction } from "./actions";
 
 const FORMAT_HINT = "Blank line for a new paragraph. Start lines with - for a list, **bold**, [link](https://…).";
 
+type Option = { value: string; label: string };
+
+/** Who the notice is for, within the audience above it. */
+function TargetFields({
+  defaults,
+  classes,
+  sections,
+}: {
+  defaults?: { scope: string; classId: string | null; sectionId: string | null; admissionNumbers: string };
+  classes: Option[];
+  sections: Option[];
+}) {
+  const [scope, setScope] = useState(defaults?.scope ?? "SCHOOL");
+  return (
+    <>
+      <SelectField
+        name="scope"
+        label="Send to"
+        value={scope}
+        onChange={(event) => setScope(event.target.value)}
+        options={[
+          { value: "SCHOOL", label: "The whole school" },
+          { value: "CLASS", label: "One class" },
+          { value: "SECTION", label: "One section" },
+          { value: "STUDENTS", label: "Particular students (and their parents)" },
+        ]}
+        hint="Combined with the audience: e.g. Parents + One section reaches that section's parents only."
+        required
+      />
+      {scope === "CLASS" ? (
+        <SelectField name="classId" label="Class" options={classes} defaultValue={defaults?.classId ?? undefined} placeholder="Choose a class" required />
+      ) : null}
+      {scope === "SECTION" ? (
+        <SelectField name="sectionId" label="Section" options={sections} defaultValue={defaults?.sectionId ?? undefined} placeholder="Choose a section" required />
+      ) : null}
+      {scope === "STUDENTS" ? (
+        <TextareaField
+          name="studentAdmissionNumbers"
+          label="Admission numbers"
+          rows={3}
+          defaultValue={defaults?.admissionNumbers}
+          hint="Separate with commas or new lines. Every number must belong to a student of your school."
+          required
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function NoticeForm({
   notice,
+  minExpiry,
+  classes = [],
+  sections = [],
 }: {
   notice?: {
     id: string;
@@ -26,7 +80,15 @@ export function NoticeForm({
     isPublic: boolean;
     publishAt: string;
     expiresAt: string;
+    scope: string;
+    classId: string | null;
+    sectionId: string | null;
+    admissionNumbers: string;
   };
+  classes?: Option[];
+  sections?: Option[];
+  /** Earliest "Hide after" the picker offers: today, or an existing earlier expiry. */
+  minExpiry?: string;
 }) {
   return (
     <ActionForm action={saveNoticeAction} className="max-w-3xl">
@@ -43,6 +105,7 @@ export function NoticeForm({
             { value: "TEACHERS", label: "Teachers" },
             { value: "STUDENTS", label: "Students" },
             { value: "PARENTS", label: "Parents" },
+            { value: "NON_TEACHING_STAFF", label: "Non-teaching staff" },
           ]}
           required
         />
@@ -58,18 +121,26 @@ export function NoticeForm({
           required
         />
       </FieldRow>
+      <TargetFields defaults={notice} classes={classes} sections={sections} />
       <FieldRow>
         <TextField name="publishAt" label="Publish on" type="date" defaultValue={notice?.publishAt} hint="Leave blank to publish immediately." />
-        <TextField name="expiresAt" label="Hide after" type="date" defaultValue={notice?.expiresAt} hint="Leave blank to keep it up." />
+        <TextField
+          name="expiresAt"
+          label="Hide after"
+          type="date"
+          defaultValue={notice?.expiresAt}
+          min={minExpiry}
+          hint="Leave blank to keep it up."
+        />
       </FieldRow>
       <CheckboxField
         name="isPublic"
         label="Also show on the school website"
-        hint="Anyone on the internet can read public notices. Never include personal details."
+        hint="Whole-school notices only. Anyone on the internet can read public notices — never include personal details."
         defaultChecked={notice?.isPublic}
       />
       <div>
-        <SubmitButton>Save notice</SubmitButton>
+        <SubmitButton pendingLabel="Saving notice…">Save notice</SubmitButton>
       </div>
     </ActionForm>
   );
@@ -77,6 +148,7 @@ export function NoticeForm({
 
 export function EventForm({
   event,
+  minDate,
 }: {
   event?: {
     id: string;
@@ -89,6 +161,8 @@ export function EventForm({
     imageUrl: string | null;
     isPublished: boolean;
   };
+  /** Earliest date the picker offers: today, or the event's own date if it has passed. */
+  minDate?: string;
 }) {
   return (
     <ActionForm action={saveEventAction} className="max-w-3xl">
@@ -96,7 +170,7 @@ export function EventForm({
       <TextField name="title" label="Title" defaultValue={event?.title} required />
       <TextareaField name="description" label="Description" defaultValue={event?.description ?? ""} rows={4} hint={FORMAT_HINT} />
       <FieldRow>
-        <TextField name="date" label="Date" type="date" defaultValue={event?.date} required />
+        <TextField name="date" label="Date" type="date" defaultValue={event?.date} min={minDate} required />
         <TextField name="location" label="Location" defaultValue={event?.location ?? ""} />
       </FieldRow>
       <FieldRow>

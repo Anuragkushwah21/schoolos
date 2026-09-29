@@ -7,9 +7,9 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { MATERIAL_KIND_LABEL, MaterialActions } from "@/features/student/material-actions";
 import { StudentTabs } from "@/features/student/nav";
 import { formatDate } from "@/lib/dates";
-import { humanize } from "@/lib/format";
 import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
@@ -21,9 +21,9 @@ export const metadata: Metadata = { title: "Study material" };
  * Everything the student's teachers have attached, in one place.
  *
  * The same rows the lesson pages show, gathered across lessons so a student
- * revising a subject does not have to open each class to find the notes. Links
- * and documents are URLs the school already hosts — there is no upload pipeline
- * in this version, and no third-party storage was added for this.
+ * revising a subject does not have to open each class to find the notes. PDFs
+ * are served through the authorized download route; videos and resources are
+ * the teacher's links.
  */
 export default async function StudentMaterialsPage(props: PageProps<"/student/materials">) {
   const ctx = await requireTenant("STUDENT");
@@ -36,7 +36,7 @@ export default async function StudentMaterialsPage(props: PageProps<"/student/ma
     <>
       <PageHeader
         title="Study material"
-        description={`${me.placement.sectionLabel} · notes, links and practice work from your teachers`}
+        description={`${me.placement.sectionLabel} · notes, PDFs, videos and links from your teachers`}
       />
       <StudentTabs active="materials" />
 
@@ -60,7 +60,7 @@ export default async function StudentMaterialsPage(props: PageProps<"/student/ma
               <CardHeader>
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <CardTitle className="text-base">{material.title}</CardTitle>
-                  <StatusBadge status="INACTIVE" label={humanize(material.kind)} tone="neutral" />
+                  <StatusBadge status="INACTIVE" label={MATERIAL_KIND_LABEL[material.kind] ?? material.kind} tone="neutral" />
                 </div>
                 <CardDescription>
                   {material.subject}
@@ -72,14 +72,11 @@ export default async function StudentMaterialsPage(props: PageProps<"/student/ma
                 {material.body ? (
                   <p className="text-sm whitespace-pre-line">{material.body}</p>
                 ) : null}
+                {material.description ? (
+                  <p className="text-muted-foreground text-sm">{material.description}</p>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
-                  {material.url ? (
-                    <Button asChild size="sm" variant="outline">
-                      <a href={material.url} target="_blank" rel="noopener noreferrer">
-                        Open ↗
-                      </a>
-                    </Button>
-                  ) : null}
+                  <MaterialActions material={material} />
                   <Button asChild size="sm" variant="ghost">
                     <Link href={`/student/lessons/${material.lessonId}` as Route}>
                       See the class

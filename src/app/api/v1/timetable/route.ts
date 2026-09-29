@@ -4,11 +4,12 @@ import { timetableQuery } from "@/lib/validation/api";
 import { slotSchema } from "@/lib/validation/timetable";
 import { resolveSession } from "@/server/academics/structure";
 import { requireSectionAccess } from "@/server/auth/teacher-access";
-import { createSlot, getSectionTimetable, getTeacherTimetable } from "@/server/timetable/service";
+import { createSlot, getRoomTimetable, getSectionTimetable, getTeacherTimetable } from "@/server/timetable/service";
 
 /**
- * The weekly timetable for one section (`?section=`) or one teacher
- * (`?teacher=`). A teacher asking for a section must be entitled to it.
+ * The weekly timetable for one section (`?section=`), one teacher
+ * (`?teacher=`) or one room (`?room=`, School Admin). A teacher asking for a
+ * section must be entitled to it.
  */
 export const GET = apiRoute(
   { roles: ["SCHOOL_ADMIN", "TEACHER"] },
@@ -21,13 +22,22 @@ export const GET = apiRoute(
       if (ctx.user.role !== "SCHOOL_ADMIN") {
         throw new AppError("FORBIDDEN", "Use /api/v1/me/timetable for your own week.");
       }
+      // Another school's teacher id is not found, not an empty week.
+      if (!(await ctx.db.teacher.count({ where: { id: query.teacher } }))) {
+        throw new AppError("NOT_FOUND", "That teacher was not found.");
+      }
       return apiSuccess(await getTeacherTimetable(ctx, query.teacher, session.id), {
         meta: { session },
       });
     }
 
+    if (query.room) {
+      if (ctx.user.role !== "SCHOOL_ADMIN") throw new AppError("FORBIDDEN", "Room timetables are for the school office.");
+      return apiSuccess(await getRoomTimetable(ctx, query.room, session.id), { meta: { session } });
+    }
+
     if (!query.section) {
-      throw new AppError("VALIDATION", "Pass ?section= or ?teacher=.");
+      throw new AppError("VALIDATION", "Pass ?section=, ?teacher= or ?room=.");
     }
 
     await requireSectionAccess(ctx, query.section);

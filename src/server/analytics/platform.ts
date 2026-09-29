@@ -144,3 +144,121 @@ export async function largestSchools(actor: SessionUser, take = 6) {
     .sort((a, b) => b.value - a.value)
     .slice(0, take);
 }
+
+/**
+ * One row per school for the Super Admin's tracker: who they are, how big,
+ * and how much fee money has gone through SchoolOS for them.
+ *
+ * Rejected registrations are left out — they never became schools. "Joined"
+ * is the day the school was approved (or registered, if not yet approved);
+ * "revenue" is the sum of the school's own fee receipts, because the platform
+ * records no subscription payments of its own.
+ */
+export async function schoolTracker(actor: SessionUser, filters: { q?: string | null } = {}) {
+  assertRole(actor, "SUPER_ADMIN");
+
+  const q = filters.q?.trim();
+  const [schools, revenue] = await Promise.all([
+    prisma.school.findMany({
+      where: {
+        status: { not: "REJECTED" },
+        ...(q
+          ? {
+              OR: [
+                { name: { contains: q, mode: "insensitive" } },
+                { udiseCode: { contains: q } },
+                { city: { contains: q, mode: "insensitive" } },
+                { state: { contains: q, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        status: true,
+        udiseCode: true,
+        establishedYear: true,
+        affiliationBoard: true,
+        createdAt: true,
+        reviewedAt: true,
+        addressLine: true,
+        city: true,
+        state: true,
+        postalCode: true,
+        email: true,
+        phone: true,
+        principalName: true,
+        contactName: true,
+        contactEmail: true,
+        contactPhone: true,
+        subscriptions: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { status: true, plan: { select: { name: true } } },
+        },
+        users: {
+          where: { role: "SCHOOL_ADMIN" },
+          orderBy: { createdAt: "asc" },
+          select: { firstName: true, lastName: true, email: true, phone: true, isActive: true },
+        },
+        _count: {
+          select: {
+            students: { where: { status: "ACTIVE" } },
+            teachers: { where: { status: { in: ["ACTIVE", "ON_LEAVE"] } } },
+          },
+        },
+      },
+    }),
+    prisma.feePayment.groupBy({ by: ["schoolId"], _sum: { amountMinor: true } }),
+  ]);
+
+  const revenueBySchool = new Map(revenue.map((row) => [row.schoolId, row._sum.amountMinor ?? 0]));
+
+  const rows = schools.map((school) => ({
+    id: school.id,
+    name: school.name,
+    slug: school.slug,
+    status: school.status,
+    udiseCode: school.udiseCode,
+    establishedYear: school.establishedYear,
+    board: school.affiliationBoard,
+    joinedOn: school.reviewedAt && school.status !== "PENDING" ? school.reviewedAt : school.createdAt,
+    location: [school.city, school.state].filter(Boolean).join(", "),
+    students: school._count.students,
+    teachers: school._count.teachers,
+    revenueMinor: revenueBySchool.get(school.id) ?? 0,
+    plan: school.subscriptions[0]?.plan.name ?? null,
+    owner: {
+      name: school.contactName,
+      email: school.contactEmail,
+      phone: school.contactPhone,
+      principal: school.principalName,
+      schoolEmail: school.email,
+      schoolPhone: school.phone,
+      address: [school.addressLine, school.city, school.state, school.postalCode]
+        .filter(Boolean)
+        .join(", "),
+      admins: school.users.map((user) => ({
+        name: `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        phone: user.phone,
+        isActive: user.isActive,
+      })),
+    },
+  }));
+
+  return {
+    rows,
+    totals: {
+      schools: rows.length,
+      students: rows.reduce((sum, row) => sum + row.students, 0),
+      teachers: rows.reduce((sum, row) => sum + row.teachers, 0),
+      revenueMinor: rows.reduce((sum, row) => sum + row.revenueMinor, 0),
+    },
+  };
+}
+
+export type TrackedSchool = Awaited<ReturnType<typeof schoolTracker>>["rows"][number];

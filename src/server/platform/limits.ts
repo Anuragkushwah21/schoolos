@@ -36,3 +36,18 @@ export async function assertWithinPlanLimit(
     );
   }
 }
+
+/**
+ * How many more active students the school's plan allows, or null for no
+ * limit. Bulk imports check the whole batch against this before writing.
+ */
+export async function remainingStudentCapacity(ctx: TenantContext): Promise<{ remaining: number; plan: string } | null> {
+  const subscription = await prisma.subscription.findFirst({
+    where: { schoolId: ctx.schoolId, status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] } },
+    orderBy: { createdAt: "desc" },
+    select: { plan: { select: { name: true, maxStudents: true } } },
+  });
+  if (!subscription || subscription.plan.maxStudents === null) return null;
+  const count = await ctx.db.student.count({ where: { status: "ACTIVE" } });
+  return { remaining: Math.max(subscription.plan.maxStudents - count, 0), plan: subscription.plan.name };
+}

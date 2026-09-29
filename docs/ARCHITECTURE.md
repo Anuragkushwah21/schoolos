@@ -34,10 +34,23 @@ their session, which is read from the database on every request.
 
 ### Two layers of enforcement
 
-**Layer 1 — the data access layer.** Every query against a school-owned table
-goes through `src/server/` helpers that take their `schoolId` from
-`requireTenant()`. Route handlers and Server Actions never call `prisma`
-directly.
+**Layer 1 — the scoped client.** `requireTenant()` (pages),
+`requireTenantForAction()` (Server Actions) and `apiRoute()` (REST) each build a
+`TenantContext` whose `db` is `forSchool(session.schoolId)` —
+`src/server/tenancy/scope.ts`. That Prisma extension adds
+`where.schoolId` to every read, update, delete, count, aggregate and groupBy,
+and `data.schoolId` to every create, for each model named in `TENANT_MODELS`.
+An operation it does not know how to scope throws rather than running
+unscoped. A `schoolId` smuggled into a `where` is kept as an *extra* filter, so
+asking for another school matches nothing instead of being silently rewritten.
+
+`TENANT_MODELS` must list **every** model that has a `schoolId` column. A model
+left off it is not filtered at all — which is exactly the gap the 26 Sep 2026
+audit found for ten finance, assessment and lesson-material models (see
+[`AUDIT.md`](AUDIT.md) §10). The unscoped `prisma` client is used only where
+there is no tenant: platform (Super Admin) code, authentication, the public
+school website (filtered by the `schoolId` resolved from the slug) and the
+public admission form.
 
 **Layer 2 — composite foreign keys in PostgreSQL.** Every school-owned table
 carries `schoolId` and declares:
@@ -59,6 +72,35 @@ another school's `Class`. Cross-tenant grafting is not merely unauthorized, it
 is unrepresentable. A forgotten `where: { schoolId }` in one query site becomes
 a read bug, not a data-corruption breach.
 
+### Tenancy map
+
+Every model, and how it is tied to one school. "Scoped" means listed in
+`TENANT_MODELS`; "composite FK" means its links to other school-owned rows use
+`(schoolId, id)`, so PostgreSQL rejects a cross-school link.
+
+| Model | Tenancy path | Scoped | Composite FK |
+| --- | --- | --- | --- |
+| `School` | is the tenant (scoped by `id`) | by id | — |
+| `AcademicSession`, `Class`, `Stream`, `Section`, `Subject` | own `schoolId` | yes | yes |
+| `Teacher`, `Student`, `Parent` | own `schoolId`; `userId → User` | yes | yes (except to `User`) |
+| `StudentEnrollment`, `ParentStudent`, `TeacherSubjectAssignment`, `ClassTeacherAssignment` | own `schoolId`; both ends in the same school | yes | yes |
+| `TimetableSlot`, `ClassSession`, `StudentAttendance`, `TeacherAttendance` | own `schoolId` | yes | yes |
+| `Homework`, `StudentRemark`, `Assessment`, `AssessmentResult`, `LessonMaterial` | own `schoolId` | yes | yes |
+| `FeeHead`, `FeeCharge`, `FeePayment`, `Expense`, `TeacherSalary`, `SalaryPayment` | own `schoolId` | yes | yes |
+| `Notice`, `Event`, `AdmissionApplication`, `SchoolPage`, `SchoolMedia`, `Subscription` | own `schoolId` | yes | yes |
+| `User` | `schoolId` nullable (Super Admin has none) | yes | n/a |
+| `ApiToken` | `schoolId` nullable, copied from its owner | yes | n/a |
+| `Session` | through `User` | no — read only by the auth layer, by token hash | — |
+| `AuditLog` | `schoolId` nullable | no — read only by Super Admin | — |
+| `EmailVerification` | `schoolId` nullable | no — registration only, by reference | — |
+| `Plan`, `PlatformOffer`, `PlatformInquiry` | platform-level, no school | no | — |
+
+The only single-column links between tenant rows are to `User`
+(`Teacher.userId`, `recordedById`, `authorId`…), because `User.schoolId` is
+nullable. They are safe because no request ever supplies a user id to link:
+every one is either the signed-in user or an account created in the same
+write, through the scoped client.
+
 ### Why not row-level security
 
 Postgres RLS is the stronger primitive, but with Prisma it requires every query
@@ -71,12 +113,31 @@ at no runtime cost, and RLS can be layered on later without reshaping the schema
 
 ## 2. Roles and authorization
 
-`SUPER_ADMIN`, `SCHOOL_ADMIN`, `TEACHER`, `STUDENT`, `PARENT`.
+`SUPER_ADMIN`, `SCHOOL_ADMIN`, `TEACHER`, `STUDENT`, `PARENT`,
+`NON_TEACHING_STAFF`.
+
+`NON_TEACHING_STAFF` is a login for a `StaffMember` (accountant, driver,
+librarian…). It is never a School Admin, whatever the designation: the staff
+portal (`/staff`) shows their own record, whole-school notices for everyone or
+for staff, and meetings they are invited to. Anything more is a read-only module
+the admin grants in `StaffMember.permissions` (`VIEW_STUDENTS`, `VIEW_LIBRARY`,
+`VIEW_TRANSPORT`), checked from the database on every request by
+`server/auth/staff-access.ts` — in the page guard and again in the service.
 
 `SUPER_ADMIN` is the only role with `schoolId = null`; it governs the platform
 (approving schools, subscriptions, audit logs, homepage offers) and does not
 participate in day-to-day school operations. Every other role is bound to
 exactly one school.
+
+That separation is enforced, not just a matter of which screens exist. A
+Super Admin has no `schoolId`, so every school page redirects them and every
+school API answers 403. Their dashboard shows schools as accounts (status
+counts, the school list with size and owner details, review, suspension,
+admins, plans, offers) and the audit trail they read is filtered to
+`PLATFORM_AUDIT_ACTIONS` plus their own actions (`PLATFORM_AUDIT_WHERE` in
+`server/platform/audit.ts`). A school's attendance, homework, marks, fees,
+salaries and remarks stay in the log for the school but never appear on a
+platform screen.
 
 Every protected entry point answers five questions in order:
 
@@ -163,6 +224,7 @@ src/app/
   (app)/teacher/...
   (app)/student/...
   (app)/parent/...
+  (app)/staff/...             # NON_TEACHING_STAFF
   (public)/schools/[slug]/  # a school's public website — no auth, no private data
   api/...
 ```
@@ -239,6 +301,8 @@ data access layer rather than in the screens:
 | May this teacher change *this* homework or remark? | `classwork/` — authorship. A colleague teaching the same class may read it and not edit it |
 | May this teacher write up a period that is not theirs? | `classwork/activities.ts` — only if the office named them the stand-in for that date. `assignSubstitute` is the School Admin's to call |
 | May this parent open this child? | `portal.ts#requireChildOfParent` — the `ParentStudent` link. A parent writes nothing |
+| May this staff member open this module? | `staff-access.ts#assertAdminOrStaffPermission` — `StaffMember.permissions`, read per request; the designation grants nothing |
+| Is this user invited to this meeting? | `communication/meetings.ts#visibleMeetingWhere` — their group, their (children's) sections, or a named invitation |
 
 Timetabling a teacher for a period also assigns them that subject in that
 section, so the right to mark a register follows from the timetable rather than
@@ -393,6 +457,85 @@ Super Admin still sees a new password once on screen even though it is also
 emailed.
 
 ---
+
+## 11a. Interface: navigation, design tokens and languages
+
+**Navigation.** Each role's sidebar (`lib/nav.ts#NAV_BY_ROLE`) is short and
+named for what people do. Screens that belong together share one entry and are
+reached through tabs (`AREA_TABS`) — Students/Admissions/Parents,
+Teachers/Staff/Leave, Fees/Receipts, Holidays/Events, Inventory/Library/
+Transport. Rare setup (academic year, website, audit log, API tokens) lives on
+`/school-admin/settings`. No URL changed. On phones the sidebar becomes a
+drawer and a bottom bar holds four daily destinations (`MOBILE_PRIMARY`).
+
+**Design tokens.** Colours are defined once in `app/globals.css`: brand
+(`primary`, `primary-soft`, `primary-strong`), status (`success`, `warning`,
+`danger`, `info`, each with `-soft` surface and `-strong` AA text) and
+surfaces, plus `purple` and `orange` accents. Use the token classes
+(`bg-success-soft text-success-strong`) — never raw palette classes.
+Areas have fixed colours through `components/shared/tones.ts` (students
+blue, teachers purple, attendance green, money orange, warnings amber,
+problems red, meetings/information cyan), used by `StatCard`,
+`QuickActions`, `PageHeader` and `EmptyState` via `tone` + `icon` props.
+
+**Dark mode.** `next-themes` (`components/theme/`) puts `dark` on `<html>`
+before first paint, so there is no flash; the choice (light, dark or
+follow the device) is kept in the browser. `.dark` in `globals.css` is a
+designed slate theme, not an inversion. Printed documents (receipts, report
+cards) sit under `.force-light`, which re-applies the light tokens, so paper
+stays white in either theme. `StatusBadge` maps every status to a tone and adds
+a dot and a word, so meaning never rests on colour alone. Chart colours
+(`--viz-*`) are a separate, validated set.
+
+**Languages.** English and Hindi. Dictionaries are typed objects in
+`lib/i18n/messages/` (`hi` is typed against `en`, so a missing key fails the
+build); keys are dot paths (`dashboard.admin.addStudent`). Server Components
+call `await getT()` (`server/i18n.ts`); Client Components call `useT()`.
+The language is the person's own `User.preferredLanguage`, else the
+`schoolos_lang` cookie, else English; `setLanguageAction` changes only the
+caller's own row and cookie and grants nothing. Only the interface is
+translated — names, admission numbers and anything people wrote are shown as
+entered. Dates and money take an Intl locale (`getIntlLocale()`), keeping
+Indian digit grouping and ₹. To add a language: add its code to
+`lib/i18n/config.ts`, a dictionary typed as `Messages`, and register it in
+`messages/index.ts`. Not every page body is translated yet — the shell,
+navigation, dashboards, sign-in, filters, paging, statuses and the add
+student/teacher flows are; other pages fall back to English.
+
+## 11b. People lifecycle: status, login and history
+
+JOIN → ACTIVE → status change → access → history kept. Nobody who has been
+part of the school is deleted; the existing delete buttons refuse anyone with
+history and are only for records added by mistake.
+
+* **Status** is the person's standing: `StudentStatus` (ACTIVE, ON_LEAVE,
+  TRANSFERRED, GRADUATED, WITHDRAWN, INACTIVE) and `TeacherStatus`, shared by
+  teachers and non-teaching staff (ACTIVE, ON_LEAVE, SUSPENDED, RESIGNED,
+  TERMINATED, RETIRED, TRANSFERRED, INACTIVE). `lib/validation/lifecycle.ts`
+  says which are *current* (ACTIVE, ON_LEAVE) and which mean *has left*.
+  A guardian's standing is derived, never stored: ACTIVE while any child is
+  current, otherwise NO_ACTIVE_CHILDREN.
+* **Login** is separate: `User.isActive` plus `disabledReason` — ADMIN (the
+  office closed it; stays closed) or STATUS (closed because the person left;
+  reopens by itself if they return). Shown as ACTIVE / DISABLED / LOCKED.
+* **Every status change** — dialog, edit form, bulk action, API — goes through
+  `server/people/lifecycle.ts`, which records a `StatusChange` row (effective
+  date, reason, remarks, who) for the status and for any login effect, audits
+  it, and applies the consequences: a student's current-year placement leaves
+  the registers and their bus place is suspended; a teacher stops being class
+  teacher (dated in `ClassTeacherAssignment`) and the office is told which
+  periods and subjects to hand over; a staff member leaves their bus routes.
+  Earlier years, registers, lessons, homework, marks, remarks, fees and salary
+  keep pointing at the person exactly as they were.
+* **Enforcement is server-side, twice.** Sign-in and every session check refuse
+  a student, teacher or staff member whose status is not current, whatever the
+  login flag says (`session.ts#personMaySignIn`). Parent access is limited to
+  current children (`parent/access.ts`, `people/portal.ts`, notice and meeting
+  audiences); a sibling who is still here is unaffected.
+* Lists default to current people ("Current" filter), with every other status
+  and "any status" one choice away; people who have left show their leaving
+  date. Dashboards count current people only; Reports shows current and former
+  separately.
 
 ## 12. Deployment
 

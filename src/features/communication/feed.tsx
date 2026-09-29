@@ -3,8 +3,10 @@ import { CalendarDaysIcon, MapPinIcon } from "lucide-react";
 import { EmptyState } from "@/components/shared/empty-state";
 import { RichText } from "@/components/shared/rich-text";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { formatDate, formatMinutes } from "@/lib/dates";
 import { humanize } from "@/lib/format";
+import { schoolNow, sessionStatus } from "@/lib/time-status";
 
 type NoticeCard = {
   id: string;
@@ -62,6 +64,7 @@ type EventCard = {
 
 export function EventList({ events }: { events: EventCard[] }) {
   if (!events.length) return <EmptyState title="No upcoming events" />;
+  const clock = schoolNow();
 
   return (
     <ul className="flex flex-col gap-3">
@@ -74,7 +77,12 @@ export function EventList({ events }: { events: EventCard[] }) {
             <span className="text-xl font-semibold tabular-nums">{event.date.getUTCDate()}</span>
           </div>
           <div className="min-w-0">
-            <h3 className="font-semibold">{event.title}</h3>
+            <h3 className="flex flex-wrap items-center gap-2 font-semibold">
+              {event.title}
+              {((status) => (status === "TODAY" || status === "ONGOING" ? <TimeStatusBadge status={status} /> : null))(
+                sessionStatus(event.date, event.startMinute, event.endMinute, clock),
+              )}
+            </h3>
             <p className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
               <span className="inline-flex items-center gap-1">
                 <CalendarDaysIcon className="size-3.5" aria-hidden />

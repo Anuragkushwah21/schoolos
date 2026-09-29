@@ -39,6 +39,31 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  /* Semantic status colours. `*-soft` is a tinted surface; `*-strong` is the
+     text colour to put on it (AA contrast); the bare name is for icons,
+     borders and filled marks. Use these instead of raw palette classes. */
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-strong: var(--primary-strong);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-strong: var(--success-strong);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-strong: var(--warning-strong);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-strong: var(--danger-strong);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-strong: var(--info-strong);
+  --color-purple: var(--purple);
+  --color-purple-soft: var(--purple-soft);
+  --color-purple-strong: var(--purple-strong);
+  --color-orange: var(--orange);
+  --color-orange-soft: var(--orange-soft);
+  --color-orange-strong: var(--orange-strong);
+  --color-surface: var(--surface);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -48,39 +73,66 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.488 0.217 264);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.62 0.17 264);
+:root,
+.force-light {
+  /* ---------------------------------------------------------------------
+   * SchoolOS design tokens — the one place UI colours are defined.
+   * A calm, trustworthy education palette on a soft slate background.
+   * --------------------------------------------------------------------- */
+  --background: #f8fafc;
+  --surface: #ffffff;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-soft: #eff6ff;
+  --primary-strong: #1d4ed8;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #eff6ff;
+  --accent-foreground: #1d4ed8;
+  --destructive: #dc2626;
+  --success: #16a34a;
+  --success-soft: #f0fdf4;
+  --success-strong: #15803d;
+  --warning: #d97706;
+  --warning-soft: #fffbeb;
+  --warning-strong: #b45309;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --danger-strong: #b91c1c;
+  --info: #0891b2;
+  --info-soft: #ecfeff;
+  --info-strong: #0e7490;
+  --purple: #7c3aed;
+  --purple-soft: #f5f3ff;
+  --purple-strong: #6d28d9;
+  --orange: #ea580c;
+  --orange-soft: #fff7ed;
+  --orange-strong: #c2410c;
+  --border: #e2e8f0;
+  --input: #cbd5e1;
+  --ring: #2563eb;
   --chart-1: oklch(0.488 0.217 264);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.645 0.246 16.439);
   --chart-5: oklch(0.627 0.265 303.9);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.488 0.217 264);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.62 0.17 264);
+  --radius: 0.75rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #334155;
+  --sidebar-primary: #eff6ff;
+  --sidebar-primary-foreground: #1d4ed8;
+  --sidebar-accent: #f1f5f9;
+  --sidebar-accent-foreground: #0f172a;
+  --sidebar-border: #e2e8f0;
+  --sidebar-ring: #2563eb;
 
   /* ---------------------------------------------------------------------
    * Data visualisation
@@ -111,37 +163,61 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.623 0.188 264);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.623 0.188 264);
-  --chart-1: oklch(0.623 0.188 264);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.645 0.246 16.439);
-  --chart-5: oklch(0.627 0.265 303.9);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.623 0.188 264);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.623 0.188 264);
+  /* Designed for dark, not inverted: slate surfaces stepped by elevation,
+     lighter tints of each accent for text, and deep tinted "soft" fills. */
+  --background: #0f172a;
+  --surface: #1e293b;
+  --foreground: #f8fafc;
+  --card: #1e293b;
+  --card-foreground: #f8fafc;
+  --popover: #1e293b;
+  --popover-foreground: #f8fafc;
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --primary-soft: #1e3a8a66;
+  --primary-strong: #93c5fd;
+  --primary-foreground: #ffffff;
+  --secondary: #334155;
+  --secondary-foreground: #f8fafc;
+  --muted: #334155;
+  --muted-foreground: #cbd5e1;
+  --accent: #1e3a8a66;
+  --accent-foreground: #bfdbfe;
+  --destructive: #f87171;
+  --success: #22c55e;
+  --success-soft: #14532d66;
+  --success-strong: #86efac;
+  --warning: #f59e0b;
+  --warning-soft: #78350f66;
+  --warning-strong: #fcd34d;
+  --danger: #ef4444;
+  --danger-soft: #7f1d1d66;
+  --danger-strong: #fca5a5;
+  --info: #06b6d4;
+  --info-soft: #164e6366;
+  --info-strong: #67e8f9;
+  --purple: #8b5cf6;
+  --purple-soft: #4c1d9566;
+  --purple-strong: #c4b5fd;
+  --orange: #f97316;
+  --orange-soft: #7c2d1266;
+  --orange-strong: #fdba74;
+  --border: #334155;
+  --input: #475569;
+  --ring: #60a5fa;
+  --chart-1: #60a5fa;
+  --chart-2: #34d399;
+  --chart-3: #fbbf24;
+  --chart-4: #fb7185;
+  --chart-5: #a78bfa;
+  --sidebar: #0b1222;
+  --sidebar-foreground: #cbd5e1;
+  --sidebar-primary: #1e3a8a80;
+  --sidebar-primary-foreground: #bfdbfe;
+  --sidebar-accent: #1e293b;
+  --sidebar-accent-foreground: #f8fafc;
+  --sidebar-border: #1e293b;
+  --sidebar-ring: #60a5fa;
 
   /* Dark steps are chosen for the dark surface, not flipped from light. */
   --viz-accent: #6e9bfb;
@@ -154,9 +230,10 @@
   --viz-warning: #fab219;
   --viz-critical: #d03b3b;
   --viz-neutral: #a1a1a1;
-  --viz-grid: #2c2c2a;
-  --viz-axis: #383835;
-  --viz-surface: #171717;
+  /* Grid and axis follow the slate card surface (#1e293b) so lines stay visible. */
+  --viz-grid: #334155;
+  --viz-axis: #475569;
+  --viz-surface: #1e293b;
 }
 
 @layer base {
@@ -168,5 +245,38 @@
   }
   html {
     @apply font-sans;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  /* Printed documents (receipts, report cards) are paper: always light. */
+  .force-light {
+    color-scheme: light;
+    color: var(--foreground);
+  }
+  /* A clear focus ring on anything reachable by keyboard. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  /* Devanagari needs more line height than Latin to keep its marks clear. */
+  :lang(hi) body {
+    line-height: 1.65;
+  }
+}
+/*
+ * Printing any in-app page (a report, a list): the sidebar and header carry
+ * `print:hidden`; filters, buttons and toasts are hidden here too, so what
+ * comes out is the content.
+ */
+@media print {
+  form[action][method="get"],
+  [data-sonner-toaster],
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
   }
 }

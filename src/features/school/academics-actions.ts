@@ -7,9 +7,11 @@ import { id } from "@/lib/validation/common";
 import {
   academicSessionSchema,
   classSchema,
+  classTeacherSchema,
   sectionSchema,
   streamSchema,
   subjectSchema,
+  updateClassSchema,
   updateSectionSchema,
 } from "@/lib/validation/school";
 import { requireTenantForAction } from "@/server/auth/current-user";
@@ -19,11 +21,14 @@ import {
   createSection,
   createStream,
   createSubject,
+  deleteClass,
   deleteSection,
   setClassActive,
+  setClassTeacher,
   setCurrentSession,
   setStreamActive,
   setSubjectActive,
+  updateClass,
   updateSection,
 } from "@/server/academics/structure";
 import { performAction } from "@/server/perform-action";
@@ -64,6 +69,32 @@ export async function createClassAction(_p: Result, formData: FormData): Promise
       const ctx = await admin();
       await createClass(ctx, parseFormData(classSchema, formData));
       return successResult("Class added.");
+    },
+    { revalidate: REVALIDATE },
+  );
+}
+
+export async function updateClassAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const { classId, ...input } = parseFormData(updateClassSchema, formData);
+      await updateClass(ctx, classId, input);
+      return successResult("Class saved.");
+    },
+    { revalidate: REVALIDATE },
+  );
+}
+
+const classIdSchema = z.object({ classId: id });
+
+export async function deleteClassAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const { classId } = parseFormData(classIdSchema, formData);
+      await deleteClass(ctx, classId);
+      return successResult("Class deleted.");
     },
     { revalidate: REVALIDATE },
   );
@@ -150,6 +181,21 @@ export async function updateSectionAction(_p: Result, formData: FormData): Promi
       return successResult("Section saved.");
     },
     { revalidate: REVALIDATE },
+  );
+}
+
+export async function setClassTeacherAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const input = parseFormData(classTeacherSchema, formData);
+      const { changed } = await setClassTeacher(ctx, input);
+      return successResult(
+        input.teacherId ? "Class teacher assigned." : changed ? "Class teacher removed." : "No class teacher to remove.",
+      );
+    },
+    // Class-teacher status widens a teacher's section access, so their screens change too.
+    { revalidate: [REVALIDATE, "/teacher"] },
   );
 }
 

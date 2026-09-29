@@ -109,6 +109,11 @@ export default async function WebsitePage() {
                           fields={{ mediaId: item.id }}
                           variant="ghost"
                           size="xs"
+                          confirm={{
+                            title: "Remove this photo?",
+                            description: "It disappears from the school website's gallery.",
+                            confirmLabel: "Remove",
+                          }}
                         >
                           Remove
                         </ActionButton>

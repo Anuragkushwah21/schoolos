@@ -31,6 +31,33 @@ export async function getLiveOffers(now: Date = new Date()) {
   });
 }
 
+/** How far ahead a scheduled offer is announced as "coming soon". */
+export const UPCOMING_OFFER_DAYS = 45;
+
+/**
+ * Offers that are switched on and start soon, so a school can see what is
+ * coming — the Diwali offer a week before Diwali, not only on the day.
+ */
+export async function getUpcomingOffers(now: Date = new Date()) {
+  return prisma.platformOffer.findMany({
+    where: {
+      isActive: true,
+      startsAt: { gt: now, lte: new Date(now.getTime() + UPCOMING_OFFER_DAYS * 86_400_000) },
+    },
+    orderBy: [{ startsAt: "asc" }, { sortOrder: "asc" }],
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      priceLabel: true,
+      ctaLabel: true,
+      ctaHref: true,
+      startsAt: true,
+      endsAt: true,
+    },
+  });
+}
+
 export async function getPublicPlans() {
   return prisma.plan.findMany({
     where: { isActive: true },
@@ -52,6 +79,7 @@ export async function getPublicPlans() {
 
 export type PublicPlan = Awaited<ReturnType<typeof getPublicPlans>>[number];
 export type LiveOffer = Awaited<ReturnType<typeof getLiveOffers>>[number];
+export type UpcomingOffer = Awaited<ReturnType<typeof getUpcomingOffers>>[number];
 
 /**
  * What the homepage needs, and what it does when the database is unreachable.
@@ -69,17 +97,22 @@ export type LiveOffer = Awaited<ReturnType<typeof getLiveOffers>>[number];
  */
 export async function getHomepageCatalogue(): Promise<{
   offers: LiveOffer[];
+  upcoming: UpcomingOffer[];
   plans: PublicPlan[];
   degraded: boolean;
 }> {
   try {
-    const [offers, plans] = await Promise.all([getLiveOffers(), getPublicPlans()]);
-    return { offers, plans, degraded: false };
+    const [offers, upcoming, plans] = await Promise.all([
+      getLiveOffers(),
+      getUpcomingOffers(),
+      getPublicPlans(),
+    ]);
+    return { offers, upcoming, plans, degraded: false };
   } catch (error) {
     console.error(
       "[marketing] could not read offers and plans; rendering the homepage without them",
       error,
     );
-    return { offers: [], plans: [], degraded: true };
+    return { offers: [], upcoming: [], plans: [], degraded: true };
   }
 }

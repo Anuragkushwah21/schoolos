@@ -47,6 +47,30 @@ export async function getTeacherTimetable(ctx: TenantContext, teacherId: string,
   });
 }
 
+/** Everything timetabled in one room — rooms are free text, matched ignoring case and spaces. */
+export async function getRoomTimetable(ctx: TenantContext, room: string, academicSessionId: string) {
+  return ctx.db.timetableSlot.findMany({
+    where: { academicSessionId, room: { equals: room.trim(), mode: "insensitive" } },
+    orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
+    select: SLOT_SELECT,
+  });
+}
+
+/** The rooms in use this session, for the room filter. */
+export async function listRooms(ctx: TenantContext, academicSessionId: string): Promise<string[]> {
+  const rows = await ctx.db.timetableSlot.findMany({
+    where: { academicSessionId, room: { not: null } },
+    distinct: ["room"],
+    select: { room: true },
+  });
+  const seen = new Map<string, string>();
+  for (const row of rows) {
+    const key = row.room!.trim().toLowerCase();
+    if (key && !seen.has(key)) seen.set(key, row.room!.trim());
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
 export type TimetableSlotView = Awaited<ReturnType<typeof getSectionTimetable>>[number];
 
 function overlapMessage(
@@ -80,13 +104,24 @@ export async function createSlot(ctx: TenantContext, input: SlotInput): Promise<
     endMinute: { gt: input.startMinute },
   };
 
-  const [sectionClash, teacherClash] = await Promise.all([
+  const room = input.room?.trim() || null;
+  const [sectionClash, teacherClash, roomClash] = await Promise.all([
     ctx.db.timetableSlot.findFirst({ where: { ...overlapping, sectionId: section.id } }),
     ctx.db.timetableSlot.findFirst({ where: { ...overlapping, teacherId: teacher.id } }),
+    // Two classes cannot share a room at the same time.
+    room
+      ? ctx.db.timetableSlot.findFirst({
+          where: { ...overlapping, room: { equals: room, mode: "insensitive" } },
+          select: { dayOfWeek: true, startMinute: true, endMinute: true, section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } } },
+        })
+      : Promise.resolve(null),
   ]);
   if (sectionClash) throw new ConflictError(overlapMessage(sectionLabel(section), sectionClash));
   if (teacherClash) {
     throw new ConflictError(overlapMessage(`${teacher.firstName} ${teacher.lastName}`, teacherClash));
+  }
+  if (roomClash) {
+    throw new ConflictError(`${overlapMessage(`Room ${room}`, roomClash)} (${sectionLabel(roomClash.section)})`);
   }
 
   try {
@@ -101,7 +136,7 @@ export async function createSlot(ctx: TenantContext, input: SlotInput): Promise<
           dayOfWeek: input.dayOfWeek,
           startMinute: input.startMinute,
           endMinute: input.endMinute,
-          room: input.room,
+          room,
         },
       });
 

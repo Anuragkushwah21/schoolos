@@ -2,6 +2,7 @@ import "server-only";
 
 import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
+import { CURRENT_STUDENT } from "@/lib/validation/lifecycle";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { accessibleSectionIds } from "@/server/auth/teacher-access";
@@ -183,7 +184,8 @@ export async function getParentChildren(ctx: TenantContext) {
   });
 
   const links = await ctx.db.parentStudent.findMany({
-    where: { parentId: parent.id },
+    // Current students only: a child who has left opens no current data.
+    where: { parentId: parent.id, student: { status: { in: [...CURRENT_STUDENT] } } },
     select: {
       relationship: true,
       student: {
@@ -281,7 +283,8 @@ export async function requireChildOfParent(ctx: TenantContext, studentId: string
   if (!parent) throw new ForbiddenError();
 
   const link = await ctx.db.parentStudent.findFirst({
-    where: { parentId: parent.id, studentId },
+    // Linked, and still a current student: one who has left answers as unknown.
+    where: { parentId: parent.id, studentId, student: { status: { in: [...CURRENT_STUDENT] } } },
     select: { studentId: true },
   });
   if (!link) throw new NotFoundError();

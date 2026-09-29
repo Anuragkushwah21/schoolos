@@ -3,6 +3,8 @@ import Link from "next/link";
 
 import { ActionButton } from "@/components/forms/action-button";
 import { PageHeader } from "@/components/shared/page-header";
+import { LifecyclePanel } from "@/features/people/lifecycle-panel";
+import { supportForStudent } from "@/server/support/service";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,6 +62,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
   const counts = Object.fromEntries(attendance.map((row) => [row.status, row._count._all]));
   const marked = attendance.reduce((sum, row) => sum + row._count._all, 0);
   const attended = (counts.PRESENT ?? 0) + (counts.LATE ?? 0);
+  const support = await supportForStudent(ctx, student.id);
   const linkedParentIds = new Set(student.parents.map((link) => link.parent.id));
 
   return (
@@ -87,7 +90,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
             <ActionButton
               action={deleteStudentAction}
               fields={{ studentId: student.id }}
-              variant="destructive"
+              variant="ghost"
               size="default"
               confirm={{
                 title: `Delete ${student.firstName} ${student.lastName}?`,
@@ -96,7 +99,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
                 confirmLabel: "Delete",
               }}
             >
-              Delete
+              Delete (added by mistake)
             </ActionButton>
           </>
         }
@@ -120,6 +123,41 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
                   </div>
                 ))}
               </dl>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+              <CardTitle>Academic support</CardTitle>
+              <Button asChild size="sm" variant="outline">
+                <Link href={`/school-admin/support/new?student=${student.id}` as Route}>+ Add support</Link>
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {support.length ? (
+                <ul className="divide-y text-sm">
+                  {support.map((row) => (
+                    <li key={row.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                      <span className="min-w-0 flex-1">
+                        <Link href={`/school-admin/support/${row.id}` as Route} className="font-medium hover:underline">
+                          {row.subject ?? "General"}
+                          {row.topic ? ` — ${row.topic}` : ""}
+                        </Link>
+                        <span className="text-muted-foreground block text-xs">
+                          {humanize(row.reason)} → {humanize(row.action)}
+                          {row.teacher ? ` · ${row.teacher}` : ""}
+                          {row.fromConcern ? " · from a parent's concern" : ""}
+                          {row.followUps ? ` · ${row.followUps} follow-ups` : ""}
+                        </span>
+                      </span>
+                      <StatusBadge status={row.priority} />
+                      <StatusBadge status={row.status} />
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-muted-foreground text-sm">No academic support recorded. Teachers add it when a student needs extra help.</p>
+              )}
             </CardContent>
           </Card>
 
@@ -203,6 +241,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
         </div>
 
         <div className="flex flex-col gap-6">
+          <LifecyclePanel ctx={ctx} person="STUDENT" personId={student.id} />
           <Card>
             <CardHeader>
               <CardTitle>Placement</CardTitle>

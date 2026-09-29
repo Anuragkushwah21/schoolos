@@ -17,7 +17,7 @@ export default async function TeacherTimetablePage() {
     return (
       <>
         <PageHeader title="Timetable" />
-        <EmptyState title="No timetable yet" />
+        <EmptyState title="No timetable yet.">Your periods appear here once the school office builds the timetable.</EmptyState>
       </>
     );
   }

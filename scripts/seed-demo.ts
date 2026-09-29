@@ -13,7 +13,9 @@
  * Every account shares one password, printed at the end and appended to `.env`
  * as comments. `.env` is gitignored, so it does not leave your machine.
  */
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 import { DayOfWeek, Gender, UserRole } from "../src/generated/prisma/enums";
 import { addDays, dateOnly, dayOfWeek, today } from "../src/lib/dates";
@@ -32,6 +34,41 @@ const SUPER_ADMIN_EMAIL = "superadmin@schoolos.dev";
 const DEMO_PASSWORD = "SchoolOS@2026";
 
 const SESSION_NAME = "2026-27";
+
+type DemoMaterial = {
+  kind: "NOTES" | "QUESTIONS" | "PRACTICE" | "LINK" | "VIDEO" | "DOCUMENT";
+  title: string;
+  body?: string;
+  url?: string;
+  description?: string;
+  /** Write a small real PDF into the upload directory for this material. */
+  pdf?: boolean;
+};
+
+/**
+ * A minimal, valid one-page PDF, written where the app's own storage expects
+ * uploads (`UPLOAD_DIR`, default `./uploads`), so the student "View" and
+ * "Download" buttons have a real file behind them.
+ */
+function writeDemoPdf(schoolId: string, title: string): { key: string; size: number } {
+  const text = title.replace(/[()\\]/g, "");
+  const stream = `BT /F1 18 Tf 72 720 Td (${text}) Tj ET`;
+  const body = [
+    "%PDF-1.4",
+    "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+    "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+    "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj",
+    `4 0 obj << /Length ${stream.length} >> stream\n${stream}\nendstream endobj`,
+    "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj",
+    "trailer << /Root 1 0 R >>",
+    "%%EOF",
+  ].join("\n");
+  const key = `${schoolId}/lesson-materials/${randomUUID()}.pdf`;
+  const full = path.resolve(process.env.UPLOAD_DIR ?? path.join(process.cwd(), "uploads"), key);
+  mkdirSync(path.dirname(full), { recursive: true });
+  writeFileSync(full, body);
+  return { key, size: Buffer.byteLength(body) };
+}
 
 // -----------------------------------------------------------------------------
 // What the two schools contain
@@ -599,7 +636,12 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
     // --- lessons: written up, with notes and material, plus one planned ----
     // This is what the student portal reads: a class a student can revise, and
     // a class they can prepare for.
-    const TAUGHT = [
+    const TAUGHT: Array<{
+      topic: string;
+      notes: string;
+      importantPoints: string;
+      materials: DemoMaterial[];
+    }> = [
       {
         topic: "Quadratic equations",
         notes:
@@ -618,6 +660,24 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
             kind: "QUESTIONS" as const,
             title: "Important questions",
             body: "1. Solve x² - 5x + 6 = 0\n2. Find the discriminant of 2x² + 3x - 1\n3. Complete the square for x² + 6x + 5",
+          },
+          {
+            kind: "DOCUMENT" as const,
+            title: "Quadratic Equations Notes",
+            description: "The board notes as a PDF, for revision.",
+            pdf: true,
+          },
+          {
+            kind: "VIDEO" as const,
+            title: "Quadratic equations explained",
+            url: "https://www.youtube.com/watch?v=IlNAJl36-10",
+            description: "Watch before attempting the practice questions.",
+          },
+          {
+            kind: "LINK" as const,
+            title: "NCERT practice questions",
+            url: "https://ncert.nic.in/textbook.php",
+            description: "Chapter 4 exercises.",
           },
         ],
       },
@@ -678,13 +738,20 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
       });
 
       for (const material of plan.materials) {
+        const file = material.pdf ? writeDemoPdf(school.id, material.title) : null;
         await prisma.lessonMaterial.create({
           data: {
             schoolId: school.id,
             classSessionId: lesson.id,
             kind: material.kind,
             title: material.title,
-            body: material.body,
+            body: material.body ?? null,
+            url: material.url ?? null,
+            description: material.description ?? null,
+            storageKey: file?.key ?? null,
+            fileName: file ? `${material.title}.pdf` : null,
+            fileSize: file?.size ?? null,
+            mimeType: file ? "application/pdf" : null,
           },
         });
       }
@@ -812,7 +879,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
 
   // --- fees ------------------------------------------------------------------
   const FEE_HEADS = [
-    { name: "Tuition fee", note: "Charged for the full academic year", amount: 20_000 },
+    { name: "Tuition fee", note: "Charged for the full academic year", amount: 40_000 },
     { name: "Examination fee", note: null, amount: 3_000 },
     { name: "Activity fee", note: "Sports, clubs and events", amount: 2_000 },
     { name: "Transport fee", note: "Only for students using the school bus", amount: 5_000 },
@@ -866,6 +933,155 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
           method: index === 0 ? "UPI" : "CASH",
           receiptNo: `REC-${receiptSeq}`,
           recordedById: admin.id,
+        },
+      });
+    }
+  }
+
+  // --- money going out, and today's money in ---------------------------------
+  // Enough history for the six-month trend and the category breakdown. Only
+  // the first demo school gets a busy "today", so the second shows what a quiet
+  // day looks like — and that neither school's figures leak into the other.
+  const busy = spec === SCHOOLS[0];
+  const EXPENSES = [
+    { category: "ELECTRICITY" as const, description: "Electricity bill", amount: 25_000 },
+    { category: "INTERNET" as const, description: "Broadband", amount: 3_500 },
+    { category: "STATIONERY" as const, description: "Chalk, registers and paper", amount: 12_000 },
+    { category: "MAINTENANCE" as const, description: "Plumbing and repairs", amount: 8_000 },
+    { category: "TRANSPORT" as const, description: "Bus diesel", amount: 18_000 },
+  ];
+  const thisMonth = dateOnly(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+  const salaried = teachers.slice(0, -1);
+
+  for (let back = 5; back >= 1; back -= 1) {
+    const month = dateOnly(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() + 1 - back, 1);
+    for (const [index, item] of EXPENSES.entries()) {
+      await prisma.expense.create({
+        data: {
+          schoolId: school.id,
+          category: item.category,
+          description: item.description,
+          amountMinor: Math.round(item.amount * (0.85 + ((back + index) % 4) * 0.1)) * 100,
+          spentOn: addDays(month, 4 + index * 5),
+          method: index % 2 ? "UPI" : "BANK_TRANSFER",
+          recordedById: admin.id,
+        },
+      });
+    }
+    for (const [index, teacher] of salaried.entries()) {
+      await prisma.salaryPayment.create({
+        data: {
+          schoolId: school.id,
+          teacherId: teacher.id,
+          amountMinor: (22_000 + index * 3_000 + 200) * 100,
+          paidOn: addDays(month, 27),
+          forMonth: month,
+          method: "BANK_TRANSFER",
+          recordedById: admin.id,
+        },
+      });
+    }
+    // A few receipts each month, so the fee series is not flat. Only from
+    // families who still owe something, so nobody ends up paying twice.
+    const owing = students.filter((_, grade) => grade % 3 !== 0);
+    for (let i = 0; i < (busy ? 4 : 2) && owing.length; i += 1) {
+      receiptSeq += 1;
+      await prisma.feePayment.create({
+        data: {
+          schoolId: school.id,
+          academicSessionId: session.id,
+          studentId: owing[(back * 4 + i) % owing.length]!.id,
+          amountMinor: (3_000 + ((back + i) % 3) * 1_000) * 100,
+          paidOn: addDays(month, 3 + i * 6),
+          method: i % 2 ? "CASH" : "UPI",
+          receiptNo: `REC-${receiptSeq}`,
+          recordedById: admin.id,
+        },
+      });
+    }
+  }
+
+  if (busy) {
+    // Today: ₹42,500 in, ₹8,200 of expenses, ₹75,000 of salary out.
+    const unpaid = students.filter((_, grade) => grade % 3 === 2);
+    for (const [index, amount] of [20_000, 12_500, 10_000].entries()) {
+      const student = unpaid[index] ?? students[index]!;
+      receiptSeq += 1;
+      await prisma.feePayment.create({
+        data: {
+          schoolId: school.id,
+          academicSessionId: session.id,
+          studentId: student.id,
+          amountMinor: amount * 100,
+          paidOn: now,
+          method: index === 0 ? "UPI" : "CASH",
+          receiptNo: `REC-${receiptSeq}`,
+          recordedById: admin.id,
+        },
+      });
+    }
+    for (const item of [
+      { category: "ELECTRICITY" as const, description: "Electricity bill (part)", amount: 5_000 },
+      { category: "INTERNET" as const, description: "Broadband", amount: 2_000 },
+      { category: "STATIONERY" as const, description: "Exam answer sheets", amount: 1_200 },
+    ]) {
+      await prisma.expense.create({
+        data: {
+          schoolId: school.id,
+          category: item.category,
+          description: item.description,
+          amountMinor: item.amount * 100,
+          spentOn: now,
+          method: "CASH",
+          recordedById: admin.id,
+        },
+      });
+    }
+    for (const [index, amount] of [25_000, 25_000, 25_000].entries()) {
+      const teacher = salaried[index];
+      if (!teacher) continue;
+      await prisma.salaryPayment.create({
+        data: {
+          schoolId: school.id,
+          teacherId: teacher.id,
+          amountMinor: amount * 100,
+          paidOn: now,
+          forMonth: thisMonth,
+          method: "BANK_TRANSFER",
+          recordedById: admin.id,
+        },
+      });
+    }
+  }
+
+  if (busy) {
+    // Round the school's outstanding total to ₹2,40,000 with one development
+    // fee on an unpaid family, so the dashboard shows a recognisable figure.
+    // Computed from the rows, as the app computes it: never below zero per child.
+    const TARGET_PENDING = 240_000 * 100;
+    const [charges, paid] = await Promise.all([
+      prisma.feeCharge.groupBy({ by: ["studentId"], where: { schoolId: school.id }, _sum: { amountMinor: true } }),
+      prisma.feePayment.groupBy({ by: ["studentId"], where: { schoolId: school.id }, _sum: { amountMinor: true } }),
+    ]);
+    const paidBy = new Map(paid.map((row) => [row.studentId, row._sum.amountMinor ?? 0]));
+    const pending = charges.reduce(
+      (sum, row) => sum + Math.max(0, (row._sum.amountMinor ?? 0) - (paidBy.get(row.studentId) ?? 0)),
+      0,
+    );
+    const target = students.find((_, grade) => grade % 3 === 2);
+    if (pending < TARGET_PENDING && target) {
+      const head = await prisma.feeHead.create({
+        data: { schoolId: school.id, name: "Development fee", note: "One-time, this session" },
+        select: { id: true },
+      });
+      await prisma.feeCharge.create({
+        data: {
+          schoolId: school.id,
+          academicSessionId: session.id,
+          studentId: target.id,
+          feeHeadId: head.id,
+          amountMinor: TARGET_PENDING - pending,
+          dueOn: addDays(now, 45),
         },
       });
     }

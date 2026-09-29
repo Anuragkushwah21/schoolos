@@ -200,17 +200,24 @@ export function SubmitButton({
   className,
   variant,
   size,
+  name,
+  value,
 }: {
   children: React.ReactNode;
   pendingLabel?: string;
   className?: string;
   variant?: React.ComponentProps<typeof Button>["variant"];
   size?: React.ComponentProps<typeof Button>["size"];
+  /** Sent with the form when this button submits it — for forms with several operations. */
+  name?: string;
+  value?: string;
 }) {
   const { pending } = useFormContext();
   return (
     <Button
       type="submit"
+      name={name}
+      value={value}
       // Disabled while the action runs, which is also what makes a second
       // submission impossible — the guard is the same thing as the feedback.
       disabled={pending}

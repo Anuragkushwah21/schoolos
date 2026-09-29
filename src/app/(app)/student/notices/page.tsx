@@ -1,3 +1,4 @@
+import { MegaphoneIcon } from "lucide-react";
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/shared/page-header";
@@ -14,7 +15,7 @@ export default async function NoticesPage() {
 
   return (
     <>
-      <PageHeader title="Notices" description="Announcements from your school." />
+      <PageHeader icon={MegaphoneIcon} tone="amber" title="Notices" description="Announcements from your school." />
       <div className="grid gap-8 xl:grid-cols-[1.5fr_1fr]">
         <NoticeList notices={notices} />
         <section className="flex flex-col gap-3">

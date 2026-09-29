@@ -3,6 +3,8 @@
 import { useState } from "react";
 
 import { ActionForm } from "@/components/forms/action-form";
+import { FormSteps } from "@/components/forms/form-steps";
+import { useT } from "@/components/i18n/i18n-provider";
 import {
   CheckboxField,
   FieldRow,
@@ -13,6 +15,7 @@ import {
 } from "@/components/forms/fields";
 import { nativeSelectClass } from "@/components/forms/styles";
 import { Label } from "@/components/ui/label";
+import { today, toDateInput } from "@/lib/dates";
 
 import {
   assignSubjectAction,
@@ -40,18 +43,7 @@ const RELATIONSHIP_OPTIONS: SelectOption[] = [
   { value: "GUARDIAN", label: "Guardian" },
 ];
 
-const STUDENT_STATUS_OPTIONS: SelectOption[] = [
-  { value: "ACTIVE", label: "Active" },
-  { value: "INACTIVE", label: "Inactive" },
-  { value: "TRANSFERRED", label: "Transferred" },
-  { value: "GRADUATED", label: "Graduated" },
-];
 
-const TEACHER_STATUS_OPTIONS: SelectOption[] = [
-  { value: "ACTIVE", label: "Active" },
-  { value: "ON_LEAVE", label: "On leave" },
-  { value: "INACTIVE", label: "Left the school" },
-];
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -93,7 +85,7 @@ function StudentPersonalFields({ d, requireAdmission }: { d: StudentDefaults; re
       </FieldRow>
       <FieldRow>
         <SelectField name="gender" label="Gender" options={GENDER_OPTIONS} placeholder="Not specified" defaultValue={d.gender ?? ""} />
-        <TextField name="dateOfBirth" label="Date of birth" type="date" defaultValue={d.dateOfBirth} />
+        <TextField name="dateOfBirth" label="Date of birth" type="date" defaultValue={d.dateOfBirth} max={toDateInput(today())} />
       </FieldRow>
       <FieldRow>
         <TextField
@@ -211,6 +203,11 @@ function GuardianModeFields({
   );
 }
 
+/**
+ * Adding a student, one step at a time: who they are, where they sit, who
+ * their parent is, and (optionally) address and emergency contact. One form
+ * and one save underneath — the steps only decide what is on screen.
+ */
 export function CreateStudentForm({
   sections,
   parents,
@@ -220,30 +217,45 @@ export function CreateStudentForm({
   parents: SelectOption[];
   sessionName: string;
 }) {
+  const t = useT();
   return (
     <ActionForm action={createStudentAction} className="max-w-3xl">
-      <Section title="Student">
-        <StudentPersonalFields d={{}} />
-      </Section>
-
-      <Section title={`Placement for ${sessionName}`}>
-        <FieldRow>
-          <SelectField name="sectionId" label="Class and section" options={sections} placeholder="Select…" required />
-          <TextField name="rollNumber" label="Roll number" />
-        </FieldRow>
-      </Section>
-
-      <Section title="Parent">
-        <GuardianModeFields parents={parents} modes={["existing", "new"]} />
-      </Section>
-
-      <Section title="Address and emergency contact">
-        <StudentContactFields d={{}} />
-      </Section>
-
-      <div>
-        <SubmitButton pendingLabel="Adding…">Add student</SubmitButton>
-      </div>
+      <FormSteps
+        steps={[
+          { title: t("studentForm.stepStudent"), content: <StudentPersonalFields d={{}} /> },
+          {
+            title: t("studentForm.stepClass"),
+            description: sessionName,
+            content: (
+              <FieldRow>
+                <SelectField name="sectionId" label="Class and section" options={sections} placeholder="Select…" required />
+                <TextField name="rollNumber" label="Roll number" />
+              </FieldRow>
+            ),
+          },
+          { title: t("studentForm.stepParent"), content: <GuardianModeFields parents={parents} modes={["existing", "new"]} /> },
+          {
+            title: t("studentForm.stepContact"),
+            description: t("common.optional"),
+            content: <StudentContactFields d={{}} />,
+          },
+          {
+            title: t("studentForm.stepLogin"),
+            description: t("studentForm.stepLoginHint"),
+            content: (
+              <>
+                <CheckboxField name="parentLogin" label={t("studentForm.parentLogin")} hint={t("studentForm.parentLoginHint")} />
+                <TextField name="studentLoginEmail" label={t("studentForm.studentLogin")} type="email" hint={t("studentForm.studentLoginHint")} />
+              </>
+            ),
+          },
+        ]}
+        submit={
+          <SubmitButton size="lg" pendingLabel={t("studentForm.adding")}>
+            {t("studentForm.submit")}
+          </SubmitButton>
+        }
+      />
     </ActionForm>
   );
 }
@@ -254,14 +266,7 @@ export function EditStudentForm({ student }: { student: StudentDefaults & { stud
       <input type="hidden" name="studentId" value={student.studentId} />
       <Section title="Student">
         <StudentPersonalFields d={student} requireAdmission />
-        <SelectField
-          name="status"
-          label="Status"
-          options={STUDENT_STATUS_OPTIONS}
-          defaultValue={student.status}
-          hint="Anything other than Active also disables the student's login."
-          required
-        />
+        {/* Status is changed from the profile's "Change status", which records the date and reason. */}
       </Section>
       <Section title="Address and emergency contact">
         <StudentContactFields d={student} />
@@ -437,6 +442,15 @@ type TeacherDefaults = {
 function TeacherFields({ d, requireEmployeeId }: { d: TeacherDefaults; requireEmployeeId?: boolean }) {
   return (
     <>
+      <TeacherBasicFields d={d} requireEmployeeId={requireEmployeeId} />
+      <TeacherMoreFields d={d} />
+    </>
+  );
+}
+
+function TeacherBasicFields({ d, requireEmployeeId }: { d: TeacherDefaults; requireEmployeeId?: boolean }) {
+  return (
+    <>
       <FieldRow>
         <TextField name="firstName" label="First name" defaultValue={d.firstName} required />
         <TextField name="lastName" label="Last name" defaultValue={d.lastName} required />
@@ -455,6 +469,13 @@ function TeacherFields({ d, requireEmployeeId }: { d: TeacherDefaults; requireEm
         <TextField name="phone" label="Phone" type="tel" defaultValue={d.phone ?? ""} />
         <TextField name="joiningDate" label="Joining date" type="date" defaultValue={d.joiningDate} />
       </FieldRow>
+    </>
+  );
+}
+
+function TeacherMoreFields({ d }: { d: TeacherDefaults }) {
+  return (
+    <>
       <FieldRow>
         <TextField name="qualification" label="Qualification" placeholder="M.Sc., B.Ed." defaultValue={d.qualification ?? ""} />
         <TextField
@@ -465,7 +486,7 @@ function TeacherFields({ d, requireEmployeeId }: { d: TeacherDefaults; requireEm
           hint="What the school calls this post."
         />
       </FieldRow>
-      <TextField name="dateOfBirth" label="Date of birth" type="date" defaultValue={d.dateOfBirth} />
+      <TextField name="dateOfBirth" label="Date of birth" type="date" defaultValue={d.dateOfBirth} max={toDateInput(today())} />
       <TextField name="addressLine" label="Address" defaultValue={d.addressLine ?? ""} />
       <FieldRow>
         <TextField name="city" label="City" defaultValue={d.city ?? ""} />
@@ -476,24 +497,39 @@ function TeacherFields({ d, requireEmployeeId }: { d: TeacherDefaults; requireEm
   );
 }
 
+/**
+ * Adding a teacher in three short steps. Classes and subjects are assigned on
+ * the teacher's own page once they exist, where the choices can be checked
+ * against the timetable.
+ */
 export function CreateTeacherForm() {
+  const t = useT();
   return (
     <ActionForm action={createTeacherAction} resetOnSuccess className="max-w-3xl">
-      <Section title="Teacher">
-        <TeacherFields d={{}} />
-      </Section>
-      <Section title="Sign-in">
-        <TextField
-          name="email"
-          label="Email"
-          type="email"
-          hint="The teacher signs in with this address. A one-time password is shown after saving."
-          required
-        />
-      </Section>
-      <div>
-        <SubmitButton pendingLabel="Adding…">Add teacher</SubmitButton>
-      </div>
+      <FormSteps
+        steps={[
+          { title: t("teacherForm.stepBasic"), content: <TeacherBasicFields d={{}} /> },
+          { title: t("teacherForm.stepMore"), description: t("common.optional"), content: <TeacherMoreFields d={{}} /> },
+          {
+            title: t("teacherForm.stepLogin"),
+            description: t("teacherForm.classesHint"),
+            content: (
+              <TextField
+                name="email"
+                label="Email"
+                type="email"
+                hint="The teacher signs in with this address. A one-time password is shown after saving."
+                required
+              />
+            ),
+          },
+        ]}
+        submit={
+          <SubmitButton size="lg" pendingLabel={t("teacherForm.adding")}>
+            {t("teacherForm.submit")}
+          </SubmitButton>
+        }
+      />
     </ActionForm>
   );
 }
@@ -511,14 +547,7 @@ export function EditTeacherForm({ teacher }: { teacher: TeacherDefaults & { teac
         hint="Changing this changes the address they sign in with. Their password is unaffected."
         required
       />
-      <SelectField
-        name="status"
-        label="Status"
-        options={TEACHER_STATUS_OPTIONS}
-        defaultValue={teacher.status}
-        hint="A teacher who has left keeps their history but can no longer sign in."
-        required
-      />
+      {/* Status is changed from the profile's "Change status", which records the date and reason. */}
       <div>
         <SubmitButton>Save teacher</SubmitButton>
       </div>
@@ -540,7 +569,7 @@ export function AssignSubjectForm({
       <input type="hidden" name="teacherId" value={teacherId} />
       <FieldRow>
         <SelectField name="subjectId" label="Subject" options={subjects} placeholder="Select…" required />
-        <SelectField name="sectionId" label="Section" options={sections} placeholder="Select…" required />
+        <SelectField name="sectionId" label="Class / section" options={sections} placeholder="Select…" required />
       </FieldRow>
       <div>
         <SubmitButton variant="outline">Assign</SubmitButton>

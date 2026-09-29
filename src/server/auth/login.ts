@@ -1,6 +1,7 @@
 import type { SchoolStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/server/db/prisma";
 import { fakeVerifyPassword, verifyPassword } from "@/server/auth/password";
+import { personMaySignIn } from "@/server/auth/session";
 
 /**
  * Credential verification.
@@ -40,6 +41,9 @@ export async function authenticate(
       role: true,
       schoolId: true,
       school: { select: { status: true } },
+      student: { select: { status: true } },
+      teacher: { select: { status: true } },
+      staffMember: { select: { status: true } },
     },
   });
 
@@ -55,7 +59,7 @@ export async function authenticate(
     return { ok: false, reason: "INVALID_CREDENTIALS" };
   }
 
-  if (!user.isActive) {
+  if (!user.isActive || !personMaySignIn(user)) {
     return { ok: false, reason: "ACCOUNT_DISABLED" };
   }
 

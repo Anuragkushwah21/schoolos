@@ -14,9 +14,13 @@ import {
   chargeSectionAction,
   chargeStudentAction,
   createFeeHeadAction,
+  paySalaryAction,
+  recordExpenseAction,
   recordPaymentAction,
+  saveReceiptSettingsAction,
   setSalaryAction,
 } from "./actions";
+import { EXPENSE_CATEGORY_OPTIONS } from "./money";
 
 /**
  * The forms behind the school's money.
@@ -208,13 +212,108 @@ export function PaymentForm({
           name="receiptNo"
           label="Receipt number"
           defaultValue={suggestedReceiptNo}
-          hint="Unique within your school."
+          hint="Unique within your school. Printed on the receipt."
           required
         />
       </FieldRow>
+      <TextField
+        name="referenceNo"
+        label="Reference no."
+        hint="Cheque number, UPI or bank transaction id — printed on the receipt."
+      />
       <TextField name="notes" label="Note" />
       <div>
-        <SubmitButton pendingLabel="Recording…">Record payment</SubmitButton>
+        <SubmitButton pendingLabel="Recording payment…">Record payment</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+
+export function ExpenseForm({ today }: { today: string }) {
+  return (
+    <ActionForm action={recordExpenseAction} resetOnSuccess className="gap-3">
+      <FieldRow>
+        <SelectField
+          name="category"
+          label="Category"
+          options={EXPENSE_CATEGORY_OPTIONS}
+          placeholder="Choose a category"
+          required
+        />
+        <TextField name="amountMinor" label="Amount (₹)" type="number" min={1} step="1" required />
+      </FieldRow>
+      <TextField name="description" label="What it was for" placeholder="September electricity bill" required />
+      <FieldRow>
+        <TextField name="spentOn" label="Spent on" type="date" defaultValue={today} max={today} required />
+        <SelectField name="method" label="Method" options={METHOD_OPTIONS} defaultValue="CASH" required />
+      </FieldRow>
+      <TextField name="reference" label="Bill / voucher number" />
+      <div>
+        <SubmitButton pendingLabel="Saving expense…">Add expense</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+export function SalaryPaymentForm({
+  teachers,
+  today,
+}: {
+  teachers: SelectOption[];
+  today: string;
+}) {
+  return (
+    <ActionForm action={paySalaryAction} resetOnSuccess className="gap-3">
+      <SelectField
+        name="teacherId"
+        label="Teacher"
+        options={teachers}
+        placeholder={teachers.length ? "Choose a teacher" : "No active teachers"}
+        disabled={!teachers.length}
+        required
+      />
+      <FieldRow>
+        <TextField name="amountMinor" label="Amount paid (₹)" type="number" min={1} step="1" required />
+        <TextField name="forMonth" label="For month" type="month" defaultValue={today.slice(0, 7)} required />
+      </FieldRow>
+      <FieldRow>
+        <TextField name="paidOn" label="Paid on" type="date" defaultValue={today} max={today} required />
+        <SelectField name="method" label="Method" options={METHOD_OPTIONS} defaultValue="BANK_TRANSFER" required />
+      </FieldRow>
+      <TextField name="reference" label="Transaction reference" />
+      <div>
+        <SubmitButton pendingLabel="Saving…">Record salary payment</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** What this school prints on its fee receipts, beyond its name and address. */
+export function ReceiptSettingsForm({
+  settings,
+}: {
+  settings: { receiptHeaderNote: string | null; receiptFooterNote: string | null; showFeesToStudents: boolean };
+}) {
+  return (
+    <ActionForm action={saveReceiptSettingsAction} className="max-w-3xl">
+      <TextField
+        name="receiptHeaderNote"
+        label="Header line"
+        defaultValue={settings.receiptHeaderNote ?? ""}
+        placeholder="Affiliated to CBSE, New Delhi · Affiliation No. 1234567"
+        hint="Printed under the school name, e.g. affiliation or registration number."
+      />
+      <TextareaField
+        name="receiptFooterNote"
+        label="Footer note"
+        rows={3}
+        defaultValue={settings.receiptFooterNote ?? ""}
+        placeholder="Fees once paid are not refundable. Please keep this receipt safe."
+        hint="Printed at the bottom of every receipt."
+      />
+      <div>
+        <SubmitButton>Save receipt settings</SubmitButton>
       </div>
     </ActionForm>
   );

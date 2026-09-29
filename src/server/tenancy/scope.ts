@@ -23,27 +23,59 @@ const TENANT_MODELS = new Set([
   "AcademicSession",
   "ApiToken",
   "AdmissionApplication",
+  "Assessment",
+  "Asset",
+  "AssetEvent",
+  "AssessmentResult",
+  "Book",
+  "BookIssue",
   "Class",
   "ClassSession",
+  "ClassTeacherAssignment",
+  "Complaint",
   "Event",
+  "Exam",
+  "Expense",
+  "FeeCharge",
+  "FeeHead",
+  "FeePayment",
+  "Holiday",
   "Homework",
+  "LeaveRequest",
+  "LessonMaterial",
   "Notice",
+  "NoticeRecipient",
   "Parent",
+  "RouteStop",
+  "Meeting",
+  "MeetingRecipient",
+  "MeetingSection",
+  "MeetingStudent",
   "ParentStudent",
+  "SalaryPayment",
   "SchoolMedia",
   "SchoolPage",
+  "StaffMember",
+  "StatusChange",
+  "StudentSupport",
+  "SupportConcern",
+  "SupportNote",
   "Section",
   "Stream",
   "Student",
   "StudentAttendance",
   "StudentEnrollment",
   "StudentRemark",
+  "StudentTransport",
   "Subject",
   "Subscription",
   "Teacher",
   "TeacherAttendance",
+  "TeacherSalary",
   "TeacherSubjectAssignment",
   "TimetableSlot",
+  "TransportRoute",
+  "Vehicle",
   "User",
 ]);
 
@@ -72,6 +104,22 @@ const CREATE_OPERATIONS = new Set([
 ]);
 
 type AnyArgs = Record<string, unknown>;
+
+/** Operations whose `data` changes existing rows. */
+const UPDATE_OPERATIONS = new Set(["update", "updateMany", "updateManyAndReturn"]);
+
+/**
+ * A write may never move a row to another school. Services pass validated
+ * input straight through as `data`, so if a schema ever grew a `schoolId`
+ * field this is what stops a tampered request re-homing a record.
+ */
+function assertNoSchoolChange(data: unknown, schoolId: string): void {
+  if (!data || typeof data !== "object") return;
+  const value = (data as AnyArgs).schoolId;
+  if (value !== undefined && value !== schoolId) {
+    throw new Error("A tenant-scoped write tried to change schoolId. Rows cannot move between schools.");
+  }
+}
 
 /**
  * Scope a query on `School` itself, which is keyed by `id` rather than
@@ -170,6 +218,7 @@ export function forSchool(schoolId: string) {
           }
 
           if (WHERE_OPERATIONS.has(operation)) {
+            if (UPDATE_OPERATIONS.has(operation)) assertNoSchoolChange((args as AnyArgs).data, schoolId);
             return query(scopeWhere(args as AnyArgs, schoolId) as typeof args);
           }
 
@@ -179,6 +228,7 @@ export function forSchool(schoolId: string) {
 
           if (operation === "upsert") {
             const typed = args as AnyArgs;
+            assertNoSchoolChange(typed.update, schoolId);
             const create = (typed.create ?? {}) as AnyArgs;
             const next: AnyArgs = {
               ...scopeWhere(typed, schoolId),

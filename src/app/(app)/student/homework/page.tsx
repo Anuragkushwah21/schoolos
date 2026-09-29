@@ -1,4 +1,6 @@
-import type { Metadata } from "next";
+import { NotebookPenIcon } from "lucide-react";
+import type { Metadata, Route } from "next";
+import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
@@ -18,7 +20,8 @@ export const metadata: Metadata = { title: "Homework" };
  *
  * There is no submission or completion tracking in this version, so nothing here
  * claims to know what has been done — marking work as handed in would be a new
- * feature with a teacher side to it, not a display change.
+ * feature with a teacher side to it, not a display change. Each entry opens
+ * the full assignment, with its instructions and study resources.
  */
 export default async function StudentHomeworkPage() {
   const ctx = await requireTenant("STUDENT");
@@ -36,7 +39,7 @@ export default async function StudentHomeworkPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={NotebookPenIcon} tone="purple"
         title="Homework"
         description={`${data.me.placement.sectionLabel} · set by your teachers`}
       />
@@ -70,9 +73,12 @@ export default async function StudentHomeworkPage() {
                     {group.entries.map((entry) => (
                       <li key={entry.id} className="flex flex-col gap-1 py-3">
                         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                          <span className="text-sm font-medium">
+                          <Link
+                            href={`/student/homework/${entry.id}` as Route}
+                            className="text-sm font-medium hover:underline"
+                          >
                             {entry.subject} — {entry.title}
-                          </span>
+                          </Link>
                           <span className="text-muted-foreground text-xs tabular-nums">
                             due {formatDate(entry.dueOn)}
                           </span>
@@ -82,6 +88,9 @@ export default async function StudentHomeworkPage() {
                         ) : null}
                         <p className="text-muted-foreground text-xs">
                           Set {formatDate(entry.assignedOn)} by {entry.teacher}
+                          {entry.resourceCount
+                            ? ` · ${pluralize(entry.resourceCount, "study resource")}`
+                            : ""}
                         </p>
                       </li>
                     ))}

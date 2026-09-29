@@ -12,12 +12,16 @@ import { isUniqueViolation } from "@/server/db/errors";
 import type { Credentials } from "@/server/platform/schools";
 
 /**
- * Portal accounts for people in a school — teachers, students and guardians.
+ * Portal accounts for people in a school — teachers, students, guardians and
+ * non-teaching staff.
  *
  * The School Admin issues them; the role is always set here from the kind of
  * record being linked, never taken from the request. Passwords are generated,
  * shown once, and can only be replaced, never read back.
  */
+
+/** Logins the School Admin issues and manages. Never an administrator. */
+const PORTAL_ROLES: UserRole[] = ["TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"];
 
 /** Create a login and return its one-time credentials. Caller links it. */
 export async function createPortalUser(
@@ -54,7 +58,7 @@ export async function resetPortalPassword(ctx: TenantContext, userId: string): P
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
   const user = await ctx.db.user.findFirst({
-    where: { id: userId, role: { in: ["TEACHER", "STUDENT", "PARENT"] } },
+    where: { id: userId, role: { in: PORTAL_ROLES } },
     select: { id: true, email: true },
   });
   if (!user) throw new NotFoundError();
@@ -91,8 +95,8 @@ export async function setPortalUserActive(
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
   const { count } = await ctx.db.user.updateMany({
-    where: { id: userId, role: { in: ["TEACHER", "STUDENT", "PARENT"] } },
-    data: { isActive },
+    where: { id: userId, role: { in: PORTAL_ROLES } },
+    data: isActive ? { isActive, disabledReason: null, disabledAt: null } : { isActive, disabledReason: "ADMIN", disabledAt: new Date() },
   });
   if (count && !isActive) await invalidateAllSessionsForUser(userId);
 }

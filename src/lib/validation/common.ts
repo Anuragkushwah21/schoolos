@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { parseDateInput, timeToMinutes } from "@/lib/dates";
+import { parseDateInput, timeToMinutes, today } from "@/lib/dates";
 
 /**
  * Building blocks for form schemas.
@@ -42,6 +42,7 @@ export const optionalUrl = z
       .trim()
       .max(500, "Keep this under 500 characters")
       .regex(/^https:\/\//, "Use an https:// link")
+      .refine((value) => URL.canParse(value), "Enter a valid web address")
       .optional(),
   )
   .transform((value) => value ?? null);
@@ -102,6 +103,15 @@ export function requiredDate(label = "a date") {
 export const optionalDate = z
   .preprocess(emptyToUndefined, requiredDate().optional())
   .transform((value) => value ?? null);
+
+/**
+ * An optional date that records something that has already happened — a date
+ * of birth, say. Today is allowed; a future date is not. Checked against the
+ * school's calendar day, not the server's.
+ */
+export function optionalPastDate(label = "This date") {
+  return optionalDate.refine((date) => date === null || date <= today(), `${label} cannot be in the future`);
+}
 
 export function requiredTime(label = "a time") {
   return z

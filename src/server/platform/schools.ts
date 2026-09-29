@@ -15,6 +15,7 @@ import { generateTemporaryPassword } from "@/server/auth/temp-password";
 import { provisionSchool } from "@/server/academics/provision";
 import { isUniqueViolation } from "@/server/db/errors";
 import { prisma } from "@/server/db/prisma";
+import { PLATFORM_AUDIT_WHERE } from "@/server/platform/audit";
 import { sendMail } from "@/server/mail/mailer";
 import { schoolApprovedEmail, schoolRejectedEmail } from "@/server/mail/templates";
 
@@ -117,7 +118,8 @@ export async function getSchoolForPlatform(actor: SessionUser, schoolId: string)
       },
     }),
     prisma.auditLog.findMany({
-      where: { schoolId },
+      // Platform events for this school only — not its daily operations.
+      where: { schoolId, ...PLATFORM_AUDIT_WHERE },
       orderBy: { createdAt: "desc" },
       take: 10,
       select: { id: true, action: true, summary: true, createdAt: true },
@@ -536,5 +538,35 @@ export async function listPlansForSelect() {
   return prisma.plan.findMany({
     orderBy: { priceMinor: "asc" },
     select: { id: true, name: true, isActive: true },
+  });
+}
+
+/** Set or clear a school's UDISE code. Unique across the platform. */
+export async function setSchoolUdise(
+  actor: SessionUser,
+  schoolId: string,
+  udiseCode: string | null,
+): Promise<void> {
+  assertRole(actor, "SUPER_ADMIN");
+
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { id: true, name: true } });
+  if (!school) throw new NotFoundError("That school was not found.");
+
+  try {
+    await prisma.school.update({ where: { id: school.id }, data: { udiseCode } });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new ConflictError("Another school already has that UDISE code.");
+    }
+    throw error;
+  }
+
+  await recordAudit({
+    action: "SCHOOL_UPDATED",
+    entityType: "School",
+    entityId: school.id,
+    schoolId: school.id,
+    actorId: actor.id,
+    summary: udiseCode ? `UDISE code for ${school.name} set to ${udiseCode}.` : `UDISE code for ${school.name} cleared.`,
   });
 }

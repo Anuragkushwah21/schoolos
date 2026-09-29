@@ -23,6 +23,7 @@ const PROTECTED_PREFIXES = [
   "/teacher",
   "/student",
   "/parent",
+  "/staff",
   "/account",
   "/api-tokens",
 ];

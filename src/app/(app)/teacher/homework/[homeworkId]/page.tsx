@@ -5,12 +5,17 @@ import { NoSessionNotice } from "@/components/shared/no-session-notice";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { deleteHomeworkAction } from "@/features/classwork/actions";
-import { HomeworkForm } from "@/features/classwork/forms";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AddHomeworkResourceForm,
+  HomeworkForm,
+  HomeworkResourceEditor,
+} from "@/features/classwork/forms";
 import { formatDate, toDateInput, today } from "@/lib/dates";
 import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession } from "@/server/academics/structure";
 import { getMyHomework } from "@/server/classwork/homework";
-import { orNotFound } from "@/server/page-helpers";
+import { orHidden } from "@/server/page-helpers";
 import { myTeachingOptions } from "@/server/people/teacher-self";
 
 export const metadata: Metadata = { title: "Edit homework" };
@@ -37,7 +42,7 @@ export default async function EditHomeworkPage(
   }
 
   const [homework, teaching] = await Promise.all([
-    orNotFound(getMyHomework(ctx, homeworkId)),
+    orHidden(getMyHomework(ctx, homeworkId)),
     myTeachingOptions(ctx),
   ]);
 
@@ -81,11 +86,35 @@ export default async function EditHomeworkPage(
           subjectId: homework.subjectId,
           title: homework.title,
           description: homework.description,
+          instructions: homework.instructions,
           assignedOn: toDateInput(homework.assignedOn),
           dueOn: toDateInput(homework.dueOn),
           status: homework.status,
         }}
       />
+
+      <Card className="mt-8 max-w-3xl">
+        <CardHeader>
+          <CardTitle>Study resources</CardTitle>
+          <CardDescription>
+            PDFs, videos and links for this homework. Changes here save straight away and never
+            affect the homework itself.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {homework.resources.length ? (
+            homework.resources.map((resource) => (
+              <HomeworkResourceEditor key={resource.id} resource={resource} />
+            ))
+          ) : (
+            <p className="text-muted-foreground text-sm">No study resources attached.</p>
+          )}
+          <div className="border-t pt-4">
+            <p className="mb-3 text-sm font-medium">Add a resource</p>
+            <AddHomeworkResourceForm homeworkId={homework.id} />
+          </div>
+        </CardContent>
+      </Card>
     </>
   );
 }

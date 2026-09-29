@@ -1,6 +1,7 @@
 import "server-only";
 
 import { NotFoundError } from "@/lib/errors";
+import { studentMaySignIn } from "@/lib/validation/lifecycle";
 import { sectionLabel } from "@/server/academics/structure";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -115,6 +116,12 @@ export async function findChild(
   // Another guardian's child, another school's child and a made-up id are one
   // answer, so probing ids reveals nothing about who else the school teaches.
   if (!link) throw new NotFoundError("That child was not found.");
+  // A child who has left the school (transferred, graduated, withdrawn) is no
+  // longer the school's to report on day to day; their records stay with the
+  // office. A sibling who is still here is unaffected.
+  if (!studentMaySignIn(link.student.status)) {
+    throw new NotFoundError(`${link.student.firstName} is no longer a current student here. Ask the school office for their records.`);
+  }
 
   const enrollment = link.student.enrollments[0];
 
@@ -186,8 +193,12 @@ export async function listMyChildren(ctx: TenantContext) {
   return {
     parent,
     children: links.map((link) => {
-      const enrollment = link.student.enrollments[0];
+      // Only a current student is placed for the parent's screens; one who
+      // has left is listed (with their status) but opens no current data.
+      const current = studentMaySignIn(link.student.status);
+      const enrollment = current ? link.student.enrollments[0] : undefined;
       return {
+        current,
         id: link.student.id,
         name: `${link.student.firstName} ${link.student.lastName}`,
         admissionNumber: link.student.admissionNumber,

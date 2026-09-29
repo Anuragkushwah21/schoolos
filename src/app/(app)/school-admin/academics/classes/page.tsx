@@ -1,3 +1,4 @@
+import { BookOpenIcon } from "lucide-react";
 import type { Route } from "next";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -7,8 +8,8 @@ import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { SetupNotice } from "@/components/shared/setup-notice";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { toggleClassAction } from "@/features/school/academics-actions";
-import { CreateSectionForm, InlineCreateForm } from "@/features/school/academics-forms";
+import { deleteClassAction, toggleClassAction } from "@/features/school/academics-actions";
+import { CreateSectionForm, EditClassForm, InlineCreateForm } from "@/features/school/academics-forms";
 import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
 import {
@@ -47,7 +48,7 @@ export default async function ClassesPage(props: PageProps<"/school-admin/academ
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={BookOpenIcon} tone="blue"
         back={back}
         title="Classes & sections"
         description={`Sections for the ${session.name} session${session.isCurrent ? " (current)" : ""}.`}
@@ -77,15 +78,40 @@ export default async function ClassesPage(props: PageProps<"/school-admin/academ
                   {klass.name}
                   {klass.isActive ? null : <span className="ml-2 text-xs font-normal">(not offered)</span>}
                 </p>
-                <ActionButton
-                  action={toggleClassAction}
-                  fields={{ targetId: klass.id, active: klass.isActive ? "false" : "true" }}
-                  variant="ghost"
-                  size="xs"
-                >
-                  {klass.isActive ? "Stop offering" : "Offer this class"}
-                </ActionButton>
+                <div className="flex flex-wrap items-center gap-1">
+                  <ActionButton
+                    action={toggleClassAction}
+                    fields={{ targetId: klass.id, active: klass.isActive ? "false" : "true" }}
+                    variant="ghost"
+                    size="xs"
+                  >
+                    {klass.isActive ? "Stop offering" : "Offer this class"}
+                  </ActionButton>
+                  <ActionButton
+                    action={deleteClassAction}
+                    fields={{ classId: klass.id }}
+                    variant="ghost"
+                    size="xs"
+                    className="text-destructive"
+                    pendingLabel="Deleting…"
+                    confirm={{
+                      title: `Delete ${klass.name}?`,
+                      description:
+                        "Only a class that has never had sections, students, admissions or notices can be deleted. To retire a class that has been used, choose “Stop offering” — its history is kept.",
+                      confirmLabel: "Delete class",
+                    }}
+                  >
+                    Delete
+                  </ActionButton>
+                </div>
               </div>
+
+              <details className="mt-2 text-sm">
+                <summary className="text-muted-foreground cursor-pointer text-xs">Edit class</summary>
+                <div className="mt-3">
+                  <EditClassForm klass={{ id: klass.id, name: klass.name, level: klass.level }} />
+                </div>
+              </details>
 
               {klass.sections.length ? (
                 <ul className="mt-3 flex flex-wrap gap-2">

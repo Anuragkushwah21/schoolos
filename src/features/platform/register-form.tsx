@@ -35,6 +35,13 @@ export function RegisterForm({
             placeholder="1998"
           />
         </FieldRow>
+        <TextField
+          name="udiseCode"
+          label="UDISE code (optional)"
+          inputMode="numeric"
+          placeholder="23260100101"
+          hint="The 11-digit code from UDISE+, if your school has one."
+        />
       </fieldset>
 
       <fieldset className="flex flex-col gap-5">

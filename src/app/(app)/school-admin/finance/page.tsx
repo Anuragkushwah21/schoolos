@@ -1,3 +1,4 @@
+import { WalletIcon } from "lucide-react";
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 
@@ -8,6 +9,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FEE_STATUS_LABEL, FEE_STATUS_TONE, rupees } from "@/features/finance/money";
+import { ReceiptLinks } from "@/features/finance/receipt-links";
 import { formatDate } from "@/lib/dates";
 import { pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
@@ -39,18 +41,15 @@ export default async function FinancePage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={WalletIcon} tone="orange"
         title="Finance"
         description={`${session.name} · fee collection and staff salaries`}
         actions={
-          <>
-            <Button asChild variant="outline">
-              <Link href="/school-admin/finance/payments">Payments</Link>
-            </Button>
-            <Button asChild>
-              <Link href="/school-admin/finance/fees">Fee collection</Link>
-            </Button>
-          </>
+          // Payments, receipts and the fee structure are the tabs above; the
+          // one thing to do from here is take a payment.
+          <Button asChild>
+            <Link href="/school-admin/finance/payments">Collect fee</Link>
+          </Button>
         }
       />
 
@@ -147,6 +146,7 @@ export default async function FinancePage() {
                       </span>
                     </span>
                     <span className="text-sm tabular-nums">{rupees(payment.amountMinor)}</span>
+                    <ReceiptLinks paymentId={payment.id} receiptNo={payment.receiptNo} />
                   </li>
                 ))}
               </ul>

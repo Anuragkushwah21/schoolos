@@ -1,5 +1,8 @@
 import { AppShell } from "@/components/shared/app-shell";
+import { staffNav } from "@/lib/nav";
 import { requireUser } from "@/server/auth/current-user";
+import { staffPermissions } from "@/server/auth/staff-access";
+import { forSchool } from "@/server/tenancy/scope";
 
 /**
  * Account settings and API tokens are shared by every role, and render inside
@@ -8,5 +11,14 @@ import { requireUser } from "@/server/auth/current-user";
  */
 export default async function AccountLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
-  return <AppShell user={user}>{children}</AppShell>;
+  // A staff member's sidebar includes the modules they were granted.
+  const nav =
+    user.role === "NON_TEACHING_STAFF" && user.schoolId
+      ? staffNav(await staffPermissions({ user, schoolId: user.schoolId, schoolSlug: user.schoolSlug ?? "", schoolName: user.schoolName ?? "", db: forSchool(user.schoolId) }))
+      : undefined;
+  return (
+    <AppShell user={user} nav={nav}>
+      {children}
+    </AppShell>
+  );
 }

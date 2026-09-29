@@ -47,6 +47,10 @@ export type FormSuccessData = {
   credentials?: { email: string; password: string; label?: string };
   /** A value shown once and never retrievable again, such as an API token. */
   secret?: { label: string; value: string; hint?: string };
+  /** Several sign-ins issued at once (a student and their parent). */
+  credentialsList?: Array<{ email: string; password: string; label?: string }>;
+  /** Where to go next once the result has been read, e.g. the new record. */
+  next?: { href: string; label: string };
 };
 
 function fieldOf<K extends keyof FormSuccessData>(data: unknown, key: K): FormSuccessData[K] {
@@ -82,6 +86,8 @@ export function ActionForm<T>({
   const formError = state.status === "error" ? state.message : undefined;
   const credentials = state.status === "success" ? fieldOf(state.data, "credentials") : undefined;
   const secret = state.status === "success" ? fieldOf(state.data, "secret") : undefined;
+  const credentialsList = state.status === "success" ? fieldOf(state.data, "credentialsList") : undefined;
+  const next = state.status === "success" ? fieldOf(state.data, "next") : undefined;
 
   return (
     <FormContext.Provider value={{ fieldErrors, pending }}>
@@ -91,7 +97,10 @@ export function ActionForm<T>({
         className={cn("flex flex-col gap-5", className)}
         onSubmit={(event) => {
           event.preventDefault();
-          const formData = new FormData(event.currentTarget);
+          // The clicked button's name/value is included, so one form can
+          // offer several operations ("Promote", "Move", "Set status").
+          const submitter = (event.nativeEvent as SubmitEvent).submitter;
+          const formData = new FormData(event.currentTarget, submitter instanceof HTMLButtonElement ? submitter : undefined);
           startTransition(() => dispatch(formData));
         }}
       >
@@ -106,7 +115,13 @@ export function ActionForm<T>({
         ) : null}
 
         {credentials ? <CredentialsNotice {...credentials} /> : null}
+        {credentialsList?.map((item) => <CredentialsNotice key={item.email} {...item} />)}
         {secret ? <SecretNotice {...secret} /> : null}
+        {next ? (
+          <a href={next.href} className="bg-primary text-primary-foreground hover:bg-primary-hover inline-flex min-h-10 w-fit items-center rounded-lg px-4 text-sm font-medium">
+            {next.label}
+          </a>
+        ) : null}
 
         {children}
       </form>

@@ -82,6 +82,14 @@ export default async function EditActivityPage(
           topic: activity.topic,
           notes: activity.notes,
           importantPoints: activity.importantPoints,
+          preparation: activity.preparation,
+          homework: activity.homework[0]
+            ? {
+                title: activity.homework[0].title,
+                description: activity.homework[0].description,
+                dueOn: toDateInput(activity.homework[0].dueOn),
+              }
+            : null,
         }}
       />
 
@@ -90,8 +98,8 @@ export default async function EditActivityPage(
             <CardHeader>
               <CardTitle>Study material</CardTitle>
               <CardDescription>
-                What the class works from afterwards. Notes and practice work are typed here; a
-                document is a link to somewhere the school already hosts it.
+                What the class works from afterwards: notes, PDFs, videos and links. Add as many
+                as the lesson needs. Students in this class can see them; parents cannot.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-5">
@@ -104,10 +112,21 @@ export default async function EditActivityPage(
                     >
                       <span className="min-w-0 flex-1">
                         <span className="block font-medium">{material.title}</span>
-                        <span className="text-muted-foreground block text-xs">
+                        <span className="text-muted-foreground block text-xs break-all">
                           {humanize(material.kind)}
+                          {material.fileName ? ` · ${material.fileName}` : ""}
                           {material.url ? ` · ${material.url}` : ""}
                         </span>
+                        {material.fileName ? (
+                          <a
+                            href={`/api/v1/lesson-materials/${material.id}/file`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary text-xs hover:underline"
+                          >
+                            View PDF
+                          </a>
+                        ) : null}
                       </span>
                       <ActionButton
                         action={deleteLessonMaterialAction}

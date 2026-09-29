@@ -5,7 +5,7 @@ import { noticesFor } from "@/server/communication/notices";
 
 /** Notices addressed to the caller's role, plus what is coming up. */
 export const GET = apiRoute(
-  { roles: ["SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT"] },
+  { roles: ["SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"] },
   async ({ request, ctx }) => {
     const { limit } = readQuery(request, listQuery);
     const [notices, events] = await Promise.all([

@@ -1,5 +1,9 @@
 import "server-only";
 
+import { CURRENT_EMPLOYEE } from "@/lib/validation/lifecycle";
+
+import { today } from "@/lib/dates";
+
 import type { Prisma } from "@/generated/prisma/client";
 import type { TeacherStatus } from "@/generated/prisma/enums";
 import { ConflictError, NotFoundError } from "@/lib/errors";
@@ -11,7 +15,7 @@ import { hashPassword } from "@/server/auth/password";
 import { generateTemporaryPassword } from "@/server/auth/temp-password";
 import { requireCurrentSession } from "@/server/academics/structure";
 import { isUniqueViolation } from "@/server/db/errors";
-import { setPortalUserActive } from "@/server/people/accounts";
+import { changeEmployeeStatus } from "@/server/people/lifecycle";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
 import type { Credentials } from "@/server/platform/schools";
 
@@ -25,14 +29,15 @@ export const TEACHER_PAGE_SIZE = 25;
 
 export async function listTeachers(
   ctx: TenantContext,
-  filters: { q?: string; status?: TeacherStatus; page?: number },
+  /** CURRENT = active or on leave — the default list; a single status or none (all) otherwise. */
+  filters: { q?: string; status?: TeacherStatus | "CURRENT"; page?: number },
 ) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const page = Math.max(1, filters.page ?? 1);
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
 
   const where: Prisma.TeacherWhereInput = {
-    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.status === "CURRENT" ? { status: { in: [...CURRENT_EMPLOYEE] } } : filters.status ? { status: filters.status } : {}),
     ...(filters.q
       ? {
           OR: [
@@ -201,7 +206,7 @@ export async function createTeacher(
 
 export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInput): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
-  const { teacherId, ...data } = input;
+  const { teacherId, status, ...data } = input;
 
   const existing = await ctx.db.teacher.findFirst({
     where: { id: teacherId },
@@ -209,9 +214,6 @@ export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInpu
   });
   if (!existing) throw new NotFoundError();
 
-  if (data.status !== "INACTIVE" && existing.status === "INACTIVE") {
-    await assertWithinPlanLimit(ctx, "teachers");
-  }
 
   // The address is the teacher's way in, so a typo in it locks them out for
   // good unless it can be corrected here. Both copies move together: the
@@ -236,9 +238,10 @@ export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInpu
     throw error;
   }
 
-  // A teacher who has left keeps their history but loses their login.
-  if ((data.status === "INACTIVE") !== (existing.status === "INACTIVE")) {
-    await setPortalUserActive(ctx, existing.userId, data.status !== "INACTIVE");
+  // A status sent with the details (older forms, the API) is recorded like
+  // any other change: dated today, closing or reopening the login, and kept.
+  if (status && status !== existing.status) {
+    await changeEmployeeStatus(ctx, "TEACHER", teacherId, status, { effectiveDate: today(), reason: "Changed on the teacher's details", remarks: null, confirmReturn: true });
   }
 
   await recordAudit({

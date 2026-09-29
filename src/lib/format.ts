@@ -3,12 +3,17 @@
  */
 
 /** Money is stored in minor units (paise); 3500000 → "₹35,000". */
-export function formatMoney(minor: number, currency = "INR"): string {
-  return new Intl.NumberFormat("en-IN", {
+export function formatMoney(minor: number, currency = "INR", intl = "en-IN"): string {
+  return new Intl.NumberFormat(intl, {
     style: "currency",
     currency,
     maximumFractionDigits: minor % 100 === 0 ? 0 : 2,
   }).format(minor / 100);
+}
+
+/** 150000 → "1,50,000" — Indian digit grouping in either language. */
+export function formatNumber(value: number, intl = "en-IN"): string {
+  return new Intl.NumberFormat(intl).format(value);
 }
 
 export function fullName(person: { firstName: string; lastName: string }): string {

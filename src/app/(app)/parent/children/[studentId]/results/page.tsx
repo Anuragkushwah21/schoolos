@@ -15,11 +15,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PublishedExams } from "@/features/exams/published-exams";
 import { ChildTabs } from "@/features/parent/child-nav";
 import { formatDate } from "@/lib/dates";
 import { pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
+import { publishedExamsFor } from "@/server/exams/results";
 import { getChildResults } from "@/server/parent/child";
 
 export const metadata: Metadata = { title: "Tests & results" };
@@ -46,6 +48,8 @@ export default async function ChildResultsPage(
   const { child, entries, subjects, overall, satCount } = await orNotFound(
     getChildResults(ctx, studentId),
   );
+  // After the guardian check above; `publishedExamsFor` repeats it anyway.
+  const exams = await publishedExamsFor(ctx, studentId);
 
   const missed = entries.filter((entry) => !entry.sat).length;
 
@@ -57,6 +61,7 @@ export default async function ChildResultsPage(
         description={`${child.placement.sectionLabel} · ${child.placement.sessionName}`}
       />
       <ChildTabs studentId={studentId} active="results" />
+      <PublishedExams exams={exams} studentId={studentId} />
 
       {entries.length === 0 ? (
         <EmptyState title="No tests recorded yet">

@@ -68,6 +68,17 @@ export function isSameDay(a: Date, b: Date): boolean {
   return toDateInput(a) === toDateInput(b);
 }
 
+/**
+ * For a date that schedules something ahead (an event, an expiry): true when
+ * `next` is acceptable — today or later, or unchanged from what is stored.
+ * Keeping an existing past date lets an old record be edited without being
+ * forced to move; choosing a new past date is refused.
+ */
+export function isAllowedScheduleDate(next: Date, previous: Date | null | undefined, now: Date = today()): boolean {
+  if (next >= now) return true;
+  return previous !== null && previous !== undefined && isSameDay(next, previous);
+}
+
 /** Sunday = 0, matching `Date#getUTCDay`. */
 const DAY_BY_INDEX: DayOfWeek[] = [
   "SUNDAY",
@@ -137,10 +148,16 @@ export function formatMinutes(minutes: number): string {
   return `${hour12}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
+/*
+ * Every formatter below takes an optional Intl locale ("en-IN", "hi-IN"; see
+ * `lib/i18n/config.ts#INTL_LOCALE` and `server/i18n.ts#getIntlLocale`). The
+ * default keeps Indian English, so existing callers are unchanged.
+ */
+
 /** "18 Sep 2026". Formats the stored calendar day, never shifting it by zone. */
-export function formatDate(date: Date | null | undefined): string {
+export function formatDate(date: Date | null | undefined, intl = "en-IN"): string {
   if (!date) return "—";
-  return new Intl.DateTimeFormat("en-IN", {
+  return new Intl.DateTimeFormat(intl, {
     timeZone: "UTC",
     day: "numeric",
     month: "short",
@@ -149,8 +166,8 @@ export function formatDate(date: Date | null | undefined): string {
 }
 
 /** "September 2026". Names the calendar month a stored date falls in. */
-export function formatMonth(date: Date): string {
-  return new Intl.DateTimeFormat("en-IN", {
+export function formatMonth(date: Date, intl = "en-IN"): string {
+  return new Intl.DateTimeFormat(intl, {
     timeZone: "UTC",
     month: "long",
     year: "numeric",
@@ -158,8 +175,8 @@ export function formatMonth(date: Date): string {
 }
 
 /** "Fri, 18 Sep". */
-export function formatDayShort(date: Date): string {
-  return new Intl.DateTimeFormat("en-IN", {
+export function formatDayShort(date: Date, intl = "en-IN"): string {
+  return new Intl.DateTimeFormat(intl, {
     timeZone: "UTC",
     weekday: "short",
     day: "numeric",
@@ -168,9 +185,9 @@ export function formatDayShort(date: Date): string {
 }
 
 /** A moment in time (not a calendar day), shown in the school's zone. */
-export function formatDateTime(date: Date | null | undefined): string {
+export function formatDateTime(date: Date | null | undefined, intl = "en-IN"): string {
   if (!date) return "—";
-  return new Intl.DateTimeFormat("en-IN", {
+  return new Intl.DateTimeFormat(intl, {
     timeZone: SCHOOL_TIME_ZONE,
     day: "numeric",
     month: "short",

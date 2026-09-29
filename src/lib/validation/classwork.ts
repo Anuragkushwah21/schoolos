@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   id,
+  optionalDate,
   optionalEnum,
   optionalId,
   optionalUrl,
@@ -27,16 +28,31 @@ export const ACTIVITY_STATUS_VALUES = [
   "CANCELLED",
 ] as const;
 
-export const activitySchema = z.object({
-  /** The period being written up. It already names the class and the teacher. */
-  timetableSlotId: id,
-  date: requiredDate("the date of the class"),
-  status: z.enum(ACTIVITY_STATUS_VALUES, { error: "Choose what happened" }),
-  topic: optionalText(160),
-  notes: optionalText(2000),
-  /** The short list a student revises from. */
-  importantPoints: optionalText(1000),
-});
+export const activitySchema = z
+  .object({
+    /** The period being written up. It already names the class and the teacher. */
+    timetableSlotId: id,
+    date: requiredDate("the date of the class"),
+    status: z.enum(ACTIVITY_STATUS_VALUES, { error: "Choose what happened" }),
+    topic: optionalText(160),
+    notes: optionalText(2000),
+    /** The short list a student revises from. */
+    importantPoints: optionalText(1000),
+    /** What students should do before the next class. */
+    preparation: optionalText(1000),
+    /** Homework set in this class. Title and due date go together. */
+    homeworkTitle: optionalText(160),
+    homeworkDescription: optionalText(2000),
+    homeworkDueOn: optionalDate,
+  })
+  .refine((data) => !data.homeworkTitle || Boolean(data.homeworkDueOn), {
+    message: "Give the homework a due date",
+    path: ["homeworkDueOn"],
+  })
+  .refine((data) => !data.homeworkDueOn || !data.homeworkTitle || data.homeworkDueOn >= data.date, {
+    message: "Homework cannot be due before the class",
+    path: ["homeworkDueOn"],
+  });
 
 export type ActivityInput = z.infer<typeof activitySchema>;
 
@@ -67,10 +83,21 @@ export const MATERIAL_KIND_VALUES = [
   "DOCUMENT",
   "QUESTIONS",
   "PRACTICE",
+  "VIDEO",
 ] as const;
 
 /** Kinds that carry a web address rather than text the teacher typed. */
-const URL_KIND_VALUES: readonly string[] = ["LINK", "DOCUMENT"];
+const URL_KIND_VALUES: readonly string[] = ["LINK", "DOCUMENT", "VIDEO"];
+
+/**
+ * An optional uploaded file. A file input left empty still posts an empty
+ * `File`, which is read here as "no file". Type and size are checked by the
+ * storage service, which also reads the bytes.
+ */
+const optionalFile = z.preprocess(
+  (value) => (value instanceof File && value.size > 0 ? value : undefined),
+  z.instanceof(File).optional(),
+);
 
 export const lessonMaterialSchema = z
   .object({
@@ -79,11 +106,19 @@ export const lessonMaterialSchema = z
     title: requiredText("a title", 160),
     url: optionalUrl,
     body: optionalText(4000),
+    description: optionalText(500),
+    file: optionalFile,
   })
-  .refine((data) => !URL_KIND_VALUES.includes(data.kind) || Boolean(data.url), {
-    message: "A link or a document needs a web address",
-    path: ["url"],
-  })
+  .refine(
+    (data) =>
+      !URL_KIND_VALUES.includes(data.kind) ||
+      Boolean(data.url) ||
+      (data.kind === "DOCUMENT" && Boolean(data.file)),
+    {
+      message: "Give a web address, or upload a PDF for a document",
+      path: ["url"],
+    },
+  )
   .refine((data) => URL_KIND_VALUES.includes(data.kind) || Boolean(data.body), {
     message: "Write the notes, questions or practice work itself",
     path: ["body"],
@@ -100,6 +135,8 @@ export const homeworkSchema = z
     subjectId: id,
     title: requiredText("a title", 160),
     description: optionalText(4000),
+    /** Step-by-step: "Complete Exercise 4.2, Questions 1-10." */
+    instructions: optionalText(4000),
     assignedOn: requiredDate("the date it is set"),
     dueOn: requiredDate("a due date"),
     status: z.enum(HOMEWORK_STATUS_VALUES, { error: "Choose a status" }),
@@ -110,6 +147,83 @@ export const homeworkSchema = z
   });
 
 export type HomeworkInput = z.infer<typeof homeworkSchema>;
+
+/** What can be attached to homework. Notes belong in the instructions. */
+export const HOMEWORK_RESOURCE_KIND_VALUES = ["DOCUMENT", "VIDEO", "LINK"] as const;
+
+const homeworkResourceFields = {
+  kind: z.enum(HOMEWORK_RESOURCE_KIND_VALUES, { error: "Choose a resource type" }),
+  title: requiredText("a title", 160),
+  url: optionalUrl,
+  description: optionalText(500),
+  file: optionalFile,
+};
+
+function hasTarget(data: { kind: string; url: string | null; file?: File }): boolean {
+  return Boolean(data.url) || (data.kind === "DOCUMENT" && Boolean(data.file));
+}
+
+const TARGET_MESSAGE = {
+  message: "Upload a PDF, or give an https:// web address",
+  path: ["url"],
+};
+
+export const homeworkResourceSchema = z.object(homeworkResourceFields).refine(hasTarget, TARGET_MESSAGE);
+
+export const addHomeworkResourceSchema = z
+  .object({ homeworkId: id, ...homeworkResourceFields })
+  .refine(hasTarget, TARGET_MESSAGE);
+
+export const updateHomeworkResourceSchema = z.object({
+  resourceId: id,
+  title: requiredText("a title", 160),
+  url: optionalUrl,
+  description: optionalText(500),
+  file: optionalFile,
+});
+
+/**
+ * The resource rows of the create-homework form, posted as
+ * `resources.<n>.kind`, `resources.<n>.title` and so on.
+ *
+ * Each row is validated on its own, and an error is reported against that
+ * row's own field (`resources.2.url`), so the form can show it in place.
+ */
+export function parseHomeworkResources(formData: FormData): {
+  resources: Array<z.infer<typeof homeworkResourceSchema>>;
+  fieldErrors: Record<string, string[]>;
+} {
+  const indices = new Set<string>();
+  for (const key of formData.keys()) {
+    const match = /^resources\.(\d+)\./.exec(key);
+    if (match) indices.add(match[1]!);
+  }
+
+  const resources: Array<z.infer<typeof homeworkResourceSchema>> = [];
+  const fieldErrors: Record<string, string[]> = {};
+
+  for (const index of [...indices].sort((a, b) => Number(a) - Number(b))) {
+    // A field the row does not have (a PDF row has no URL) is absent, not null.
+    const field = (name: string) => formData.get(`resources.${index}.${name}`) ?? undefined;
+    const raw = {
+      kind: field("kind"),
+      title: field("title"),
+      url: field("url"),
+      description: field("description"),
+      file: field("file"),
+    };
+    const parsed = homeworkResourceSchema.safeParse(raw);
+    if (parsed.success) {
+      resources.push(parsed.data);
+    } else {
+      for (const issue of parsed.error.issues) {
+        (fieldErrors[`resources.${index}.${issue.path.join(".")}`] ??= []).push(issue.message);
+      }
+    }
+  }
+
+  return { resources, fieldErrors };
+}
 
 /**
  * The three bands a remark answers, and the words that go with them.

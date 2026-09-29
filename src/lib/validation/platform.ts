@@ -7,6 +7,7 @@ import {
   optionalDate,
   optionalEnum,
   optionalInt,
+  optionalPhone,
   optionalText,
   requiredDate,
   requiredEmail,
@@ -20,6 +21,14 @@ export const PLAN_TIERS = ["STARTER", "STANDARD", "PRO"] as const;
  * Public school registration. `website` is a honeypot: it is hidden from people
  * and left blank by them, so anything in it came from a bot.
  */
+/** UDISE+ codes are 11 digits. Spaces people type between groups are dropped. */
+export const optionalUdise = z
+  .preprocess(
+    (value) => (typeof value === "string" ? value.replace(/\s+/g, "") || undefined : value),
+    z.string().regex(/^\d{11}$/, "A UDISE code is 11 digits").optional(),
+  )
+  .transform((value) => value ?? null);
+
 export const registerSchoolSchema = z
   .object({
     name: requiredText("the school's name", 120),
@@ -27,6 +36,7 @@ export const registerSchoolSchema = z
     state: requiredText("a state", 80),
     affiliationBoard: optionalText(60),
     establishedYear: optionalInt(1800, new Date().getFullYear()),
+    udiseCode: optionalUdise,
     contactName: requiredText("your name", 120),
     contactEmail: requiredEmail,
     contactPhone: requiredPhone,
@@ -119,3 +129,37 @@ export const planSchema = z.object({
   storageMb: optionalInt(1, 10_000_000),
   isActive: checkbox,
 });
+
+// -----------------------------------------------------------------------------
+// Contact page
+// -----------------------------------------------------------------------------
+
+export const udiseSchema = z.object({ schoolId: id, udiseCode: optionalUdise });
+
+export const INQUIRY_TOPICS = [
+  "DEMO",
+  "PRICING",
+  "ONBOARDING",
+  "SUPPORT",
+  "PARTNERSHIP",
+  "OTHER",
+] as const;
+
+export const INQUIRY_STATUSES = ["NEW", "CONTACTED", "CLOSED"] as const;
+
+export const inquirySchema = z.object({
+  name: requiredText("your name", 120),
+  schoolName: optionalText(160),
+  email: requiredEmail,
+  phone: optionalPhone,
+  city: optionalText(80),
+  topic: z.enum(INQUIRY_TOPICS, { error: "Choose what this is about" }),
+  message: requiredText("a message", 2000),
+  /**
+   * A field real visitors never see. A bot that fills in every input fills in
+   * this one too, and the submission is quietly dropped.
+   */
+  website: z.string().max(200).optional(),
+});
+
+export type InquiryFormInput = z.infer<typeof inquirySchema>;

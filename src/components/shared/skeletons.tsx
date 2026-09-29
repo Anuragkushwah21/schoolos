@@ -139,3 +139,96 @@ export function ListPageSkeleton({ columns = 5 }: { columns?: number }) {
     </div>
   );
 }
+
+/** A header, then a card of form fields — every "new" and "edit" screen. */
+export function FormPageSkeleton({ fields = 6 }: { fields?: number }) {
+  return (
+    <div aria-busy="true">
+      <PageHeaderSkeleton withActions={false} />
+      <Card className="max-w-3xl">
+        <CardContent className="flex flex-col gap-5 pt-6">
+          {Array.from({ length: fields }, (_, index) => (
+            <div key={index} className="flex flex-col gap-2">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-9 w-full" />
+            </div>
+          ))}
+          <Skeleton className="h-9 w-32" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/** A header, then two columns of cards — a record and what hangs off it. */
+export function DetailPageSkeleton() {
+  return (
+    <div aria-busy="true">
+      <PageHeaderSkeleton />
+      <div className="grid gap-6 xl:grid-cols-2">
+        <ListCardSkeleton rows={5} />
+        <ListCardSkeleton rows={5} />
+      </div>
+    </div>
+  );
+}
+
+/** A printable sheet (receipt, report card) on its grey page, with the toolbar above. */
+export function PrintSheetSkeleton() {
+  return (
+    <main aria-busy="true" className="min-h-screen bg-neutral-100 px-4 py-6 sm:py-10">
+      <div className="mx-auto mb-4 flex max-w-[210mm] justify-between">
+        <Skeleton className="h-8 w-24" />
+        <Skeleton className="h-8 w-48" />
+      </div>
+      <div className="mx-auto flex max-w-[210mm] flex-col gap-4 bg-white p-8 shadow-sm ring-1 ring-neutral-200 sm:p-10">
+        <div className="flex gap-4">
+          <Skeleton className="size-16" />
+          <div className="flex flex-1 flex-col gap-2">
+            <Skeleton className="h-7 w-2/3" />
+            <Skeleton className="h-4 w-1/2" />
+          </div>
+        </div>
+        <Skeleton className="mx-auto h-5 w-40" />
+        <div className="grid gap-2 sm:grid-cols-2">
+          {Array.from({ length: 8 }, (_, index) => (
+            <Skeleton key={index} className="h-4 w-3/4" />
+          ))}
+        </div>
+        <TableSkeleton rows={5} columns={3} />
+      </div>
+    </main>
+  );
+}
+
+/** Content blocks for public pages (the school website, the marketing site). */
+export function PublicPageSkeleton() {
+  return (
+    <div aria-busy="true" className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-5 py-10">
+      <Skeleton className="h-10 w-2/3" />
+      <Skeleton className="h-4 w-1/2" />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 6 }, (_, index) => (
+          <Skeleton key={index} className="h-32 w-full" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A centred card, as the sign-in and verification screens are. */
+export function AuthCardSkeleton() {
+  return (
+    <div aria-busy="true" className="flex flex-1 items-center justify-center px-5 py-16">
+      <Card className="w-full max-w-md">
+        <CardContent className="flex flex-col gap-4 pt-6">
+          <Skeleton className="h-7 w-40" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

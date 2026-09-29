@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { AUDIT_ACTIONS } from "@/lib/audit-actions";
+import { PLATFORM_AUDIT_ACTIONS } from "@/lib/audit-actions";
 import { formatDateTime } from "@/lib/dates";
 import { humanize } from "@/lib/format";
 import { enumParam, pageParam, param } from "@/lib/search-params";
@@ -26,7 +26,7 @@ export default async function AuditPage(props: PageProps<"/super-admin/audit">) 
   const user = await requireSuperAdmin();
   const search = await props.searchParams;
 
-  const action = enumParam(search.action, AUDIT_ACTIONS);
+  const action = enumParam(search.action, PLATFORM_AUDIT_ACTIONS);
   const q = param(search.q);
   const schoolId = param(search.schoolId);
   const { rows, total, page, pageCount } = await listAuditLog(user, {
@@ -40,7 +40,7 @@ export default async function AuditPage(props: PageProps<"/super-admin/audit">) 
     <>
       <PageHeader
         title="Audit log"
-        description="Consequential actions across the platform, newest first."
+        description="Platform actions — registrations, reviews, suspensions, admins, plans and offers. Schools' daily activity is not shown here."
       />
 
       <FilterBar
@@ -53,7 +53,7 @@ export default async function AuditPage(props: PageProps<"/super-admin/audit">) 
             label: "Action",
             defaultValue: action,
             allLabel: "All actions",
-            options: AUDIT_ACTIONS.map((value) => ({ value, label: humanize(value) })),
+            options: PLATFORM_AUDIT_ACTIONS.map((value) => ({ value, label: humanize(value) })),
           },
         ]}
       />

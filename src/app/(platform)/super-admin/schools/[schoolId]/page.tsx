@@ -342,7 +342,7 @@ export default async function PlatformSchoolPage(
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Activity</CardTitle>
+              <CardTitle>Platform activity</CardTitle>
               <Button asChild variant="ghost" size="sm">
                 <Link href={`/super-admin/audit?schoolId=${school.id}`}>All</Link>
               </Button>

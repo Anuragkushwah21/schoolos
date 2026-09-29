@@ -19,17 +19,17 @@ import { markAttendanceAction, markStaffAttendanceAction } from "./actions";
 type Option = { value: string; label: string; short: string; tone: string };
 
 const STUDENT_OPTIONS: Option[] = [
-  { value: "PRESENT", label: "Present", short: "P", tone: "peer-checked:bg-emerald-600 peer-checked:text-white peer-checked:border-emerald-600" },
-  { value: "ABSENT", label: "Absent", short: "A", tone: "peer-checked:bg-red-600 peer-checked:text-white peer-checked:border-red-600" },
-  { value: "LATE", label: "Late", short: "L", tone: "peer-checked:bg-amber-500 peer-checked:text-white peer-checked:border-amber-500" },
-  { value: "EXCUSED", label: "Excused", short: "E", tone: "peer-checked:bg-sky-600 peer-checked:text-white peer-checked:border-sky-600" },
+  { value: "PRESENT", label: "Present", short: "P", tone: "peer-checked:bg-success peer-checked:text-white peer-checked:border-success" },
+  { value: "ABSENT", label: "Absent", short: "A", tone: "peer-checked:bg-danger peer-checked:text-white peer-checked:border-danger" },
+  { value: "LATE", label: "Late", short: "L", tone: "peer-checked:bg-warning peer-checked:text-white peer-checked:border-warning" },
+  { value: "EXCUSED", label: "Excused", short: "E", tone: "peer-checked:bg-info peer-checked:text-white peer-checked:border-info" },
 ];
 
 const STAFF_OPTIONS: Option[] = [
   STUDENT_OPTIONS[0]!,
   STUDENT_OPTIONS[1]!,
   STUDENT_OPTIONS[2]!,
-  { value: "ON_LEAVE", label: "On leave", short: "OL", tone: "peer-checked:bg-sky-600 peer-checked:text-white peer-checked:border-sky-600" },
+  { value: "ON_LEAVE", label: "On leave", short: "OL", tone: "peer-checked:bg-info peer-checked:text-white peer-checked:border-info" },
 ];
 
 export type RegisterRow = {
@@ -173,7 +173,15 @@ export function StudentRegister({
   );
 }
 
-export function StaffRegister({ date, rows }: { date: string; rows: RegisterRow[] }) {
+export function StaffRegister({
+  date,
+  rows,
+  editable = true,
+}: {
+  date: string;
+  rows: RegisterRow[];
+  editable?: boolean;
+}) {
   return (
     <RegisterForm
       key={date}
@@ -181,7 +189,7 @@ export function StaffRegister({ date, rows }: { date: string; rows: RegisterRow[
       hidden={{ date }}
       rows={rows}
       options={STAFF_OPTIONS}
-      editable
+      editable={editable}
     />
   );
 }

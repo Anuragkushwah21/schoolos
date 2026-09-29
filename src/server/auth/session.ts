@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { SchoolStatus, UserRole } from "@/generated/prisma/enums";
+import { employeeMaySignIn, studentMaySignIn } from "@/lib/validation/lifecycle";
 import { prisma } from "@/server/db/prisma";
 
 /**
@@ -44,6 +45,8 @@ export type SessionUser = {
   schoolSlug: string | null;
   schoolName: string | null;
   schoolStatus: SchoolStatus | null;
+  /** The person's own interface language, if they chose one. */
+  preferredLanguage?: string | null;
 };
 
 export type SessionMetadata = {
@@ -103,8 +106,12 @@ export async function validateSessionToken(
           firstName: true,
           lastName: true,
           isActive: true,
+          preferredLanguage: true,
           schoolId: true,
           school: { select: { slug: true, name: true, status: true } },
+          student: { select: { status: true } },
+          teacher: { select: { status: true } },
+          staffMember: { select: { status: true } },
         },
       },
     },
@@ -120,6 +127,9 @@ export async function validateSessionToken(
 
   const { user } = session;
   if (!user.isActive) return null;
+  // A login never outranks the school's decision about the person: someone
+  // who has left (or is suspended) is refused even if their login were open.
+  if (!personMaySignIn(user)) return null;
 
   if (user.role !== "SUPER_ADMIN") {
     // Every non-platform role must belong to a school that is currently live.
@@ -136,7 +146,31 @@ export async function validateSessionToken(
     schoolSlug: user.school?.slug ?? null,
     schoolName: user.school?.name ?? null,
     schoolStatus: user.school?.status ?? null,
+    preferredLanguage: user.preferredLanguage,
   };
+}
+
+/**
+ * Whether the person behind a login is still someone who may use the portal.
+ * Students, teachers and staff must have a current status; guardians,
+ * administrators and the platform have no person status of their own.
+ */
+export function personMaySignIn(user: {
+  role: UserRole;
+  student?: { status: string } | null;
+  teacher?: { status: string } | null;
+  staffMember?: { status: string } | null;
+}): boolean {
+  switch (user.role) {
+    case "STUDENT":
+      return !user.student || studentMaySignIn(user.student.status);
+    case "TEACHER":
+      return !user.teacher || employeeMaySignIn(user.teacher.status);
+    case "NON_TEACHING_STAFF":
+      return !user.staffMember || employeeMaySignIn(user.staffMember.status);
+    default:
+      return true;
+  }
 }
 
 export async function invalidateSession(token: string): Promise<void> {

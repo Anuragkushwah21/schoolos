@@ -1,3 +1,4 @@
+import { WalletIcon } from "lucide-react";
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 
@@ -56,7 +57,7 @@ export default async function FeeCollectionPage(props: PageProps<"/school-admin/
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={WalletIcon} tone="orange"
         back={{ href: "/school-admin/finance", label: "Finance" }}
         title="Fee collection"
         description={`${session.name} · charges and what is still owed`}

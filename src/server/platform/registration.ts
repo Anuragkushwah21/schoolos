@@ -82,6 +82,15 @@ export async function registerSchool(
     );
   }
 
+  if (input.udiseCode) {
+    const udiseTaken = await prisma.school.count({ where: { udiseCode: input.udiseCode } });
+    if (udiseTaken) {
+      throw new ConflictError(
+        "A school with that UDISE code is already registered. Contact us if you think this is a mistake.",
+      );
+    }
+  }
+
   const plan = input.plan
     ? await prisma.plan.findFirst({
         where: { tier: input.plan as PlanTier, isActive: true },
@@ -106,6 +115,7 @@ export async function registerSchool(
           state: input.state,
           affiliationBoard: input.affiliationBoard,
           establishedYear: input.establishedYear,
+          udiseCode: input.udiseCode ?? null,
           contactName: input.contactName,
           contactEmail: input.contactEmail,
           contactPhone: input.contactPhone,

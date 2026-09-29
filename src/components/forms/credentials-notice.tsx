@@ -25,20 +25,20 @@ export function CredentialsNotice({
   return (
     <div
       role="status"
-      className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+      className="rounded-lg border border-warning/30 bg-warning-soft p-4 text-sm text-warning-strong"
     >
       <p className="flex items-center gap-2 font-medium">
         <KeyRoundIcon className="size-4" aria-hidden />
         {label}
       </p>
-      <p className="mt-1 text-amber-900/80 dark:text-amber-100/80">
+      <p className="mt-1 text-warning-strong">
         Share these now — the password is shown only once and cannot be
         recovered later.
       </p>
       <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-mono text-[0.8rem]">
-        <dt className="text-amber-900/70 dark:text-amber-100/70">Email</dt>
+        <dt className="text-warning-strong">Email</dt>
         <dd className="break-all">{email}</dd>
-        <dt className="text-amber-900/70 dark:text-amber-100/70">Password</dt>
+        <dt className="text-warning-strong">Password</dt>
         <dd>{password}</dd>
       </dl>
       <Button
@@ -78,14 +78,14 @@ export function SecretNotice({
   return (
     <div
       role="status"
-      className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+      className="rounded-lg border border-warning/30 bg-warning-soft p-4 text-sm text-warning-strong"
     >
       <p className="flex items-center gap-2 font-medium">
         <KeyRoundIcon className="size-4" aria-hidden />
         {label}
       </p>
-      {hint ? <p className="mt-1 text-amber-900/80 dark:text-amber-100/80">{hint}</p> : null}
-      <p className="mt-3 overflow-x-auto rounded-md bg-amber-100/70 px-3 py-2 font-mono text-[0.8rem] break-all dark:bg-amber-900/40">
+      {hint ? <p className="mt-1 text-warning-strong">{hint}</p> : null}
+      <p className="mt-3 overflow-x-auto rounded-md bg-warning/15 px-3 py-2 font-mono text-[0.8rem] break-all">
         {value}
       </p>
       <Button

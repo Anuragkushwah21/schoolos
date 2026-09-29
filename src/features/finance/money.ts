@@ -34,3 +34,57 @@ export const FEE_STATUS_TONE = {
   PENDING: "negative",
   NONE: "neutral",
 } as const;
+
+/** Shared by the expense form (client) and the expenses filter (server). */
+export const EXPENSE_CATEGORY_OPTIONS = [
+  { value: "ELECTRICITY", label: "Electricity" },
+  { value: "RENT", label: "Rent" },
+  { value: "STATIONERY", label: "Stationery" },
+  { value: "MAINTENANCE", label: "Maintenance" },
+  { value: "TRANSPORT", label: "Transport" },
+  { value: "EVENTS", label: "Events" },
+  { value: "EQUIPMENT", label: "Equipment" },
+  { value: "INTERNET", label: "Internet" },
+  { value: "OTHER", label: "Other" },
+];
+
+const ONES = [
+  "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+  "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen",
+];
+const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+function belowHundred(n: number): string {
+  return n < 20 ? ONES[n]! : `${TENS[Math.floor(n / 10)]}${n % 10 ? ` ${ONES[n % 10]}` : ""}`;
+}
+
+function belowThousand(n: number): string {
+  const hundreds = Math.floor(n / 100);
+  const rest = n % 100;
+  return [hundreds ? `${ONES[hundreds]} Hundred` : "", rest ? belowHundred(rest) : ""].filter(Boolean).join(" ");
+}
+
+/**
+ * "Rupees Twenty-Six Thousand Five Hundred Only" — the line a printed Indian
+ * fee receipt carries under the figure. Uses lakh and crore, as receipts here do.
+ */
+export function rupeesInWords(minor: number): string {
+  const rupeesPart = Math.floor(Math.abs(minor) / 100);
+  const paise = Math.abs(minor) % 100;
+
+  const parts: string[] = [];
+  let n = rupeesPart;
+  const crore = Math.floor(n / 10_000_000);
+  n %= 10_000_000;
+  const lakh = Math.floor(n / 100_000);
+  n %= 100_000;
+  const thousand = Math.floor(n / 1000);
+  n %= 1000;
+  if (crore) parts.push(`${belowThousand(crore)} Crore`);
+  if (lakh) parts.push(`${belowHundred(lakh)} Lakh`);
+  if (thousand) parts.push(`${belowHundred(thousand)} Thousand`);
+  if (n) parts.push(belowThousand(n));
+
+  const words = parts.join(" ") || "Zero";
+  return `Rupees ${words}${paise ? ` and ${belowHundred(paise)} Paise` : ""} Only`;
+}

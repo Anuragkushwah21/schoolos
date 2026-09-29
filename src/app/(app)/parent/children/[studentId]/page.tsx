@@ -7,6 +7,7 @@ import { ChildSwitcher, ChildTabs } from "@/features/parent/child-nav";
 import { FocusList, TodaysUpdate } from "@/features/parent/today";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
+import { childTransport } from "@/server/operations/transport";
 import { findChild, listMyChildren } from "@/server/parent/access";
 import { getChildFocus, getChildToday } from "@/server/parent/child";
 
@@ -40,10 +41,12 @@ export default async function ParentChildPage(props: PageProps<"/parent/children
     );
   }
 
-  const [{ children }, today, focus] = await Promise.all([
+  const [{ children }, today, focus, transport] = await Promise.all([
     listMyChildren(ctx),
     orNotFound(getChildToday(ctx, studentId)),
     orNotFound(getChildFocus(ctx, studentId)),
+    // After `findChild` above: only a linked child's transport is read.
+    childTransport(ctx, child.student.id),
   ]);
 
   const placed = children.filter((sibling) => sibling.sectionId !== null);
@@ -74,6 +77,31 @@ export default async function ParentChildPage(props: PageProps<"/parent/children
           </CardContent>
         </Card>
       </div>
+
+      {transport ? (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>School transport</CardTitle>
+            <CardDescription>{transport.route}{transport.vehicle ? ` · ${transport.vehicle}` : ""}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 text-sm sm:grid-cols-3">
+            <p>
+              <span className="text-muted-foreground block text-xs">Stop</span>
+              {transport.stop ?? "Not set"}
+              {transport.pickup ? ` · pickup ${transport.pickup}` : ""}
+              {transport.drop ? ` · drop ${transport.drop}` : ""}
+            </p>
+            <p>
+              <span className="text-muted-foreground block text-xs">Driver</span>
+              {transport.driver ? `${transport.driver.name}${transport.driver.phone ? ` · ${transport.driver.phone}` : ""}` : "—"}
+            </p>
+            <p>
+              <span className="text-muted-foreground block text-xs">Attendant</span>
+              {transport.attendant ? `${transport.attendant.name}${transport.attendant.phone ? ` · ${transport.attendant.phone}` : ""}` : "—"}
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
     </>
   );
 }

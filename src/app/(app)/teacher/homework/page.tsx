@@ -1,3 +1,4 @@
+import { NotebookPenIcon, PlusIcon } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -5,6 +6,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -58,7 +60,7 @@ export default async function TeacherHomeworkPage(props: PageProps<"/teacher/hom
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={NotebookPenIcon} tone="purple"
         title="Homework"
         description={
           overdue
@@ -67,7 +69,10 @@ export default async function TeacherHomeworkPage(props: PageProps<"/teacher/hom
         }
         actions={
           <Button asChild>
-            <Link href="/teacher/homework/new">Set homework</Link>
+            <Link href="/teacher/homework/new">
+              <PlusIcon aria-hidden />
+              Create homework
+            </Link>
           </Button>
         }
       />
@@ -138,9 +143,9 @@ export default async function TeacherHomeworkPage(props: PageProps<"/teacher/hom
                   </TableCell>
                   <TableCell className="tabular-nums">
                     {formatDate(item.dueOn)}
-                    {item.overdue ? (
-                      <span className="block text-xs" style={{ color: "var(--viz-warning)" }}>
-                        overdue
+                    {item.timeStatus ? (
+                      <span className="mt-1 block">
+                        <TimeStatusBadge status={item.timeStatus} />
                       </span>
                     ) : null}
                   </TableCell>

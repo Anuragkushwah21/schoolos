@@ -72,9 +72,14 @@ export default async function TeacherStudentPage(
           </span>
         }
         actions={
-          <Button asChild variant="outline">
-            <Link href={`/teacher/attendance?section=${detail.section.id}`}>Register</Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link href={`/teacher/attendance?section=${detail.section.id}`}>Register</Link>
+            </Button>
+            <Button asChild>
+              <Link href={`/teacher/support/new?student=${student.id}` as Route}>+ Needs attention</Link>
+            </Button>
+          </>
         }
       />
 

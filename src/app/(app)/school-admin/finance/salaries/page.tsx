@@ -1,3 +1,4 @@
+import { BanknoteIcon } from "lucide-react";
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 
@@ -5,7 +6,9 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { ActionButton } from "@/components/forms/action-button";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -14,11 +17,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { removeSalaryPaymentAction } from "@/features/finance/actions";
+import { SalaryPaymentForm } from "@/features/finance/forms";
 import { rupees } from "@/features/finance/money";
-import { formatDate } from "@/lib/dates";
-import { humanize } from "@/lib/format";
+import { formatDate, formatMonth, toDateInput, today } from "@/lib/dates";
+import { fullName, humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
-import { listSalaries } from "@/server/finance/salary";
+import { listSalaries, listSalaryPayments } from "@/server/finance/salary";
 
 export const metadata: Metadata = { title: "Salaries" };
 
@@ -31,14 +36,22 @@ export const metadata: Metadata = { title: "Salaries" };
  */
 export default async function SalariesPage() {
   const ctx = await requireTenant("SCHOOL_ADMIN");
-  const { rows, totals } = await listSalaries(ctx);
+  const [{ rows, totals }, payments] = await Promise.all([
+    listSalaries(ctx),
+    listSalaryPayments(ctx, { take: 25 }),
+  ]);
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={BanknoteIcon} tone="amber"
         back={{ href: "/school-admin/finance", label: "Finance" }}
         title="Salaries"
         description="Only you and the teacher themselves can see these figures."
+        actions={
+          <Button asChild>
+            <Link href="/school-admin/finance/payroll">Monthly payroll</Link>
+          </Button>
+        }
       />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3">
@@ -49,6 +62,67 @@ export default async function SalariesPage() {
           value={totals.missing}
           hint={totals.missing ? "still to enter" : "all done"}
         />
+      </div>
+
+      <div className="mb-6 grid gap-6 xl:grid-cols-[1fr_1.4fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Pay salary</CardTitle>
+            <CardDescription>Record a month&apos;s salary paid to one member of staff.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <SalaryPaymentForm
+              today={toDateInput(today())}
+              teachers={rows.map((row) => ({
+                value: row.teacherId,
+                label: row.current
+                  ? `${row.name} · ${rupees(row.current.netMinor)} net`
+                  : `${row.name} · salary not set`,
+              }))}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Salary payments</CardTitle>
+            <CardDescription>Most recent first.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {payments.length ? (
+              <ul className="divide-y">
+                {payments.map((payment) => (
+                  <li key={payment.id} className="flex flex-wrap items-center gap-3 py-2.5">
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium">{fullName(payment.teacher)}</span>
+                      <span className="text-muted-foreground block text-xs">
+                        {formatMonth(payment.forMonth)} · paid {formatDate(payment.paidOn)} ·{" "}
+                        {humanize(payment.method)}
+                      </span>
+                    </span>
+                    <span className="text-sm tabular-nums">{rupees(payment.amountMinor)}</span>
+                    <ActionButton
+                      action={removeSalaryPaymentAction}
+                      fields={{ paymentId: payment.id }}
+                      variant="ghost"
+                      size="xs"
+                      pendingLabel="Removing…"
+                      confirm={{
+                        title: "Remove this salary payment?",
+                        description: "It will no longer count in the finance totals.",
+                        confirmLabel: "Remove",
+                      }}
+                    >
+                      Remove
+                    </ActionButton>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-muted-foreground text-sm">No salary payments recorded yet.</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {rows.length ? (

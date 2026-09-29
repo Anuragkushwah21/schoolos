@@ -4,7 +4,9 @@ import type { Prisma } from "@/generated/prisma/client";
 import { NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
+import { CURRENT_STUDENT, loginState } from "@/lib/validation/lifecycle";
 import { assertRole } from "@/server/auth/assert";
+import { parentStanding } from "@/server/people/lifecycle";
 import type { TenantContext } from "@/server/auth/current-user";
 
 /**
@@ -30,12 +32,22 @@ export const PARENT_PAGE_SIZE = 25;
  */
 export async function listParents(
   ctx: TenantContext,
-  filters: { q?: string; page?: number } = {},
+  filters: { q?: string; page?: number; standing?: "ACTIVE" | "NO_ACTIVE_CHILDREN" } = {},
 ) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const page = Math.max(1, filters.page ?? 1);
 
-  const where: Prisma.ParentWhereInput = filters.q
+  // A guardian's standing follows their children: active while any child is
+  // a current student. Families whose children have all left stay findable.
+  const current = { student: { status: { in: [...CURRENT_STUDENT] } } };
+  const standing: Prisma.ParentWhereInput =
+    filters.standing === "ACTIVE"
+      ? { children: { some: current } }
+      : filters.standing === "NO_ACTIVE_CHILDREN"
+        ? { children: { none: current } }
+        : {};
+
+  const search: Prisma.ParentWhereInput = filters.q
     ? {
         OR: [
           { firstName: { contains: filters.q, mode: "insensitive" } },
@@ -60,6 +72,7 @@ export async function listParents(
         ],
       }
     : {};
+  const where: Prisma.ParentWhereInput = { AND: [standing, search] };
 
   const [rows, total] = await Promise.all([
     ctx.db.parent.findMany({
@@ -73,7 +86,7 @@ export async function listParents(
         lastName: true,
         phone: true,
         email: true,
-        user: { select: { id: true, isActive: true, lastLoginAt: true } },
+        user: { select: { id: true, isActive: true, lastLoginAt: true, disabledReason: true } },
         children: {
           orderBy: { isPrimary: "desc" },
           select: {
@@ -192,7 +205,7 @@ type ParentRow = {
   lastName: string;
   phone: string;
   email: string | null;
-  user: { id: string; isActive: boolean; lastLoginAt?: Date | null } | null;
+  user: { id: string; isActive: boolean; lastLoginAt?: Date | null; disabledReason?: "ADMIN" | "STATUS" | null } | null;
   children: Array<{
     relationship: string;
     isPrimary: boolean;
@@ -222,6 +235,8 @@ function shapeParent(parent: ParentRow) {
     loginActive: parent.user?.isActive ?? false,
     lastLoginAt: parent.user?.lastLoginAt ?? null,
     childCount: parent.children.length,
+    standing: parentStanding(parent.children.map((link) => link.student)),
+    login: loginState(parent.user ? { isActive: parent.user.isActive, disabledReason: parent.user.disabledReason ?? null } : null),
     children: parent.children.map((link) => {
       const enrollment = link.student.enrollments[0];
       return {

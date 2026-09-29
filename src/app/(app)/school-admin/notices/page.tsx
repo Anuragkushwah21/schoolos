@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { GlobeIcon } from "lucide-react";
+import { GlobeIcon, MegaphoneIcon, PlusIcon } from "lucide-react";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
-import { StatusBadge } from "@/components/shared/status-badge";
+import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -14,8 +14,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDate } from "@/lib/dates";
+import { formatDate, today } from "@/lib/dates";
 import { humanize } from "@/lib/format";
+import { noticeStatus } from "@/lib/time-status";
 import { requireTenant } from "@/server/auth/current-user";
 import { listNoticesForAdmin } from "@/server/communication/notices";
 
@@ -28,12 +29,15 @@ export default async function AdminNoticesPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={MegaphoneIcon} tone="amber"
         title="Notices"
         description="Announcements for staff, students and parents — and optionally the public website."
         actions={
           <Button asChild>
-            <Link href="/school-admin/notices/new">New notice</Link>
+            <Link href="/school-admin/notices/new">
+              <PlusIcon aria-hidden />
+              Create notice
+            </Link>
           </Button>
         }
       />
@@ -50,8 +54,7 @@ export default async function AdminNoticesPage() {
             </TableHeader>
             <TableBody>
               {notices.map((notice) => {
-                const scheduled = notice.status === "PUBLISHED" && notice.publishAt && notice.publishAt > now;
-                const expired = notice.status === "PUBLISHED" && notice.expiresAt && notice.expiresAt < now;
+                const timeStatus = noticeStatus(notice.status, notice.publishAt, notice.expiresAt, today(now));
                 return (
                   <TableRow key={notice.id}>
                     <TableCell className="max-w-md whitespace-normal">
@@ -65,13 +68,7 @@ export default async function AdminNoticesPage() {
                     </TableCell>
                     <TableCell>{notice.audience === "ALL" ? "Everyone" : humanize(notice.audience)}</TableCell>
                     <TableCell>
-                      {scheduled ? (
-                        <StatusBadge status="PENDING" label="Scheduled" />
-                      ) : expired ? (
-                        <StatusBadge status="EXPIRED" label="Expired" />
-                      ) : (
-                        <StatusBadge status={notice.status} />
-                      )}
+                      <TimeStatusBadge status={timeStatus} />
                     </TableCell>
                     <TableCell className="text-muted-foreground hidden md:table-cell">
                       {notice.publishAt ? formatDate(notice.publishAt) : "—"}
@@ -84,7 +81,16 @@ export default async function AdminNoticesPage() {
           </Table>
         </div>
       ) : (
-        <EmptyState title="No notices yet" />
+        <EmptyState
+          title="No notices yet."
+          action={
+            <Button asChild>
+              <Link href="/school-admin/notices/new">Create notice</Link>
+            </Button>
+          }
+        >
+          Share holidays, exam dates or timing changes with parents, students and staff.
+        </EmptyState>
       )}
     </>
   );

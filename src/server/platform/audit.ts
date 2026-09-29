@@ -1,14 +1,27 @@
 import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
-import type { AuditAction } from "@/lib/audit-actions";
+import { type AuditAction, PLATFORM_AUDIT_ACTIONS } from "@/lib/audit-actions";
 import { assertRole } from "@/server/auth/assert";
 import type { SessionUser } from "@/server/auth/session";
 import { prisma } from "@/server/db/prisma";
 
 export const AUDIT_PAGE_SIZE = 50;
 
-/** The platform-wide audit trail, newest first. */
+/**
+ * What the Super Admin may read from the audit trail: platform actions, and
+ * anything a Super Admin did themselves (resetting a school admin's password,
+ * deactivating one). Everything else is a school's daily operation and stays
+ * off platform screens — every Super Admin read of the log goes through this.
+ */
+export const PLATFORM_AUDIT_WHERE: Prisma.AuditLogWhereInput = {
+  OR: [
+    { action: { in: [...PLATFORM_AUDIT_ACTIONS] } },
+    { actor: { role: "SUPER_ADMIN" } },
+  ],
+};
+
+/** The platform-level audit trail, newest first. */
 export async function listAuditLog(
   actor: SessionUser,
   filters: { action?: AuditAction; schoolId?: string; q?: string; page?: number },
@@ -17,6 +30,7 @@ export async function listAuditLog(
 
   const page = Math.max(1, filters.page ?? 1);
   const where: Prisma.AuditLogWhereInput = {
+    AND: [PLATFORM_AUDIT_WHERE],
     ...(filters.action ? { action: filters.action } : {}),
     ...(filters.schoolId ? { schoolId: filters.schoolId } : {}),
     ...(filters.q ? { summary: { contains: filters.q, mode: "insensitive" } } : {}),

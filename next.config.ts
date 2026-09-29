@@ -11,6 +11,29 @@ const nextConfig: NextConfig = {
    * rather than a hunt through greps.
    */
   typedRoutes: true,
+
+  /**
+   * The slot-booking PTM screens were replaced by Meetings, which covers PTMs
+   * too. Old bookmarks land on the new list rather than a 404.
+   */
+  async redirects() {
+    return [
+      { source: "/school-admin/ptm/:path*", destination: "/school-admin/meetings", permanent: false },
+      { source: "/teacher/ptm", destination: "/teacher/meetings", permanent: false },
+      { source: "/parent/ptm", destination: "/parent/meetings", permanent: false },
+    ];
+  },
+
+  experimental: {
+    serverActions: {
+      /**
+       * Lesson PDFs are uploaded through a Server Action. The service caps a
+       * file at 10 MB (`MAX_DOCUMENT_BYTES`); this leaves room for the multipart
+       * overhead and the other form fields, and nothing more.
+       */
+      bodySizeLimit: "11mb",
+    },
+  },
 };
 
 export default nextConfig;

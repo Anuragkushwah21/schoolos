@@ -1,3 +1,4 @@
+import { UserCogIcon, PlusIcon } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -18,7 +19,9 @@ import {
 import { humanize } from "@/lib/format";
 import { enumParam, pageParam, param } from "@/lib/search-params";
 import { TEACHER_STATUSES } from "@/lib/validation/school";
+import { formatDate } from "@/lib/dates";
 import { requireTenant } from "@/server/auth/current-user";
+import { leavingDates } from "@/server/people/lifecycle";
 import { listTeachers } from "@/server/people/teachers";
 
 export const metadata: Metadata = { title: "Teachers" };
@@ -27,7 +30,9 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
   const q = param(search.q);
-  const status = enumParam(search.status, TEACHER_STATUSES);
+  // Current teachers by default; former ones stay one filter away.
+  const statusParam = param(search.status);
+  const status = enumParam(search.status, TEACHER_STATUSES) ?? (statusParam === "ALL" ? undefined : "CURRENT");
 
   const { rows, total, page, pageCount } = await listTeachers(ctx, {
     q,
@@ -35,13 +40,18 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
     page: pageParam(search.page),
   });
 
+  const leftOn = await leavingDates(ctx, "TEACHER", rows);
+
   return (
     <>
-      <PageHeader
+      <PageHeader icon={UserCogIcon} tone="purple"
         title="Teachers"
         actions={
           <Button asChild>
-            <Link href="/school-admin/teachers/new">Add teacher</Link>
+            <Link href="/school-admin/teachers/new">
+              <PlusIcon aria-hidden />
+              Add teacher
+            </Link>
           </Button>
         }
       />
@@ -53,9 +63,12 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
           {
             name: "status",
             label: "Status",
-            defaultValue: status,
-            allLabel: "Any status",
-            options: TEACHER_STATUSES.map((value) => ({ value, label: humanize(value) })),
+            defaultValue: statusParam ?? "CURRENT",
+            options: [
+              { value: "CURRENT", label: "Current (active or on leave)" },
+              ...TEACHER_STATUSES.map((value) => ({ value, label: humanize(value) })),
+              { value: "ALL", label: "Any status, including former" },
+            ],
           },
         ]}
       />
@@ -97,6 +110,7 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={teacher.status} />
+                    {leftOn.get(teacher.id) ? <span className="text-muted-foreground mt-1 block text-xs">Left {formatDate(leftOn.get(teacher.id))}</span> : null}
                   </TableCell>
                 </TableRow>
               ))}
@@ -114,7 +128,7 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
         />
       )}
 
-      <Pager page={page} pageCount={pageCount} total={total} basePath="/school-admin/teachers" params={{ q, status }} />
+      <Pager page={page} pageCount={pageCount} total={total} basePath="/school-admin/teachers" params={{ q, status: statusParam }} />
     </>
   );
 }

@@ -1,11 +1,13 @@
 import "server-only";
 
-import { today } from "@/lib/dates";
-import { AppError, NotFoundError } from "@/lib/errors";
-import { fullName } from "@/lib/format";
+import type { PaymentMethod } from "@/generated/prisma/enums";
+import { dateOnly, today } from "@/lib/dates";
+import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
+import { formatMoney, fullName } from "@/lib/format";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { isUniqueViolation } from "@/server/db/errors";
 
 /**
  * What the school pays its staff.
@@ -289,4 +291,137 @@ export async function listSalaries(ctx: TenantContext) {
       ),
     },
   };
+}
+
+// -----------------------------------------------------------------------------
+// Salary paid
+// -----------------------------------------------------------------------------
+
+export type SalaryPaymentInput = {
+  teacherId: string;
+  amountMinor: number;
+  paidOn: Date;
+  /** Any day in the month being paid; stored as the first of that month. */
+  forMonth: Date;
+  method: PaymentMethod;
+  reference: string | null;
+  notes: string | null;
+};
+
+/** The first day of the month `date` falls in. */
+export function monthOf(date: Date): Date {
+  return dateOnly(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+}
+
+/**
+ * Record that a month's salary has been paid to one teacher.
+ *
+ * What a teacher is owed lives in `TeacherSalary`; this is the money that
+ * actually went out. One payment per teacher per month — the unique index is
+ * what stops a salary being paid twice, not this function.
+ */
+export async function paySalary(
+  ctx: TenantContext,
+  input: SalaryPaymentInput,
+): Promise<{ id: string }> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
+  if (input.amountMinor <= 0) {
+    throw new AppError("VALIDATION", "A salary payment must be more than zero.");
+  }
+  if (input.paidOn > today()) {
+    throw new AppError("VALIDATION", "A payment cannot be dated in the future.");
+  }
+
+  const teacher = await ctx.db.teacher.findFirst({
+    where: { id: input.teacherId },
+    select: { id: true, firstName: true, lastName: true },
+  });
+  if (!teacher) throw new NotFoundError("That teacher was not found.");
+
+  const forMonth = monthOf(input.forMonth);
+
+  try {
+    const payment = await ctx.db.salaryPayment.create({
+      data: {
+        schoolId: ctx.schoolId,
+        teacherId: teacher.id,
+        amountMinor: input.amountMinor,
+        paidOn: input.paidOn,
+        forMonth,
+        method: input.method,
+        reference: input.reference,
+        notes: input.notes,
+        recordedById: ctx.user.id,
+      },
+      select: { id: true },
+    });
+
+    await recordAudit({
+      action: "SALARY_PAID",
+      entityType: "Teacher",
+      entityId: teacher.id,
+      schoolId: ctx.schoolId,
+      actorId: ctx.user.id,
+      summary: `${formatMoney(input.amountMinor)} salary paid to ${fullName(teacher)}.`,
+    });
+
+    return payment;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new ConflictError(`${fullName(teacher)} has already been paid for that month.`);
+    }
+    throw error;
+  }
+}
+
+export async function removeSalaryPayment(ctx: TenantContext, paymentId: string): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
+  const payment = await ctx.db.salaryPayment.findFirst({
+    where: { id: paymentId },
+    select: { id: true, amountMinor: true, teacherId: true },
+  });
+  if (!payment) throw new NotFoundError("That salary payment was not found.");
+
+  await ctx.db.salaryPayment.deleteMany({ where: { id: payment.id } });
+
+  await recordAudit({
+    action: "SALARY_PAYMENT_REMOVED",
+    entityType: "Teacher",
+    entityId: payment.teacherId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `${formatMoney(payment.amountMinor)} salary payment removed.`,
+  });
+}
+
+export async function listSalaryPayments(
+  ctx: TenantContext,
+  filters: { from?: Date | null; to?: Date | null; take?: number } = {},
+) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
+  return ctx.db.salaryPayment.findMany({
+    where:
+      filters.from || filters.to
+        ? {
+            paidOn: {
+              ...(filters.from ? { gte: filters.from } : {}),
+              ...(filters.to ? { lte: filters.to } : {}),
+            },
+          }
+        : {},
+    orderBy: [{ paidOn: "desc" }, { createdAt: "desc" }],
+    take: filters.take ?? 100,
+    select: {
+      id: true,
+      amountMinor: true,
+      paidOn: true,
+      forMonth: true,
+      method: true,
+      reference: true,
+      teacher: { select: { id: true, firstName: true, lastName: true, employeeId: true } },
+    },
+  });
 }

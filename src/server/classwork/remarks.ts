@@ -5,7 +5,7 @@ import { AppError, ForbiddenError, NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
-import { requireSectionAccess, requireTeacherSelf } from "@/server/auth/teacher-access";
+import { requireSectionAccess, requireSubjectAssignment, requireTeacherSelf } from "@/server/auth/teacher-access";
 import { requireCurrentSession } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 
@@ -93,6 +93,11 @@ export async function addRemark(ctx: TenantContext, input: RemarkInput): Promise
   const session = await requireCurrentSession(ctx);
 
   const enrollment = await requireStudentInMySection(ctx, input.studentId, session.id);
+  // A class teacher reaches the whole section, but a remark filed under a
+  // subject speaks for that subject: only its own teacher may write one.
+  if (input.subjectId) {
+    await requireSubjectAssignment(ctx, enrollment.sectionId, input.subjectId, session.id);
+  }
 
   const created = await ctx.db.studentRemark.create({
     data: {

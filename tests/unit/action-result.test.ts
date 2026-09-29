@@ -67,7 +67,7 @@ describe("runAction", () => {
 
     expect(result).toMatchObject({
       status: "error",
-      message: "You do not have access to this resource.",
+      message: "You don't have permission to do this. If you think you should, ask your school admin.",
     });
   });
 
@@ -78,7 +78,7 @@ describe("runAction", () => {
 
     expect(result.status).toBe("error");
     const message = result.status === "error" ? result.message : "";
-    expect(message).toBe("Something went wrong. Please try again.");
+    expect(message).toBe("Something went wrong on our side. Your work was not saved — please try again in a moment.");
     expect(message).not.toContain("students");
   });
 });

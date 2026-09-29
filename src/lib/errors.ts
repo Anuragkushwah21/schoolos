@@ -41,14 +41,14 @@ export class UnauthenticatedError extends AppError {
  * must not reveal whether the target resource exists.
  */
 export class ForbiddenError extends AppError {
-  constructor(message = "You do not have access to this resource.") {
+  constructor(message = "You don't have permission to do this. If you think you should, ask your school admin.") {
     super("FORBIDDEN", message);
     this.name = "ForbiddenError";
   }
 }
 
 export class NotFoundError extends AppError {
-  constructor(message = "The requested resource was not found.") {
+  constructor(message = "We couldn't find that. It may have been removed — go back and try again.") {
     super("NOT_FOUND", message);
     this.name = "NotFoundError";
   }
@@ -68,20 +68,20 @@ export class ValidationError extends AppError {
 }
 
 export class ConflictError extends AppError {
-  constructor(message = "That record already exists.") {
+  constructor(message = "This already exists, so nothing new was added.") {
     super("CONFLICT", message);
     this.name = "ConflictError";
   }
 }
 
 export class RateLimitedError extends AppError {
-  constructor(message = "Too many attempts. Please try again later.") {
+  constructor(message = "Too many tries in a short time. Please wait a minute and try again.") {
     super("RATE_LIMITED", message);
     this.name = "RateLimitedError";
   }
 }
 
-const GENERIC_MESSAGE = "Something went wrong. Please try again.";
+const GENERIC_MESSAGE = "Something went wrong on our side. Your work was not saved — please try again in a moment.";
 
 /**
  * Convert any thrown value into a message that is safe to show a user.

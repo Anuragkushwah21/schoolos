@@ -1,3 +1,4 @@
+import { WalletIcon } from "lucide-react";
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 
@@ -17,8 +18,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { removePaymentAction } from "@/features/finance/actions";
+import { removeChargeAction, removePaymentAction } from "@/features/finance/actions";
 import { PaymentForm } from "@/features/finance/forms";
+import { ReceiptLinks } from "@/features/finance/receipt-links";
 import { FEE_STATUS_LABEL, FEE_STATUS_TONE, rupees } from "@/features/finance/money";
 import { formatDate, toDateInput, today } from "@/lib/dates";
 import { humanize } from "@/lib/format";
@@ -50,11 +52,20 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
   const search = await props.searchParams;
   const q = param(search.q);
   const studentId = param(search.student);
+  const receiptId = param(search.receipt);
 
-  const [positions, payments, receiptNo] = await Promise.all([
+  const [positions, payments, receiptNo, justRecorded] = await Promise.all([
     listFeePositions(ctx, { q }),
     listPayments(ctx, { academicSessionId: session.id, take: 50 }),
     suggestReceiptNo(ctx),
+    // Set after a payment is saved. Looked up through the scoped client, so an
+    // id from another school simply shows nothing.
+    receiptId
+      ? ctx.db.feePayment.findFirst({
+          where: { id: receiptId },
+          select: { id: true, receiptNo: true, amountMinor: true },
+        })
+      : Promise.resolve(null),
   ]);
 
   // The student being paid for: the one asked for if they are in this school's
@@ -67,11 +78,39 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={WalletIcon} tone="orange"
         back={{ href: "/school-admin/finance", label: "Finance" }}
         title="Payments"
         description={`${session.name} · record what has been received`}
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/school-admin/finance/receipts">Receipt settings</Link>
+          </Button>
+        }
       />
+
+      {justRecorded ? (
+        <div
+          role="status"
+          className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-success/30 bg-success-soft px-4 py-3 text-sm text-success-strong"
+        >
+          <p>
+            {rupees(justRecorded.amountMinor)} recorded · receipt <span className="font-mono">{justRecorded.receiptNo}</span>
+          </p>
+          <span className="flex gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/receipts/${justRecorded.id}` as Route} target="_blank">
+                View receipt
+              </Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link href={`/receipts/${justRecorded.id}?print=1` as Route} target="_blank">
+                Print receipt
+              </Link>
+            </Button>
+          </span>
+        </div>
+      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_1.3fr]">
         <Card>
@@ -161,7 +200,7 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
                       <TableHead className="w-28">Receipt</TableHead>
                       <TableHead className="hidden w-28 md:table-cell">Method</TableHead>
                       <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="w-20" />
+                      <TableHead className="w-44" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -183,7 +222,8 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
                         <TableCell className="text-right tabular-nums">
                           {rupees(payment.amountMinor)}
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right whitespace-nowrap">
+                          <ReceiptLinks paymentId={payment.id} receiptNo={payment.receiptNo} />
                           <ActionButton
                             action={removePaymentAction}
                             fields={{ paymentId: payment.id }}
@@ -206,7 +246,7 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
                 </Table>
               </div>
             ) : (
-              <EmptyState title="No payments recorded yet" />
+              <EmptyState title="No fee payments found.">Choose a student above to collect their first payment — a receipt is ready to print straight away.</EmptyState>
             )}
           </CardContent>
         </Card>
@@ -235,7 +275,23 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
                       due {formatDate(charge.dueOn)}
                     </span>
                   </span>
-                  <span className="text-sm tabular-nums">{rupees(charge.amountMinor)}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm tabular-nums">{rupees(charge.amountMinor)}</span>
+                    <ActionButton
+                      action={removeChargeAction}
+                      fields={{ chargeId: charge.id }}
+                      variant="ghost"
+                      size="xs"
+                      pendingLabel="Removing…"
+                      confirm={{
+                        title: `Remove ${charge.feeHead.name} from ${selected.name}?`,
+                        description: "The family's total fee and pending amount go down by this much. Payments already recorded are not touched.",
+                        confirmLabel: "Remove",
+                      }}
+                    >
+                      Remove
+                    </ActionButton>
+                  </span>
                 </li>
               ))}
             </ul>

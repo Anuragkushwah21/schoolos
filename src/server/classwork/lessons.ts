@@ -7,6 +7,9 @@ import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireTeacherSelf } from "@/server/auth/teacher-access";
+import { assertRoomForMore, prepareMaterial, saveMaterial } from "@/server/classwork/materials";
+import { deleteStoredFile, readStoredFile } from "@/server/storage/files";
+import { requireStudentSelf } from "@/server/student/access";
 
 /**
  * Planning a lesson, and attaching what the class should work from.
@@ -26,11 +29,17 @@ import { requireTeacherSelf } from "@/server/auth/teacher-access";
 /** How far ahead a lesson can be planned. Beyond a fortnight it is a syllabus. */
 export const PLANNING_HORIZON_DAYS = 21;
 
-export const MATERIAL_KINDS = ["NOTES", "LINK", "DOCUMENT", "QUESTIONS", "PRACTICE"] as const;
+export const MATERIAL_KINDS = [
+  "NOTES",
+  "LINK",
+  "DOCUMENT",
+  "QUESTIONS",
+  "PRACTICE",
+  "VIDEO",
+] as const;
 export type MaterialKind = (typeof MATERIAL_KINDS)[number];
 
-/** Kinds that carry a URL rather than text the teacher typed. */
-const URL_KINDS: readonly MaterialKind[] = ["LINK", "DOCUMENT"];
+
 
 export type LessonPlanInput = {
   timetableSlotId: string;
@@ -190,6 +199,9 @@ export type MaterialInput = {
   title: string;
   url: string | null;
   body: string | null;
+  description?: string | null;
+  /** An uploaded PDF, for a DOCUMENT. Takes the place of `url`. */
+  file?: File | null;
 };
 
 /**
@@ -206,27 +218,9 @@ export async function addLessonMaterial(
   assertRole(ctx.user, "TEACHER");
   const lesson = await requireOwnLesson(ctx, input.classSessionId);
 
-  const wantsUrl = URL_KINDS.includes(input.kind);
-  if (wantsUrl && !input.url) {
-    throw new AppError("VALIDATION", "A link or a document needs a web address.");
-  }
-  if (!wantsUrl && !input.body) {
-    throw new AppError("VALIDATION", "Write the notes, questions or practice work itself.");
-  }
-
-  const created = await ctx.db.lessonMaterial.create({
-    data: {
-      schoolId: ctx.schoolId,
-      classSessionId: lesson.id,
-      kind: input.kind,
-      title: input.title,
-      // Only the field the kind actually uses is stored, so a kind change can
-      // never leave a stale URL behind a block of notes.
-      url: wantsUrl ? input.url : null,
-      body: wantsUrl ? null : input.body,
-    },
-    select: { id: true },
-  });
+  const owner = { classSessionId: lesson.id };
+  await assertRoomForMore(ctx, owner);
+  const created = await saveMaterial(ctx, owner, await prepareMaterial(input));
 
   await recordAudit({
     action: "LESSON_MATERIAL_ADDED",
@@ -237,22 +231,24 @@ export async function addLessonMaterial(
     summary: `"${input.title}" added to ${lesson.timetableSlot.subject.name} for ${sectionLabel(lesson.timetableSlot.section)}.`,
   });
 
-  return created;
+  return { id: created.id };
 }
 
 export async function deleteLessonMaterial(ctx: TenantContext, materialId: string): Promise<void> {
   assertRole(ctx.user, "TEACHER");
 
   const material = await ctx.db.lessonMaterial.findFirst({
-    where: { id: materialId },
-    select: { id: true, title: true, classSessionId: true },
+    // A homework resource is removed through `homework.ts`, by its author.
+    where: { id: materialId, classSessionId: { not: null } },
+    select: { id: true, title: true, classSessionId: true, storageKey: true },
   });
-  if (!material) throw new NotFoundError("That material was not found.");
+  if (!material?.classSessionId) throw new NotFoundError("That material was not found.");
 
   // Reached through the lesson, so the same two ways in apply.
   const lesson = await requireOwnLesson(ctx, material.classSessionId);
 
   await ctx.db.lessonMaterial.deleteMany({ where: { id: material.id } });
+  if (material.storageKey) await deleteStoredFile(material.storageKey);
 
   await recordAudit({
     action: "LESSON_MATERIAL_REMOVED",
@@ -317,4 +313,72 @@ export async function listMyPlannedLessons(ctx: TenantContext) {
     preparation: row.preparation,
     materialCount: row._count.materials,
   }));
+}
+
+/**
+ * An uploaded class material or homework resource, for the one person asking
+ * — or not found.
+ *
+ * The same rules as reading the class or homework itself: a student gets files
+ * from their own section's lessons, and from published homework set for their
+ * section, in the current session; a teacher from lessons they taught or stood
+ * in for, and homework they set; the office from anything in its school. Every
+ * other case, including another school's id, is the same "not found". Parents
+ * are not served these files at all.
+ */
+export async function readMaterialFile(ctx: TenantContext, materialId: string) {
+  let where;
+  if (ctx.user.role === "STUDENT") {
+    const me = await requireStudentSelf(ctx);
+    where = {
+      id: materialId,
+      OR: [
+        {
+          classSession: {
+            timetableSlot: {
+              sectionId: me.placement.sectionId,
+              academicSessionId: me.placement.sessionId,
+            },
+          },
+        },
+        // A homework resource: only published work set for their own section.
+        {
+          homework: {
+            sectionId: me.placement.sectionId,
+            academicSessionId: me.placement.sessionId,
+            status: "PUBLISHED" as const,
+          },
+        },
+      ],
+    };
+  } else if (ctx.user.role === "TEACHER") {
+    const teacher = await requireTeacherSelf(ctx);
+    where = {
+      id: materialId,
+      OR: [
+        { classSession: { OR: [{ scheduledTeacherId: teacher.id }, { actualTeacherId: teacher.id }] } },
+        { homework: { teacherId: teacher.id } },
+      ],
+    };
+  } else {
+    assertRole(ctx.user, "SCHOOL_ADMIN");
+    where = { id: materialId };
+  }
+
+  const material = await ctx.db.lessonMaterial.findFirst({
+    where,
+    select: { storageKey: true, fileName: true, mimeType: true },
+  });
+  if (!material?.storageKey) throw new NotFoundError("That file was not found.");
+
+  try {
+    const bytes = await readStoredFile(material.storageKey);
+    return {
+      bytes,
+      fileName: material.fileName ?? "document.pdf",
+      mimeType: material.mimeType ?? "application/pdf",
+    };
+  } catch {
+    throw new NotFoundError("That file is no longer available.");
+  }
 }

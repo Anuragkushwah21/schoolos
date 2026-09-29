@@ -1,8 +1,10 @@
+import { GraduationCapIcon, PlusIcon } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
+import { MoreActions } from "@/components/shared/more-actions";
 import { PageHeader } from "@/components/shared/page-header";
 import { Pager } from "@/components/shared/pager";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -16,8 +18,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { enumParam, pageParam, param } from "@/lib/search-params";
-import { STUDENT_STATUSES } from "@/lib/validation/school";
+import { GENDERS, STUDENT_STATUSES } from "@/lib/validation/school";
+import { formatDate } from "@/lib/dates";
+import { humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
+import { leavingDates } from "@/server/people/lifecycle";
 import { getCurrentSession, sectionLabel, sectionOptions } from "@/server/academics/structure";
 import { ParentDetailsDialog } from "@/features/school/parent-dialog";
 import { listStudents } from "@/server/people/students";
@@ -30,24 +35,43 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
 
   const q = param(search.q);
   const sectionId = param(search.section);
-  const status = enumParam(search.status, STUDENT_STATUSES) ?? (param(search.status) === "ALL" ? undefined : "ACTIVE");
+  const classId = param(search.class);
+  const gender = enumParam(search.gender, GENDERS);
+  // Current students (active or on leave) by default; anyone who has left is
+  // one filter away, so old records stay findable without cluttering the list.
+  const status = enumParam(search.status, STUDENT_STATUSES) ?? (param(search.status) === "ALL" ? undefined : "CURRENT");
   const statusParam = param(search.status);
 
   const session = await getCurrentSession(ctx);
-  const [{ rows, total, page, pageCount }, sections] = await Promise.all([
-    listStudents(ctx, { q, sectionId, status, page: pageParam(search.page) }),
+  const [{ rows, total, page, pageCount }, sections, classes] = await Promise.all([
+    listStudents(ctx, { q, sectionId, classId, gender, status, page: pageParam(search.page) }),
     session ? sectionOptions(ctx, session.id) : Promise.resolve([]),
+    ctx.db.class.findMany({ where: { isActive: true }, orderBy: { level: "asc" }, select: { id: true, name: true } }),
   ]);
+
+  const leftOn = await leavingDates(ctx, "STUDENT", rows);
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={GraduationCapIcon} tone="blue"
         title="Students"
         description={session ? `Placements shown for ${session.name}.` : undefined}
         actions={
-          <Button asChild>
-            <Link href="/school-admin/students/new">Add student</Link>
-          </Button>
+          <>
+            <MoreActions
+              items={[
+                { href: "/school-admin/students/import", label: "Import from a spreadsheet" },
+                { href: "/school-admin/students/bulk", label: "Promote / move / change many" },
+                { href: "/school-admin/reports/export?kind=students", label: "Download list (CSV)", download: true },
+              ]}
+            />
+            <Button asChild>
+              <Link href="/school-admin/students/new">
+                <PlusIcon aria-hidden />
+                Add student
+              </Link>
+            </Button>
+          </>
         }
       />
 
@@ -55,29 +79,84 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
         action="/school-admin/students"
         search={{ defaultValue: q, placeholder: "Student, admission no, parent name, mobile or email" }}
         selects={[
+          {
+            name: "class",
+            label: "Class",
+            defaultValue: classId,
+            allLabel: "All classes",
+            options: classes.map((klass) => ({ value: klass.id, label: klass.name })),
+          },
           { name: "section", label: "Section", defaultValue: sectionId, allLabel: "All sections", options: sections },
           {
             name: "status",
             label: "Status",
-            defaultValue: statusParam ?? "ACTIVE",
+            defaultValue: statusParam ?? "CURRENT",
             options: [
-              ...STUDENT_STATUSES.map((value) => ({ value, label: value.charAt(0) + value.slice(1).toLowerCase() })),
-              { value: "ALL", label: "Any status" },
+              { value: "CURRENT", label: "Current (active or on leave)" },
+              ...STUDENT_STATUSES.map((value) => ({ value, label: humanize(value) })),
+              { value: "ALL", label: "Any status, including left" },
+            ],
+          },
+          {
+            name: "gender",
+            label: "Gender",
+            defaultValue: gender,
+            allLabel: "Boys and girls",
+            advanced: true,
+            options: [
+              { value: "MALE", label: "Boys" },
+              { value: "FEMALE", label: "Girls" },
+              { value: "OTHER", label: "Other" },
             ],
           },
         ]}
       />
 
       {rows.length ? (
-        <div className="rounded-xl border">
+        <>
+        {/* Phones: one readable card per student instead of a wide table. */}
+        <ul className="flex flex-col gap-3 md:hidden">
+          {rows.map((student) => {
+            const enrollment = student.enrollments[0];
+            const guardian = student.parents[0]?.parent;
+            return (
+              <li key={student.id} className="bg-card rounded-2xl border p-4 shadow-[0_1px_3px_rgb(15_23_42/0.06)]">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold">
+                      {student.firstName} {student.lastName}
+                    </p>
+                    <p className="text-muted-foreground text-xs">
+                      {student.admissionNumber}
+                      {enrollment ? ` · ${sectionLabel(enrollment.section)}` : " · Not placed"}
+                      {enrollment?.rollNumber ? ` · Roll ${enrollment.rollNumber}` : ""}
+                    </p>
+                  </div>
+                  <StatusBadge status={student.status} />
+                </div>
+                {guardian ? (
+                  <p className="text-muted-foreground mt-2 text-sm">
+                    {guardian.firstName} {guardian.lastName} · <span className="tabular-nums">{guardian.phone}</span>
+                  </p>
+                ) : null}
+                <Button asChild variant="outline" className="mt-3 w-full">
+                  <Link href={`/school-admin/students/${student.id}`}>View profile</Link>
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="bg-card hidden overflow-x-auto rounded-2xl border md:block">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Student</TableHead>
+                <TableHead>Name</TableHead>
                 <TableHead>Class</TableHead>
+                <TableHead>Section</TableHead>
+                <TableHead className="hidden sm:table-cell">Roll No.</TableHead>
                 <TableHead className="hidden md:table-cell">Parent</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="hidden sm:table-cell">Login</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -92,18 +171,11 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
                       </Link>
                       <p className="text-muted-foreground text-xs">{student.admissionNumber}</p>
                     </TableCell>
+                    <TableCell>{enrollment ? enrollment.section.class.name : <span className="text-muted-foreground">Not placed</span>}</TableCell>
                     <TableCell>
-                      {enrollment ? (
-                        <>
-                          {sectionLabel(enrollment.section)}
-                          {enrollment.rollNumber ? (
-                            <p className="text-muted-foreground text-xs">Roll {enrollment.rollNumber}</p>
-                          ) : null}
-                        </>
-                      ) : (
-                        <span className="text-muted-foreground">Not placed</span>
-                      )}
+                      {enrollment ? `${enrollment.section.name}${enrollment.section.stream ? ` (${enrollment.section.stream.name})` : ""}` : "—"}
                     </TableCell>
+                    <TableCell className="hidden tabular-nums sm:table-cell">{enrollment?.rollNumber ?? "—"}</TableCell>
                     <TableCell className="hidden md:table-cell">
                       {guardian ? (
                         // The name opens the family: three siblings in this list
@@ -146,9 +218,12 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={student.status} />
+                      {leftOn.get(student.id) ? <span className="text-muted-foreground mt-1 block text-xs">Left {formatDate(leftOn.get(student.id))}</span> : null}
                     </TableCell>
-                    <TableCell className="text-muted-foreground hidden sm:table-cell">
-                      {student.userId ? "Yes" : "No"}
+                    <TableCell className="text-right">
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/school-admin/students/${student.id}`}>View</Link>
+                      </Button>
                     </TableCell>
                   </TableRow>
                 );
@@ -156,9 +231,10 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
             </TableBody>
           </Table>
         </div>
+        </>
       ) : (
         <EmptyState
-          title="No students match"
+          title={q || sectionId || classId || gender || statusParam ? "No students match these filters." : "No students added yet."}
           action={
             <Button asChild size="sm">
               <Link href="/school-admin/students/new">Add a student</Link>

@@ -5,6 +5,8 @@ import { fullName } from "@/lib/format";
 import type { TenantContext } from "@/server/auth/current-user";
 import { type AttendanceCounts, attendedShare, emptyCounts } from "@/server/attendance/service";
 import { monthlyAttendance } from "@/server/analytics/student";
+import { schoolClosureOn } from "@/server/calendar/holidays";
+import { VISIBLE_PAPER } from "@/server/exams/service";
 import { readStudentFees } from "@/server/finance/fees";
 import { type ChildContext, requireChild } from "@/server/parent/access";
 
@@ -42,7 +44,7 @@ export async function getChildToday(ctx: TenantContext, studentId: string, date:
   const child = await requireChild(ctx, studentId);
   const { placement } = child;
 
-  const [attendance, slots, recorded, homework, latestResult, latestRemark] = await Promise.all([
+  const [attendance, slots, recorded, homework, latestResult, latestRemark, closure] = await Promise.all([
     ctx.db.studentAttendance.findFirst({
       where: { studentId, date },
       select: { status: true, remarks: true },
@@ -89,7 +91,7 @@ export async function getChildToday(ctx: TenantContext, studentId: string, date:
       },
     }),
     ctx.db.assessmentResult.findFirst({
-      where: { studentId, marksObtained: { not: null } },
+      where: { studentId, marksObtained: { not: null }, assessment: VISIBLE_PAPER },
       orderBy: { assessment: { date: "desc" } },
       select: {
         marksObtained: true,
@@ -111,6 +113,7 @@ export async function getChildToday(ctx: TenantContext, studentId: string, date:
         subject: { select: { name: true } },
       },
     }),
+    schoolClosureOn(ctx, date),
   ]);
 
   const bySlot = new Map(recorded.map((row) => [row.timetableSlotId, row]));
@@ -144,6 +147,8 @@ export async function getChildToday(ctx: TenantContext, studentId: string, date:
     child,
     date,
     attendance,
+    /** A holiday or weekly off: nothing to mark, so "not marked" is not news. */
+    closure: closure ? { kind: closure.kind, label: closure.label } : null,
     periods,
     tally,
     homework,
@@ -419,6 +424,8 @@ export async function getChildResults(ctx: TenantContext, studentId: string) {
     where: {
       sectionId: child.placement.sectionId,
       academicSessionId: child.placement.sessionId,
+      // An exam's papers stay hidden until the school publishes its results.
+      ...VISIBLE_PAPER,
     },
     orderBy: { date: "desc" },
     select: {
@@ -592,7 +599,7 @@ export async function getChildReport(
       },
     }),
     ctx.db.assessmentResult.findMany({
-      where: { studentId, assessment: { date: { gte: from, lte: to } } },
+      where: { studentId, assessment: { date: { gte: from, lte: to }, ...VISIBLE_PAPER } },
       orderBy: { assessment: { date: "asc" } },
       select: {
         marksObtained: true,

@@ -1,10 +1,12 @@
 import "server-only";
 
 import type { AttendanceStatus } from "@/generated/prisma/enums";
-import { addDays, dayOfWeek, formatDate, toDateInput, today } from "@/lib/dates";
+import { closureOn } from "@/lib/calendar";
+import { addDays, formatDate, toDateInput, today } from "@/lib/dates";
 import type { TenantContext } from "@/server/auth/current-user";
 import { sectionLabel } from "@/server/academics/structure";
 import { attendedShare, emptyCounts, type AttendanceCounts } from "@/server/attendance/service";
+import { getSchoolCalendar } from "@/server/calendar/holidays";
 
 /**
  * Aggregates for the school dashboards.
@@ -37,15 +39,18 @@ export async function attendanceTrend(
   const to = today();
   const from = addDays(to, -(days - 1));
 
-  const rows = await ctx.db.studentAttendance.groupBy({
-    by: ["date", "status"],
-    where: {
-      academicSessionId: options.academicSessionId,
-      date: { gte: from, lte: to },
-      ...(options.sectionIds ? { sectionId: { in: options.sectionIds } } : {}),
-    },
-    _count: { _all: true },
-  });
+  const [rows, calendar] = await Promise.all([
+    ctx.db.studentAttendance.groupBy({
+      by: ["date", "status"],
+      where: {
+        academicSessionId: options.academicSessionId,
+        date: { gte: from, lte: to },
+        ...(options.sectionIds ? { sectionId: { in: options.sectionIds } } : {}),
+      },
+      _count: { _all: true },
+    }),
+    getSchoolCalendar(ctx, from, to),
+  ]);
 
   const byDay = new Map<string, AttendanceCounts>();
   for (const row of rows) {
@@ -62,11 +67,11 @@ export async function attendanceTrend(
     const key = toDateInput(date);
     const counts = byDay.get(key) ?? emptyCounts();
 
-    // Sundays are dropped so the chart is not a row of gaps nobody has to
-    // explain — but only when nothing was marked. A school that did hold
-    // class on a Sunday gets its day back: hiding real attendance would be
-    // worse than an odd-looking week.
-    if (dayOfWeek(date) === "SUNDAY" && counts.total === 0) continue;
+    // Weekly offs and holidays are dropped so the chart is not a row of gaps
+    // nobody has to explain — but only when nothing was marked. A school that
+    // did hold class on its weekly off gets its day back: hiding real
+    // attendance would be worse than an odd-looking week.
+    if (counts.total === 0 && closureOn(calendar, date)) continue;
 
     points.push({
       date,

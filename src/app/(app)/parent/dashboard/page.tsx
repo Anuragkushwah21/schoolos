@@ -9,29 +9,20 @@ import { NoticeList } from "@/features/communication/feed";
 import { ChildCard, ChildSwitcher } from "@/features/parent/child-nav";
 import { AlertList, FocusList, TodaysUpdate } from "@/features/parent/today";
 import { param } from "@/lib/search-params";
+import { greetingKey } from "@/lib/greeting";
 import { requireTenant } from "@/server/auth/current-user";
+import { getT } from "@/server/i18n";
 import { attendedShare, emptyCounts } from "@/server/attendance/service";
 import { noticesFor } from "@/server/communication/notices";
 import { listMyChildren } from "@/server/parent/access";
 import { getParentAlerts } from "@/server/parent/alerts";
+import { familySupport } from "@/server/support/service";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { getChildFocus, getChildToday } from "@/server/parent/child";
 import { orNotFound } from "@/server/page-helpers";
 import { today } from "@/lib/dates";
 
 export const metadata: Metadata = { title: "Parent dashboard" };
-
-function greeting(now = new Date()): string {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-GB", {
-      hour: "numeric",
-      hour12: false,
-      timeZone: "Asia/Kolkata",
-    }).format(now),
-  );
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
-}
 
 /**
  * What a guardian sees on signing in.
@@ -44,19 +35,21 @@ function greeting(now = new Date()): string {
  */
 export default async function ParentDashboardPage(props: PageProps<"/parent/dashboard">) {
   const ctx = await requireTenant("PARENT");
+  const t = await getT();
   const search = await props.searchParams;
 
-  const [{ parent, children }, alerts, notices] = await Promise.all([
+  const [{ parent, children }, alerts, notices, family] = await Promise.all([
     listMyChildren(ctx),
     getParentAlerts(ctx),
     noticesFor(ctx, { take: 4 }),
+    familySupport(ctx),
   ]);
 
   if (children.length === 0) {
     return (
       <>
-        <PageHeader title={`${greeting()}, ${parent.firstName}`} />
-        <EmptyState title="No children are linked to your account yet">
+        <PageHeader title={`${t(greetingKey(), { name: parent.firstName })} 👋`} />
+        <EmptyState title={t("dashboard.parent.noChildren")}>
           The school office links a guardian to their children. Ask them to add yours, and
           everything about their day appears here.
         </EmptyState>
@@ -83,22 +76,27 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
   return (
     <>
       <PageHeader
-        title={`${greeting()}, ${parent.firstName}`}
+        title={`${t(greetingKey(), { name: parent.firstName })} 👋`}
         description={
           children.length === 1
             ? "Your child's day at school, as their teachers recorded it."
             : `Your ${children.length} children's days at school, as their teachers recorded it.`
         }
         actions={
-          <Button asChild variant="outline">
-            <Link href="/parent/notices">Notices</Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link href="/parent/meetings">{t("nav.meetings")}</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/parent/notices">{t("nav.notices")}</Link>
+            </Button>
+          </>
         }
       />
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Needs your attention</CardTitle>
+          <CardTitle>{t("dashboard.parent.needsAttention")}</CardTitle>
           <CardDescription>Taken from today&apos;s records, not a separate list.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -108,7 +106,7 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
 
       <section className="mb-6">
         <h2 className="mb-3 font-semibold">
-          {children.length === 1 ? "My child" : `My children (${children.length})`}
+          {children.length === 1 ? t("dashboard.parent.myChild") : t("dashboard.parent.myChildren", { count: children.length })}
         </h2>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {children.map((child) => (
@@ -132,7 +130,7 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
             <div className="flex flex-col gap-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>What to help with at home</CardTitle>
+                  <CardTitle>{t("dashboard.parent.helpAtHome")}</CardTitle>
                   <CardDescription>
                     Drawn from what {selected.name.split(" ")[0]}&apos;s teachers recorded — each
                     line points at a lesson, a mark or a due date.
@@ -144,8 +142,39 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
               </Card>
 
               <Card>
+                <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+                  <CardTitle>{t("support.childSupport")}</CardTitle>
+                  <Button asChild size="sm">
+                    <Link href="/parent/support">+ {t("support.raiseConcern")}</Link>
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {family.supports.filter((row) => row.status !== "RESOLVED").length ? (
+                    <ul className="divide-y text-sm">
+                      {family.supports
+                        .filter((row) => row.status !== "RESOLVED")
+                        .slice(0, 4)
+                        .map((row) => (
+                          <li key={row.id} className="flex flex-wrap items-center gap-2 py-2">
+                            <span className="min-w-0 flex-1">
+                              <span className="font-medium">
+                                {row.child} — {row.subject ?? t("support.general")}
+                              </span>
+                              <span className="text-muted-foreground block text-xs">{t(`support.action.${row.action}`)}</span>
+                            </span>
+                            <StatusBadge status={row.status} />
+                          </li>
+                        ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted-foreground text-sm">{t("support.noChildSupport")}</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
                 <CardHeader className="flex flex-row items-center justify-between gap-2">
-                  <CardTitle>School notices</CardTitle>
+                  <CardTitle>{t("dashboard.notices")}</CardTitle>
                   <Button asChild variant="ghost" size="sm">
                     <Link href="/parent/notices">All</Link>
                   </Button>
@@ -157,7 +186,7 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
 
               <Card>
                 <CardHeader>
-                  <CardTitle>{selected.name.split(" ")[0]}&apos;s record</CardTitle>
+                  <CardTitle>{t("dashboard.parent.record", { name: selected.name.split(" ")[0] ?? selected.name })}</CardTitle>
                 </CardHeader>
                 <CardContent className="flex flex-wrap gap-2">
                   {(
@@ -182,10 +211,16 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
           </div>
         </>
       ) : (
+children.every((child) => child.current === false) ? (
+        // No active children: the guardian may still sign in, and sees who
+        // their children were, but the school has no current day to report.
+        <EmptyState title={t("lifecycle.noActiveChildren")}>{t("lifecycle.noActiveChildrenHint")}</EmptyState>
+      ) : (
         <EmptyState title="Not placed in a class this session">
           The school has not put {children.length === 1 ? "your child" : "any of your children"} in a
           section for the current academic year yet. Their day appears here once it does.
         </EmptyState>
+      )
       )}
     </>
   );

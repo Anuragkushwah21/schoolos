@@ -1,3 +1,4 @@
+import { ClipboardCheckIcon } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -18,7 +19,7 @@ export default async function AdminAttendancePage(props: PageProps<"/school-admi
 
   return (
     <>
-      <PageHeader
+      <PageHeader icon={ClipboardCheckIcon} tone="green"
         title="Attendance"
         description="Mark or correct any section's register."
         actions={

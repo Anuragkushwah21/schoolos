@@ -188,6 +188,61 @@ export async function setClassActive(ctx: TenantContext, classId: string, isActi
   });
 }
 
+export async function updateClass(
+  ctx: TenantContext,
+  classId: string,
+  input: { name: string; level: number },
+): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  try {
+    const { count } = await ctx.db.class.updateMany({ where: { id: classId }, data: input });
+    if (!count) throw new NotFoundError();
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new ConflictError("A class with that name or level already exists.");
+    }
+    throw error;
+  }
+  await recordAudit({
+    action: "CLASS_UPDATED",
+    entityType: "Class",
+    entityId: classId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Class renamed to ${input.name} (order ${input.level}).`,
+  });
+}
+
+/**
+ * Delete a class nobody has used yet. Every table that points at a class does
+ * so with `onDelete: NoAction`, so a class with sections, enrollments,
+ * admissions, notices or support records is refused rather than taking that
+ * history with it — "Stop offering" is the way to retire one of those.
+ */
+export async function deleteClass(ctx: TenantContext, classId: string): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const klass = await ctx.db.class.findFirst({ where: { id: classId }, select: { name: true } });
+  if (!klass) throw new NotFoundError();
+  try {
+    await ctx.db.class.deleteMany({ where: { id: classId } });
+  } catch (error) {
+    if (isForeignKeyViolation(error)) {
+      throw new ConflictError(
+        "This class has sections, students, admissions or notices attached and cannot be deleted. Use “Stop offering” instead.",
+      );
+    }
+    throw error;
+  }
+  await recordAudit({
+    action: "CLASS_UPDATED",
+    entityType: "Class",
+    entityId: classId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Class ${klass.name} deleted.`,
+  });
+}
+
 export async function listStreams(ctx: TenantContext, options: { activeOnly?: boolean } = {}) {
   return ctx.db.stream.findMany({
     where: options.activeOnly ? { isActive: true } : {},
@@ -337,6 +392,51 @@ export async function sectionOptions(
     .map((section) => ({ value: section.id, label: sectionLabel(section) }));
 }
 
+/** Prefix marking a class, not a section, in `classSectionOptions`. */
+export const CLASS_OPTION_PREFIX = "class:";
+
+/**
+ * Sections as select options, plus every offered class that has no section
+ * yet this session (value `class:<id>`), so a class the admin just added can
+ * be picked straight away. Resolve the choice with `resolveSectionChoice`.
+ */
+export async function classSectionOptions(ctx: TenantContext, academicSessionId: string) {
+  const classes = await listClassesWithSections(ctx, academicSessionId);
+  return classes.flatMap((klass) =>
+    klass.sections.length
+      ? klass.sections.map((section) => ({ value: section.id, label: sectionLabel({ ...section, class: klass }) }))
+      : klass.isActive
+        ? [{ value: `${CLASS_OPTION_PREFIX}${klass.id}`, label: `${klass.name} (creates section A)` }]
+        : [],
+  );
+}
+
+/**
+ * Turn a `classSectionOptions` value into a section id in the current
+ * session. A class choice reuses the class's first section if one has
+ * appeared since the form loaded, and otherwise creates section A.
+ */
+export async function resolveSectionChoice(ctx: TenantContext, choice: string): Promise<string> {
+  if (!choice.startsWith(CLASS_OPTION_PREFIX)) return choice;
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const classId = choice.slice(CLASS_OPTION_PREFIX.length);
+  const session = await requireCurrentSession(ctx);
+  const existing = await ctx.db.section.findFirst({
+    where: { classId, academicSessionId: session.id },
+    orderBy: { name: "asc" },
+    select: { id: true },
+  });
+  if (existing) return existing.id;
+  return createSection(ctx, {
+    academicSessionId: session.id,
+    classId,
+    name: "A",
+    streamId: null,
+    capacity: null,
+    classTeacherId: null,
+  });
+}
+
 export async function getSection(ctx: TenantContext, sectionId: string) {
   const section = await ctx.db.section.findFirst({
     where: { id: sectionId },
@@ -477,6 +577,58 @@ export async function updateSection(
 }
 
 /**
+ * Assign, change or remove the class teacher of one section — nothing else.
+ *
+ * A section is already one Class + Section (+ Stream) in one academic session,
+ * and holds a single `classTeacherId`, so there can never be two class
+ * teachers for the same one. The same teacher may lead several sections.
+ *
+ * Both ids are looked up through the tenant-scoped client, so another school's
+ * section or teacher is "not found". Only ACTIVE teachers can be assigned.
+ * Separate from subject assignments: this changes neither.
+ */
+export async function setClassTeacher(
+  ctx: TenantContext,
+  input: { sectionId: string; teacherId: string | null },
+): Promise<{ changed: boolean }> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+
+  const section = await ctx.db.section.findFirst({
+    where: { id: input.sectionId },
+    select: { id: true, name: true, classTeacherId: true, academicSessionId: true },
+  });
+  if (!section) throw new NotFoundError("That section was not found.");
+
+  if (input.teacherId) {
+    const teacher = await ctx.db.teacher.findFirst({
+      where: { id: input.teacherId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (!teacher) throw new NotFoundError("That teacher was not found, or is not active.");
+  }
+
+  // Re-assigning the teacher who already holds it is refused, not recorded as
+  // a second, overlapping assignment in the history.
+  if (section.classTeacherId === input.teacherId) {
+    if (input.teacherId) throw new ConflictError("That teacher is already the class teacher of this section.");
+    return { changed: false };
+  }
+
+  await ctx.db.section.updateMany({
+    where: { id: section.id },
+    data: { classTeacherId: input.teacherId },
+  });
+  await recordClassTeacherChange(ctx, {
+    sectionId: section.id,
+    academicSessionId: section.academicSessionId,
+    previousTeacherId: section.classTeacherId,
+    teacherId: input.teacherId,
+  });
+
+  return { changed: true };
+}
+
+/**
  * Close the outgoing class-teacher assignment and open the incoming one.
  *
  * `Section.classTeacherId` remains the current pointer every other screen reads;
@@ -569,7 +721,7 @@ export async function deleteSection(ctx: TenantContext, sectionId: string): Prom
   } catch (error) {
     if (isForeignKeyViolation(error)) {
       throw new ConflictError(
-        "This section has students, attendance, timetable or teachers attached and cannot be deleted.",
+        "This section has students, attendance, timetable, teachers, exams or notices attached and cannot be deleted.",
       );
     }
     throw error;

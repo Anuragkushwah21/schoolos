@@ -118,10 +118,26 @@ export function ChildCard({
   attendanceShare,
   todayStatus,
 }: {
-  child: ChildOption & { admissionNumber: string; rollNumber: string | null; status: string };
+  child: ChildOption & { admissionNumber: string; rollNumber: string | null; status: string; current?: boolean };
   attendanceShare: number | null;
   todayStatus: string | null;
 }) {
+  // A child who has left is shown with their status and nothing to open: the
+  // school no longer reports on them day to day. Siblings are unaffected.
+  if (child.current === false) {
+    return (
+      <div className="bg-card/60 flex items-start gap-3 rounded-xl border border-dashed p-4">
+        <span className="bg-muted text-muted-foreground flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-medium" aria-hidden>
+          {child.name.slice(0, 1)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium">{child.name}</p>
+          <p className="text-muted-foreground text-xs">No longer a current student. The school office holds their records.</p>
+        </div>
+        <StatusBadge status={child.status} />
+      </div>
+    );
+  }
   return (
     <Link
       href={`/parent/children/${child.id}` as Route}
@@ -147,7 +163,7 @@ export function ChildCard({
             {child.rollNumber ? ` · roll ${child.rollNumber}` : ""}
           </p>
         </div>
-        {todayStatus ? <StatusBadge status={todayStatus} /> : null}
+        {todayStatus ? <StatusBadge status={todayStatus} /> : child.status === "ON_LEAVE" ? <StatusBadge status="ON_LEAVE" /> : null}
       </div>
 
       <dl className="flex items-baseline gap-2">

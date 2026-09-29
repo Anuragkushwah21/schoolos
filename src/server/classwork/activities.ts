@@ -2,6 +2,7 @@ import "server-only";
 
 import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { AppError, ForbiddenError, NotFoundError } from "@/lib/errors";
+import { fullName } from "@/lib/format";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireTeacherSelf } from "@/server/auth/teacher-access";
@@ -124,7 +125,16 @@ export type ActivityInput = {
   notes: string | null;
   /** The short list students revise from — "practice questions 1-10". */
   importantPoints: string | null;
+  /** What students should do before the next class. Left alone when absent. */
+  preparation?: string | null;
+  /** Homework set in this class; saved as a `Homework` row linked to it. */
+  homeworkTitle?: string | null;
+  homeworkDescription?: string | null;
+  homeworkDueOn?: Date | null;
 };
+
+/** A class that did not happen cannot have set homework. */
+const HOMEWORK_STATUSES: readonly ActivityStatus[] = ["COMPLETED", "SUBSTITUTE", "REMOTE"];
 
 /**
  * Record — or correct — what happened in one period.
@@ -152,6 +162,15 @@ export async function recordActivity(
     throw new AppError("VALIDATION", "That period does not fall on that day of the week.");
   }
 
+  if (input.homeworkTitle) {
+    if (!HOMEWORK_STATUSES.includes(input.status)) {
+      throw new AppError("VALIDATION", "Homework can only be set for a class that took place.");
+    }
+    if (!input.homeworkDueOn || input.homeworkDueOn < input.date) {
+      throw new AppError("VALIDATION", "Give the homework a due date on or after the class.");
+    }
+  }
+
   const record = await ctx.db.classSession.upsert({
     where: {
       schoolId_timetableSlotId_date: {
@@ -170,6 +189,7 @@ export async function recordActivity(
       topic: input.topic,
       notes: input.notes,
       importantPoints: input.importantPoints,
+      preparation: input.preparation ?? null,
     },
     update: {
       // A substitute cannot rewrite the record as though the scheduled teacher
@@ -180,9 +200,37 @@ export async function recordActivity(
       topic: input.topic,
       notes: input.notes,
       importantPoints: input.importantPoints,
+      ...(input.preparation !== undefined ? { preparation: input.preparation } : {}),
     },
     select: { id: true },
   });
+
+  // Homework set in the class is an ordinary `Homework` row, so it appears on
+  // every homework list that already exists; the link makes re-saving the class
+  // edit it rather than set it twice.
+  if (input.homeworkTitle && input.homeworkDueOn) {
+    await ctx.db.homework.upsert({
+      where: { schoolId_classSessionId: { schoolId: ctx.schoolId, classSessionId: record.id } },
+      create: {
+        schoolId: ctx.schoolId,
+        academicSessionId: slot.academicSessionId,
+        sectionId: slot.section.id,
+        subjectId: slot.subject.id,
+        teacherId: teacher.id,
+        classSessionId: record.id,
+        title: input.homeworkTitle,
+        description: input.homeworkDescription ?? null,
+        assignedOn: input.date,
+        dueOn: input.homeworkDueOn,
+        status: "PUBLISHED",
+      },
+      update: {
+        title: input.homeworkTitle,
+        description: input.homeworkDescription ?? null,
+        dueOn: input.homeworkDueOn,
+      },
+    });
+  }
 
   await recordAudit({
     action: "CLASS_ACTIVITY_RECORDED",
@@ -278,7 +326,7 @@ export async function getMyDayPlan(ctx: TenantContext, date: Date = today()) {
   const teacher = await requireTeacherSelf(ctx);
   const session = await requireCurrentSession(ctx);
 
-  const [slots, recorded] = await Promise.all([
+  const [slots, recorded, covering] = await Promise.all([
     ctx.db.timetableSlot.findMany({
       where: {
         teacherId: teacher.id,
@@ -290,31 +338,68 @@ export async function getMyDayPlan(ctx: TenantContext, date: Date = today()) {
     }),
     ctx.db.classSession.findMany({
       where: { scheduledTeacherId: teacher.id, date },
-      select: { timetableSlotId: true, status: true, topic: true },
+      select: {
+        timetableSlotId: true,
+        status: true,
+        topic: true,
+        actualTeacher: { select: { firstName: true, lastName: true } },
+      },
+    }),
+    // Periods the office has asked this teacher to cover today.
+    ctx.db.classSession.findMany({
+      where: { actualTeacherId: teacher.id, date, status: "SUBSTITUTE", NOT: { scheduledTeacherId: teacher.id } },
+      select: {
+        status: true,
+        topic: true,
+        scheduledTeacher: { select: { firstName: true, lastName: true } },
+        timetableSlot: { select: SLOT_SELECT },
+      },
     }),
   ]);
 
   const bySlot = new Map(recorded.map((row) => [row.timetableSlotId, row]));
 
+  const own = slots.map((slot) => {
+    const activity = bySlot.get(slot.id) ?? null;
+    const coveredBy = activity?.status === "SUBSTITUTE" && activity.actualTeacher ? fullName(activity.actualTeacher) : null;
+    return {
+      slotId: slot.id,
+      startMinute: slot.startMinute,
+      endMinute: slot.endMinute,
+      room: slot.room,
+      subject: slot.subject.name,
+      subjectId: slot.subject.id,
+      sectionId: slot.section.id,
+      section: sectionLabel(slot.section),
+      status: activity?.status ?? null,
+      topic: activity?.topic ?? null,
+      recorded: activity !== null && !coveredBy,
+      /** Another teacher is taking this period today. */
+      coveredBy,
+      /** This teacher is standing in for someone else. */
+      coveringFor: null as string | null,
+    };
+  });
+  const cover = covering.map((row) => ({
+    slotId: row.timetableSlot.id,
+    startMinute: row.timetableSlot.startMinute,
+    endMinute: row.timetableSlot.endMinute,
+    room: row.timetableSlot.room,
+    subject: row.timetableSlot.subject.name,
+    subjectId: row.timetableSlot.subject.id,
+    sectionId: row.timetableSlot.section.id,
+    section: sectionLabel(row.timetableSlot.section),
+    status: row.status,
+    topic: row.topic,
+    recorded: Boolean(row.topic),
+    coveredBy: null as string | null,
+    coveringFor: fullName(row.scheduledTeacher),
+  }));
+
   return {
     date,
     session,
-    periods: slots.map((slot) => {
-      const activity = bySlot.get(slot.id) ?? null;
-      return {
-        slotId: slot.id,
-        startMinute: slot.startMinute,
-        endMinute: slot.endMinute,
-        room: slot.room,
-        subject: slot.subject.name,
-        subjectId: slot.subject.id,
-        sectionId: slot.section.id,
-        section: sectionLabel(slot.section),
-        status: activity?.status ?? null,
-        topic: activity?.topic ?? null,
-        recorded: activity !== null,
-      };
-    }),
+    periods: [...own, ...cover].sort((a, b) => a.startMinute - b.startMinute),
   };
 }
 
@@ -344,7 +429,20 @@ export async function getMyActivity(ctx: TenantContext, activityId: string) {
       timetableSlot: { select: SLOT_SELECT },
       materials: {
         orderBy: { createdAt: "asc" },
-        select: { id: true, kind: true, title: true, url: true, body: true },
+        select: {
+          id: true,
+          kind: true,
+          title: true,
+          url: true,
+          body: true,
+          description: true,
+          fileName: true,
+          fileSize: true,
+        },
+      },
+      homework: {
+        take: 1,
+        select: { id: true, title: true, description: true, dueOn: true },
       },
     },
   });

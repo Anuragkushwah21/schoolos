@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { useT } from "@/components/i18n/i18n-provider";
 import { FieldError } from "@/components/shared/field-error";
 import { Spinner } from "@/components/shared/spinner";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import { loginAction } from "./actions";
 const initialState: ActionResult<undefined> = { status: "idle" };
 
 export function LoginForm() {
+  const t = useT();
   const [state, formAction, isPending] = useActionState(
     loginAction,
     initialState,
@@ -37,7 +39,7 @@ export function LoginForm() {
       ) : null}
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="email">Email</Label>
+        <Label htmlFor="email">{t("login.email")}</Label>
         <Input
           id="email"
           name="email"
@@ -51,7 +53,7 @@ export function LoginForm() {
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="password">Password</Label>
+        <Label htmlFor="password">{t("login.password")}</Label>
         <Input
           id="password"
           name="password"
@@ -70,15 +72,16 @@ export function LoginForm() {
         // a second sign-in attempt at the rate limiter.
         disabled={isPending}
         aria-busy={isPending || undefined}
+        size="lg"
         className="w-full"
       >
         {isPending ? (
           <>
             <Spinner />
-            Signing in…
+            {t("login.submitting")}
           </>
         ) : (
-          "Sign in"
+          t("login.submit")
         )}
       </Button>
     </form>

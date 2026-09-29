@@ -18,11 +18,11 @@ export async function GET() {
           note: "A token acts as the user who created it and can never exceed their role. READ tokens are refused on writes.",
         },
         endpoints: {
-          account: ["GET /api/v1/me", "GET /api/v1/me/notices", "GET /api/v1/me/timetable", "GET /api/v1/me/attendance", "GET /api/v1/me/children", "GET /api/v1/me/children/{studentId}"],
+          account: ["GET /api/v1/me", "GET /api/v1/me/notices", "GET /api/v1/me/meetings", "GET /api/v1/me/timetable", "GET /api/v1/me/attendance", "GET /api/v1/me/children", "GET /api/v1/me/children/{studentId}"],
           people: ["GET|POST /api/v1/students", "GET|PUT /api/v1/students/{id}", "POST /api/v1/students/{id}/enrollments", "POST /api/v1/students/{id}/guardians", "DELETE /api/v1/students/{id}/guardians/{linkId}", "POST /api/v1/students/{id}/portal-access", "GET /api/v1/guardians", "PUT /api/v1/guardians/{id}", "POST /api/v1/guardians/{id}/portal-access", "GET|POST /api/v1/teachers", "GET|PUT /api/v1/teachers/{id}", "POST /api/v1/teachers/{id}/assignments", "DELETE /api/v1/teachers/{id}/assignments/{assignmentId}"],
           academics: ["GET|POST /api/v1/academic-sessions", "POST /api/v1/academic-sessions/{id}/activate", "GET|POST /api/v1/classes", "PATCH /api/v1/classes/{id}", "GET|POST /api/v1/streams", "PATCH /api/v1/streams/{id}", "GET|POST /api/v1/subjects", "PATCH /api/v1/subjects/{id}", "GET|POST /api/v1/sections", "GET|PUT|DELETE /api/v1/sections/{id}"],
           operations: ["GET|POST /api/v1/timetable", "DELETE /api/v1/timetable/{slotId}", "GET|POST /api/v1/attendance", "GET|POST /api/v1/attendance/staff", "GET /api/v1/reports/attendance"],
-          communication: ["GET|POST /api/v1/notices", "GET|PUT|DELETE /api/v1/notices/{id}", "GET|POST /api/v1/events", "GET|PUT|DELETE /api/v1/events/{id}"],
+          communication: ["GET|POST /api/v1/notices", "GET|PUT|DELETE /api/v1/notices/{id}", "GET|POST /api/v1/events", "GET|PUT|DELETE /api/v1/events/{id}", "GET|POST /api/v1/meetings", "GET|PUT|DELETE /api/v1/meetings/{id}", "POST /api/v1/meetings/{id}/cancel"],
           admissions: ["GET /api/v1/admissions", "GET /api/v1/admissions/{id}", "POST /api/v1/admissions/{id}/status", "POST /api/v1/admissions/{id}/accept"],
           website: ["GET|PUT /api/v1/website/profile", "GET|POST /api/v1/website/pages", "GET|PUT|DELETE /api/v1/website/pages/{id}", "GET|POST /api/v1/website/media", "DELETE /api/v1/website/media/{id}"],
           tokens: ["GET|POST /api/v1/tokens", "DELETE /api/v1/tokens/{id}"],

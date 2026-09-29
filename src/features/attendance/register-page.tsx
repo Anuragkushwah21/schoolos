@@ -57,8 +57,14 @@ export async function RegisterScreen({
         </p>
       </div>
 
+      {register.closure?.kind === "WEEKLY_OFF" && register.editable ? (
+        <p className="bg-muted/40 rounded-lg border px-3 py-2 text-sm">
+          {register.closure.label} — attendance is not required. Record it only if the school held a special working day.
+        </p>
+      ) : null}
+
       {register.lockedReason ? (
-        <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+        <p className="rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning-strong">
           {register.lockedReason}
         </p>
       ) : null}

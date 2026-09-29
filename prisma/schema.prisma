@@ -44,6 +44,11 @@ enum UserRole {
   TEACHER
   STUDENT
   PARENT
+  /// Office, accounts, transport, library and support staff. A school member
+  /// with a login but none of the School Admin's powers: they see their own
+  /// record, notices and meetings, plus any module the admin grants through
+  /// `StaffMember.permissions`.
+  NON_TEACHING_STAFF
 }
 
 /// PENDING -> UNDER_REVIEW -> ACTIVE (approved) | REJECTED.
@@ -63,11 +68,15 @@ enum Gender {
   OTHER
 }
 
+/// Where a student stands with the school. ACTIVE and ON_LEAVE are current
+/// students; the rest have left, and their records are kept as history.
 enum StudentStatus {
   ACTIVE
   INACTIVE
   TRANSFERRED
   GRADUATED
+  ON_LEAVE
+  WITHDRAWN
 }
 
 /// Status of one student's placement within one academic session.
@@ -78,10 +87,98 @@ enum EnrollmentStatus {
   WITHDRAWN
 }
 
+/// Employment status, shared by teachers and non-teaching staff. ACTIVE and
+/// ON_LEAVE are current employees; SUSPENDED keeps the job but not the login;
+/// the rest have left, and their records are kept as history.
 enum TeacherStatus {
   ACTIVE
   INACTIVE
   ON_LEAVE
+  SUSPENDED
+  RESIGNED
+  TERMINATED
+  RETIRED
+  TRANSFERRED
+}
+
+/// Why a login is switched off. The person's status and their login are
+/// separate: a login closed by a status change (STATUS) reopens when they
+/// return; one closed by the School Admin (ADMIN) stays closed until reopened.
+enum LoginDisabledReason {
+  ADMIN
+  STATUS
+}
+
+/// Who first raised a student's need for support.
+enum SupportSource {
+  TEACHER
+  PARENT
+  SCHOOL_ADMIN
+}
+
+enum SupportPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+/// Where a support record stands. Kept short on purpose: this is help for a
+/// child, not a case file.
+enum SupportStatus {
+  NEW
+  REVIEWING
+  SUPPORT_PLANNED
+  IN_PROGRESS
+  IMPROVING
+  RESOLVED
+}
+
+/// Why a student needs support — descriptive, never a label on the child.
+enum SupportReason {
+  DIFFICULTY_UNDERSTANDING
+  LOW_TEST_PERFORMANCE
+  HOMEWORK_INCOMPLETE
+  LOW_PARTICIPATION
+  ATTENDANCE
+  NEEDS_PRACTICE
+  NEEDS_REVISION
+  LEARNING_GAP
+  PARENT_CONCERN
+  OTHER
+}
+
+enum SupportAction {
+  EXTRA_PRACTICE
+  STUDY_MATERIAL
+  REVISION
+  EXTRA_CLASS
+  ONE_TO_ONE
+  HOMEWORK_SUPPORT
+  PARENT_DISCUSSION
+  MONITOR
+  OTHER
+}
+
+/// A parent's concern, as they see it move.
+enum ConcernStatus {
+  NEW
+  REVIEWING
+  ACTION_TAKEN
+  RESOLVED
+}
+
+/// Whose status a `StatusChange` records.
+enum PersonKind {
+  STUDENT
+  PARENT
+  TEACHER
+  STAFF
+}
+
+/// What changed: the person's status, or their login access.
+enum StatusChangeKind {
+  STATUS
+  LOGIN
 }
 
 enum AttendanceStatus {
@@ -111,6 +208,17 @@ enum NoticeAudience {
   TEACHERS
   STUDENTS
   PARENTS
+  NON_TEACHING_STAFF
+}
+
+/// Who a notice is addressed to within the audience: the whole school, one
+/// class, one section, or a hand-picked list of students (and, with the
+/// PARENTS audience, their guardians).
+enum NoticeScope {
+  SCHOOL
+  CLASS
+  SECTION
+  STUDENTS
 }
 
 enum NoticeStatus {
@@ -177,6 +285,157 @@ enum PlanTier {
   PRO
 }
 
+/// An exam's results are hidden from students and parents until it is
+/// PUBLISHED. Only the School Admin publishes.
+enum ExamStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum LeaveType {
+  CASUAL
+  SICK
+  EARNED
+  MATERNITY
+  PATERNITY
+  UNPAID
+  OTHER
+}
+
+/// PENDING until the School Admin decides. A teacher may cancel a pending
+/// request, or an approved one that has not started yet.
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// The only status a meeting stores. Whether a SCHEDULED meeting is
+/// upcoming, ongoing or completed follows from its date and times and is
+/// worked out on every read (`meetingStatus` in `lib/time-status.ts`), so it
+/// never has to be flipped by hand. CANCELLED is the office's decision and wins.
+enum MeetingStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+/// What kind of meeting it is — a label for lists and filters. Who is invited
+/// is `audiences` + `scope`, not this.
+enum MeetingType {
+  PTM
+  GENERAL
+}
+
+/// A group of people a meeting is for. ALL stands for every group, including
+/// ones added later; it is stored alone rather than alongside the others.
+enum MeetingAudience {
+  ALL
+  PARENTS
+  STUDENTS
+  TEACHERS
+  NON_TEACHING_STAFF
+}
+
+/// How far a meeting reaches within its audiences: the whole school, the
+/// families and teachers of chosen sections, or hand-picked people.
+enum MeetingScope {
+  SCHOOL
+  SECTIONS
+  PEOPLE
+}
+
+enum ComplaintCategory {
+  ACADEMIC
+  FEES
+  TRANSPORT
+  FACILITIES
+  STAFF
+  BULLYING
+  HEALTH
+  OTHER
+}
+
+enum ComplaintPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ComplaintStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+/// Non-teaching staff. Teachers stay in `Teacher`, which carries their login.
+enum StaffRole {
+  ACCOUNTANT
+  RECEPTIONIST
+  LIBRARIAN
+  DRIVER
+  TRANSPORT_ATTENDANT
+  PEON
+  OFFICE_STAFF
+  COORDINATOR
+  SECURITY
+  LAB_ASSISTANT
+  OTHER
+}
+
+/// Modules a School Admin can open to one non-teaching staff member. Every
+/// grant is read-only for now; a designation never implies any of them.
+enum StaffPermission {
+  VIEW_STUDENTS
+  VIEW_LIBRARY
+  VIEW_TRANSPORT
+}
+
+enum VehicleType {
+  BUS
+  VAN
+  CAR
+  OTHER
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+enum TransportStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum AssetCategory {
+  COMPUTER
+  FURNITURE
+  PROJECTOR
+  LAB_EQUIPMENT
+  SPORTS
+  STATIONERY
+  OTHER
+}
+
+enum AssetStatus {
+  ACTIVE
+  IN_REPAIR
+  DAMAGED
+  LOST
+  DISPOSED
+}
+
+enum AssetCondition {
+  NEW
+  GOOD
+  FAIR
+  POOR
+}
+
 enum SubscriptionStatus {
   TRIALING
   ACTIVE
@@ -194,6 +453,22 @@ enum LessonMaterialKind {
   DOCUMENT
   QUESTIONS
   PRACTICE
+  VIDEO
+}
+
+/// What a school spends money on. A fixed list rather than a table: the
+/// breakdown chart compares schools' own months against each other, and a
+/// free-text category would split "Electricity" from "electricity bill".
+enum ExpenseCategory {
+  ELECTRICITY
+  RENT
+  STATIONERY
+  MAINTENANCE
+  TRANSPORT
+  EVENTS
+  EQUIPMENT
+  INTERNET
+  OTHER
 }
 
 /// How a salary is expressed. Only MONTHLY is used today; the others exist so a
@@ -255,26 +530,35 @@ enum ParentRelationship {
 /// Email is globally unique so that sign-in needs only an email and password,
 /// with no school picker. One person staffing two schools needs two accounts.
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  passwordHash String
-  role         UserRole
-  firstName    String
-  lastName     String
-  phone        String?
-  isActive     Boolean   @default(true)
-  lastLoginAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id                String               @id @default(cuid())
+  email             String               @unique
+  passwordHash      String
+  role              UserRole
+  firstName         String
+  lastName          String
+  phone             String?
+  isActive          Boolean              @default(true)
+  /// Interface language chosen by this person ("en", "hi"). Null means "not
+  /// chosen", and the browser cookie or English applies. Checked against
+  /// `lib/i18n/config.ts#LOCALES` on read, so an unknown value is ignored.
+  preferredLanguage String?              @db.VarChar(10)
+  /// Set with `isActive = false`: who closed the login and when. Null while
+  /// the login is open.
+  disabledReason    LoginDisabledReason?
+  disabledAt        DateTime?
+  lastLoginAt       DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
 
   schoolId String?
   school   School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
-  sessions  Session[]
-  apiTokens ApiToken[]
-  teacher   Teacher?
-  student   Student?
-  parent    Parent?
+  sessions    Session[]
+  apiTokens   ApiToken[]
+  teacher     Teacher?
+  student     Student?
+  parent      Parent?
+  staffMember StaffMember?
 
   auditLogs          AuditLog[]             @relation("AuditActor")
   reviewedSchools    School[]               @relation("SchoolReviewer")
@@ -283,7 +567,22 @@ model User {
   markedAttendance   StudentAttendance[]    @relation("AttendanceMarker")
   recordedSalaries   TeacherSalary[]        @relation("SalaryRecorder")
   recordedPayments   FeePayment[]           @relation("PaymentRecorder")
+  recordedExpenses   Expense[]              @relation("ExpenseRecorder")
+  recordedSalaryPays SalaryPayment[]        @relation("SalaryPaymentRecorder")
+  reviewedLeave      LeaveRequest[]         @relation("LeaveReviewer")
+  raisedComplaints   Complaint[]            @relation("ComplaintRaiser")
+  assignedComplaints Complaint[]            @relation("ComplaintAssignee")
+  issuedBooks        BookIssue[]            @relation("BookIssuer")
+  assetEvents        AssetEvent[]           @relation("AssetEventActor")
+  createdMeetings    Meeting[]              @relation("MeetingCreator")
+  statusChanges      StatusChange[]         @relation("StatusChanger")
+  createdSupports    StudentSupport[]       @relation("SupportCreator")
+  supportNotes       SupportNote[]          @relation("SupportNoteAuthor")
+  meetingInvites     MeetingRecipient[]
 
+  /// Lets school-owned rows point at a user with a composite key, so a link
+  /// to another school's user is rejected by the database.
+  @@unique([schoolId, id])
   @@index([schoolId, role])
   @@index([role])
 }
@@ -391,6 +690,9 @@ model School {
   principalName    String?
   principalMessage String?
   establishedYear  Int?
+  /// The government UDISE+ code (11 digits) that identifies an Indian school.
+  /// Optional — a new or unrecognised school may not have one yet.
+  udiseCode        String? @unique
   affiliationBoard String?
 
   // --- contact details shown on the public site ---
@@ -408,6 +710,22 @@ model School {
   bannerUrl      String?
   primaryColor   String  @default("#1e40af")
   secondaryColor String  @default("#f59e0b")
+
+  /// Days of the week the school is normally closed. Attendance is not
+  /// expected on them, but may still be recorded for a special working day.
+  weeklyOffDays DayOfWeek[] @default([SUNDAY])
+
+  // --- fee receipts ---
+  /// Printed under the school's name on every fee receipt, e.g. the board
+  /// affiliation or registration number.
+  receiptHeaderNote      String?
+  /// Printed at the foot of every fee receipt, e.g. "Fees once paid are not
+  /// refundable."
+  receiptFooterNote      String?
+  /// Library fine per day overdue, in paise. Zero means no fines.
+  libraryFinePerDayMinor Int     @default(200)
+  /// Whether students see their own fees and receipts. Parents always do.
+  showFeesToStudents     Boolean @default(false)
 
   /// Set when the contact proves they own the registration address. A school
   /// cannot be approved before this: otherwise anyone could register a school
@@ -459,9 +777,588 @@ model School {
   feeHeads              FeeHead[]
   feeCharges            FeeCharge[]
   feePayments           FeePayment[]
+  expenses              Expense[]
+  salaryPayments        SalaryPayment[]
+  holidays              Holiday[]
+  exams                 Exam[]
+  leaveRequests         LeaveRequest[]
+  noticeRecipients      NoticeRecipient[]
+  meetings              Meeting[]
+  meetingSections       MeetingSection[]
+  meetingRecipients     MeetingRecipient[]
+  meetingStudents       MeetingStudent[]
+  statusChanges         StatusChange[]
+  studentSupports       StudentSupport[]
+  supportNotes          SupportNote[]
+  supportConcerns       SupportConcern[]
+  complaints            Complaint[]
+  staffMembers          StaffMember[]
+  vehicles              Vehicle[]
+  transportRoutes       TransportRoute[]
+  routeStops            RouteStop[]
+  studentTransport      StudentTransport[]
+  books                 Book[]
+  bookIssues            BookIssue[]
+  assets                Asset[]
+  assetEvents           AssetEvent[]
 
   @@index([status])
   @@index([createdAt])
+}
+
+/// A term exam for one section — "Half-Yearly 2026" for 10-A. Its papers are
+/// ordinary `Assessment` rows (one per subject) and its marks are
+/// `AssessmentResult` rows, so class tests and exams share one marks table.
+/// Creating the same exam for several sections writes one `Exam` each.
+model Exam {
+  id                String     @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  sectionId         String
+  name              String
+  startDate         DateTime   @db.Date
+  endDate           DateTime   @db.Date
+  status            ExamStatus @default(DRAFT)
+  publishedAt       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  papers Assessment[]
+
+  @@unique([schoolId, id])
+  /// The same exam cannot be set twice for one section in a session.
+  @@unique([schoolId, academicSessionId, sectionId, name])
+  @@index([schoolId, academicSessionId, status])
+}
+
+/// A teacher's request for leave, both ends inclusive.
+///
+/// Approval writes ON_LEAVE into the staff register for the days already
+/// reached, and pre-fills it for the days still ahead, so the register and the
+/// leave never disagree about whether someone was absent.
+model LeaveRequest {
+  id           String      @id @default(cuid())
+  schoolId     String
+  teacherId    String
+  type         LeaveType
+  startDate    DateTime    @db.Date
+  endDate      DateTime    @db.Date
+  reason       String
+  status       LeaveStatus @default(PENDING)
+  /// The School Admin who decided, and what they said.
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  school     School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacher    Teacher @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  reviewedBy User?   @relation("LeaveReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, status, startDate])
+  @@index([schoolId, teacherId, startDate])
+}
+
+/// A meeting the school office calls: a parent-teacher meeting, a staff
+/// meeting, an assembly for one class. Nobody books anything — the office
+/// sets the time and chooses who is invited, and each invitee sees it in
+/// their portal.
+///
+/// Who is invited is `audiences` within `scope`:
+///   * SCHOOL   — everyone in those audiences.
+///   * SECTIONS — the students, parents and teachers of the `sections` listed
+///                (a non-teaching staff audience has no sections and is refused).
+///   * PEOPLE   — hand-picked people: teachers and staff in `recipients`, and
+///                the students in `students` — who see it with the STUDENTS
+///                audience — and their guardians, with PARENTS.
+///
+/// Times are minutes from midnight in the school's zone, like the timetable.
+/// Without `endMinute` the meeting runs to the end of its day.
+model Meeting {
+  id                String            @id @default(cuid())
+  schoolId          String
+  /// The session it was scheduled in; null when the school had none yet.
+  academicSessionId String?
+  type              MeetingType       @default(GENERAL)
+  title             String
+  description       String?
+  date              DateTime          @db.Date
+  startMinute       Int
+  endMinute         Int?
+  location          String?
+  meetingLink       String?
+  audiences         MeetingAudience[]
+  scope             MeetingScope      @default(SCHOOL)
+  status            MeetingStatus     @default(SCHEDULED)
+  cancelledAt       DateTime?
+  cancelReason      String?
+  createdById       String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  school          School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession? @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy       User?            @relation("MeetingCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  sections   MeetingSection[]
+  recipients MeetingRecipient[]
+  students   MeetingStudent[]
+  supports   StudentSupport[]
+
+  @@unique([schoolId, id])
+  @@index([schoolId, date])
+  @@index([schoolId, status, date])
+}
+
+/// A section whose students, parents and teachers a SECTIONS meeting reaches.
+model MeetingSection {
+  id        String @id @default(cuid())
+  schoolId  String
+  meetingId String
+  sectionId String
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  meeting Meeting @relation(fields: [schoolId, meetingId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  section Section @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, meetingId, sectionId])
+  @@index([schoolId, sectionId])
+}
+
+/// A student a PEOPLE meeting concerns. Resolved on every read, like
+/// `NoticeRecipient`, so a guardian linked later still sees it.
+model MeetingStudent {
+  id        String @id @default(cuid())
+  schoolId  String
+  meetingId String
+  studentId String
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  meeting Meeting @relation(fields: [schoolId, meetingId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  student Student @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, meetingId, studentId])
+  @@index([schoolId, studentId])
+}
+
+/// A teacher or staff member a PEOPLE meeting is addressed to, by login.
+model MeetingRecipient {
+  id        String @id @default(cuid())
+  schoolId  String
+  meetingId String
+  userId    String
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  meeting Meeting @relation(fields: [schoolId, meetingId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  user    User    @relation(fields: [schoolId, userId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, meetingId, userId])
+  @@index([schoolId, userId])
+}
+
+/// One change to a person's status or login, with when it took effect and
+/// why — the history behind "Transferred, left 28 Sep 2026". Rows are only
+/// ever added. Exactly one of the person ids is set, matching `person`.
+model StatusChange {
+  id            String           @id @default(cuid())
+  schoolId      String
+  person        PersonKind
+  kind          StatusChangeKind
+  studentId     String?
+  parentId      String?
+  teacherId     String?
+  staffMemberId String?
+  fromValue     String
+  toValue       String
+  effectiveDate DateTime         @db.Date
+  reason        String?
+  remarks       String?
+  changedById   String?
+  createdAt     DateTime         @default(now())
+
+  school      School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student     Student?     @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  parent      Parent?      @relation(fields: [schoolId, parentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  teacher     Teacher?     @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  staffMember StaffMember? @relation(fields: [schoolId, staffMemberId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  changedBy   User?        @relation("StatusChanger", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, studentId, createdAt])
+  @@index([schoolId, teacherId, createdAt])
+  @@index([schoolId, staffMemberId, createdAt])
+  @@index([schoolId, parentId, createdAt])
+}
+
+/// Extra academic support for one student: why, in which subject, what is
+/// being done, and how it is going. The teacher owns it; the office monitors
+/// and coordinates; the family sees a supportive summary.
+model StudentSupport {
+  id                  String          @id @default(cuid())
+  schoolId            String
+  academicSessionId   String
+  studentId           String
+  classId             String
+  sectionId           String
+  /// Null for support that is not about one subject (e.g. attendance).
+  subjectId           String?
+  /// The teacher responsible for the support.
+  teacherId           String?
+  source              SupportSource
+  reason              SupportReason
+  reasonNote          String?
+  /// What the student is working on, e.g. "Fractions".
+  topic               String?
+  priority            SupportPriority @default(MEDIUM)
+  action              SupportAction
+  actionNote          String?
+  status              SupportStatus   @default(NEW)
+  /// The parent concern this support answers, if any.
+  concernId           String?
+  /// The extra class arranged for it, as a meeting.
+  extraClassMeetingId String?
+  createdById         String?
+  resolvedAt          DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  student         Student         @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  class           Class           @relation(fields: [schoolId, classId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  subject         Subject?        @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher         Teacher?        @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  concern         SupportConcern? @relation(fields: [schoolId, concernId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  extraClass      Meeting?        @relation(fields: [schoolId, extraClassMeetingId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy       User?           @relation("SupportCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  notes           SupportNote[]
+
+  @@unique([schoolId, id])
+  @@index([schoolId, status, createdAt])
+  @@index([schoolId, studentId])
+  @@index([schoolId, teacherId, status])
+  @@index([schoolId, sectionId])
+}
+
+/// A follow-up on a support record: what was done or seen, and any change of
+/// status that came with it. Staff-facing; families see only the status.
+model SupportNote {
+  id         String         @id @default(cuid())
+  schoolId   String
+  supportId  String
+  authorId   String?
+  note       String
+  fromStatus SupportStatus?
+  toStatus   SupportStatus?
+  createdAt  DateTime       @default(now())
+
+  school  School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  support StudentSupport @relation(fields: [schoolId, supportId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  author  User?          @relation("SupportNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, supportId, createdAt])
+}
+
+/// A parent's concern about their child's learning. It asks the school to
+/// look; it never marks the child as needing support by itself — the teacher
+/// reviews it and decides. `response` is what the parent is told.
+model SupportConcern {
+  id         String        @id @default(cuid())
+  schoolId   String
+  studentId  String
+  parentId   String
+  subjectId  String?
+  /// The teacher it was routed to: the subject teacher, else the class teacher.
+  teacherId  String?
+  reason     SupportReason
+  message    String?
+  status     ConcernStatus @default(NEW)
+  response   String?
+  reviewedAt DateTime?
+  resolvedAt DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  school   School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student  Student          @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  parent   Parent           @relation(fields: [schoolId, parentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  subject  Subject?         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher  Teacher?         @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  supports StudentSupport[]
+
+  @@unique([schoolId, id])
+  @@index([schoolId, status, createdAt])
+  @@index([schoolId, teacherId, status])
+  @@index([schoolId, studentId])
+}
+
+/// A complaint or request from a parent or student to the school office.
+/// Visible to the School Admin, to the staff member it is assigned to, and to
+/// whoever raised it — never to anyone else.
+model Complaint {
+  id           String            @id @default(cuid())
+  schoolId     String
+  /// The parent or student who raised it.
+  raisedById   String?
+  /// The child it concerns (for a parent, one of their own).
+  studentId    String?
+  category     ComplaintCategory
+  priority     ComplaintPriority @default(MEDIUM)
+  subject      String
+  description  String
+  status       ComplaintStatus   @default(OPEN)
+  /// The staff member handling it: the School Admin or a teacher.
+  assignedToId String?
+  response     String?
+  respondedAt  DateTime?
+  resolvedAt   DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  school     School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  raisedBy   User?    @relation("ComplaintRaiser", fields: [raisedById], references: [id], onDelete: SetNull)
+  assignedTo User?    @relation("ComplaintAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  student    Student? @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, status, createdAt])
+  @@index([schoolId, raisedById])
+  @@index([schoolId, assignedToId])
+}
+
+/// A member of non-teaching staff: accountant, driver, librarian, peon.
+/// Basic employment details only — no documents.
+///
+/// A staff member may be given a login (`userId`, role NON_TEACHING_STAFF).
+/// `role` is their designation and grants nothing by itself; what they can
+/// open beyond their own record, notices and meetings is `permissions`.
+model StaffMember {
+  id          String            @id @default(cuid())
+  schoolId    String
+  employeeId  String
+  firstName   String
+  lastName    String
+  role        StaffRole
+  designation String?
+  department  String?
+  phone       String?
+  email       String?
+  joiningDate DateTime?         @db.Date
+  status      TeacherStatus     @default(ACTIVE)
+  notes       String?
+  permissions StaffPermission[] @default([])
+  userId      String?           @unique
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  statusChanges   StatusChange[]
+  drivingRoutes   TransportRoute[] @relation("RouteDriver")
+  attendingRoutes TransportRoute[] @relation("RouteAttendant")
+  bookIssues      BookIssue[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, employeeId])
+  @@index([schoolId, role, status])
+}
+
+model Vehicle {
+  id             String        @id @default(cuid())
+  schoolId       String
+  registrationNo String
+  type           VehicleType
+  capacity       Int
+  status         VehicleStatus @default(ACTIVE)
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  school School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  routes TransportRoute[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, registrationNo])
+}
+
+/// A bus route: its vehicle, driver and attendant, and its stops in order.
+model TransportRoute {
+  id          String   @id @default(cuid())
+  schoolId    String
+  name        String
+  vehicleId   String?
+  driverId    String?
+  attendantId String?
+  isActive    Boolean  @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  school    School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  vehicle   Vehicle?     @relation(fields: [schoolId, vehicleId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  driver    StaffMember? @relation("RouteDriver", fields: [schoolId, driverId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  attendant StaffMember? @relation("RouteAttendant", fields: [schoolId, attendantId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  stops    RouteStop[]
+  students StudentTransport[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, name])
+}
+
+/// A stop on a route. Pickup and drop are minutes from midnight.
+model RouteStop {
+  id           String   @id @default(cuid())
+  schoolId     String
+  routeId      String
+  name         String
+  sequence     Int
+  pickupMinute Int?
+  dropMinute   Int?
+  createdAt    DateTime @default(now())
+
+  school   School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  route    TransportRoute     @relation(fields: [schoolId, routeId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  students StudentTransport[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, routeId, sequence])
+}
+
+/// A student's place on a route. One per student: moving routes edits it.
+model StudentTransport {
+  id        String          @id @default(cuid())
+  schoolId  String
+  studentId String
+  routeId   String
+  stopId    String?
+  status    TransportStatus @default(ACTIVE)
+  startDate DateTime        @db.Date
+  notes     String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  school  School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student Student        @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  route   TransportRoute @relation(fields: [schoolId, routeId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  stop    RouteStop?     @relation(fields: [schoolId, stopId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, studentId])
+  @@index([schoolId, routeId])
+}
+
+/// A title in the library. Copies on loan are counted from open issues, so
+/// "available" can never drift from the loans themselves.
+model Book {
+  id        String   @id @default(cuid())
+  schoolId  String
+  title     String
+  author    String?
+  isbn      String?
+  category  String?
+  publisher String?
+  shelf     String?
+  quantity  Int
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  issues BookIssue[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, isbn])
+  @@index([schoolId, title])
+}
+
+/// One copy lent to one borrower: a student, a teacher or a staff member.
+model BookIssue {
+  id            String    @id @default(cuid())
+  schoolId      String
+  bookId        String
+  studentId     String?
+  teacherId     String?
+  staffMemberId String?
+  issuedOn      DateTime  @db.Date
+  dueOn         DateTime  @db.Date
+  returnedOn    DateTime? @db.Date
+  fineMinor     Int       @default(0)
+  finePaid      Boolean   @default(false)
+  notes         String?
+  issuedById    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  school      School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  book        Book         @relation(fields: [schoolId, bookId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  student     Student?     @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher     Teacher?     @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  staffMember StaffMember? @relation(fields: [schoolId, staffMemberId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  issuedBy    User?        @relation("BookIssuer", fields: [issuedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, bookId, returnedOn])
+  @@index([schoolId, dueOn, returnedOn])
+  @@index([schoolId, studentId])
+}
+
+/// A school asset or a batch of identical ones (quantity).
+model Asset {
+  id                String         @id @default(cuid())
+  schoolId          String
+  code              String
+  name              String
+  category          AssetCategory
+  purchaseDate      DateTime?      @db.Date
+  purchaseCostMinor Int?
+  quantity          Int            @default(1)
+  location          String?
+  /// The person or department it is with — free text, not a login.
+  assignedTo        String?
+  condition         AssetCondition @default(GOOD)
+  status            AssetStatus    @default(ACTIVE)
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  school School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  events AssetEvent[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, code])
+  @@index([schoolId, category, status])
+}
+
+/// The history of an asset: every status change, reassignment and repair note.
+model AssetEvent {
+  id         String       @id @default(cuid())
+  schoolId   String
+  assetId    String
+  summary    String
+  fromStatus AssetStatus?
+  toStatus   AssetStatus?
+  actorId    String?
+  createdAt  DateTime     @default(now())
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  asset  Asset  @relation(fields: [schoolId, assetId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  actor  User?  @relation("AssetEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, assetId, createdAt])
 }
 
 /// Subscription plan offered by the platform. Priced in paise/cents to keep
@@ -574,9 +1471,13 @@ model AcademicSession {
   studentRemarks        StudentRemark[]
   admissionApplications AdmissionApplication[]
   assessments           Assessment[]
+  exams                 Exam[]
   classTeacherHistory   ClassTeacherAssignment[]
   feeCharges            FeeCharge[]
   feePayments           FeePayment[]
+  meetings              Meeting[]
+
+  supports StudentSupport[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, name])
@@ -599,8 +1500,11 @@ model Class {
   updatedAt DateTime @updatedAt
 
   sections              Section[]
+  notices               Notice[]
   enrollments           StudentEnrollment[]
   admissionApplications AdmissionApplication[]
+
+  supports StudentSupport[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, name])
@@ -655,7 +1559,12 @@ model Section {
   studentAttendance   StudentAttendance[]
   homework            Homework[]
   assessments         Assessment[]
+  exams               Exam[]
+  notices             Notice[]
   classTeacherHistory ClassTeacherAssignment[]
+  meetingSections     MeetingSection[]
+
+  supports StudentSupport[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, academicSessionId, classId, name])
@@ -678,6 +1587,9 @@ model Subject {
   homework           Homework[]
   studentRemarks     StudentRemark[]
   assessments        Assessment[]
+
+  supports        StudentSupport[]
+  supportConcerns SupportConcern[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, code])
@@ -717,12 +1629,18 @@ model Teacher {
   classTeacherOf         Section[]                  @relation("SectionClassTeacher")
   classTeacherHistory    ClassTeacherAssignment[]
   salaries               TeacherSalary[]
+  salaryPayments         SalaryPayment[]
   attendance             TeacherAttendance[]
   scheduledClassSessions ClassSession[]             @relation("ClassSessionScheduledTeacher")
   actualClassSessions    ClassSession[]             @relation("ClassSessionActualTeacher")
   homework               Homework[]
   studentRemarks         StudentRemark[]
   assessments            Assessment[]
+  leaveRequests          LeaveRequest[]
+  bookIssues             BookIssue[]
+  statusChanges          StatusChange[]
+  supports               StudentSupport[]
+  supportConcerns        SupportConcern[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, employeeId])
@@ -787,12 +1705,20 @@ model Student {
 
   enrollments          StudentEnrollment[]
   parents              ParentStudent[]
+  noticeRecipients     NoticeRecipient[]
   attendance           StudentAttendance[]
   remarks              StudentRemark[]
   assessmentResults    AssessmentResult[]
   feeCharges           FeeCharge[]
   feePayments          FeePayment[]
   admissionApplication AdmissionApplication?
+  meetingInvites       MeetingStudent[]
+  statusChanges        StatusChange[]
+  supports             StudentSupport[]
+  supportConcerns      SupportConcern[]
+  complaints           Complaint[]
+  transport            StudentTransport?
+  bookIssues           BookIssue[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, admissionNumber])
@@ -854,7 +1780,9 @@ model Parent {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  children ParentStudent[]
+  children        ParentStudent[]
+  statusChanges   StatusChange[]
+  supportConcerns SupportConcern[]
 
   @@unique([schoolId, id])
   @@index([schoolId, phone])
@@ -962,6 +1890,7 @@ model ClassSession {
   actualTeacher    Teacher?      @relation("ClassSessionActualTeacher", fields: [schoolId, actualTeacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
 
   materials LessonMaterial[]
+  homework  Homework[]
 
   @@unique([schoolId, id])
   /// One record per period per day: a teacher saving twice edits the first
@@ -1039,8 +1968,12 @@ model Homework {
   subjectId         String
   /// Who set it. Also decides who may edit it.
   teacherId         String
+  /// The class this was set in, when it was set from the class record.
+  classSessionId    String?
   title             String
   description       String?
+  /// What the student has to do, step by step — "Exercise 4.2, Q1-10".
+  instructions      String?
   assignedOn        DateTime       @db.Date
   dueOn             DateTime       @db.Date
   status            HomeworkStatus @default(PUBLISHED)
@@ -1052,8 +1985,14 @@ model Homework {
   section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   subject         Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   teacher         Teacher         @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  classSession    ClassSession?   @relation(fields: [schoolId, classSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  /// Study resources attached to the homework: PDFs, videos, links.
+  resources LessonMaterial[]
 
   @@unique([schoolId, id])
+  /// One piece of homework per class record; re-saving the class edits it.
+  @@unique([schoolId, classSessionId])
   /// What a section is due to hand in — the query a report would run.
   @@index([schoolId, academicSessionId, sectionId, dueOn])
   /// What this teacher has set, newest first.
@@ -1114,6 +2053,12 @@ model Assessment {
   /// The paper's total. Integer: schools mark in whole numbers, and a float
   /// here would invite rounding differences between the two ends of a report.
   maxMarks          Int
+  /// Marks needed to pass this paper. Null means the default share of
+  /// `maxMarks` (see `src/lib/grades.ts`).
+  passMarks         Int?
+  /// The exam this paper belongs to. Null for a class test a teacher set on
+  /// their own, whose marks are visible as soon as they are entered.
+  examId            String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -1122,10 +2067,13 @@ model Assessment {
   section         Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   subject         Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   teacher         Teacher?        @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  exam            Exam?           @relation(fields: [schoolId, examId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
 
   results AssessmentResult[]
 
   @@unique([schoolId, id])
+  /// One paper per subject per exam.
+  @@unique([schoolId, examId, subjectId])
   @@index([schoolId, academicSessionId, sectionId, date])
   @@index([schoolId, subjectId, date])
 }
@@ -1142,21 +2090,36 @@ model Assessment {
 model LessonMaterial {
   id             String             @id @default(cuid())
   schoolId       String
-  classSessionId String
+  /// Exactly one of `classSessionId` and `homeworkId` is set (a CHECK
+  /// constraint enforces it): the same resource system serves a completed
+  /// class's materials and a homework's study resources.
+  classSessionId String?
+  homeworkId     String?
   kind           LessonMaterialKind
   title          String
-  /// For LINK and DOCUMENT. `https://` only — there is no upload pipeline.
+  /// For LINK, VIDEO and a DOCUMENT hosted elsewhere. `https://` only.
   url            String?
   /// For NOTES, QUESTIONS and PRACTICE: the teacher's own text.
   body           String?
+  /// A line under a link or a video saying what it is for.
+  description    String?
+  /// An uploaded DOCUMENT: where `server/storage/files.ts` keeps the bytes.
+  /// Never a path a browser can reach — the file is served only through the
+  /// authorized download route, which checks the lesson first.
+  storageKey     String?
+  fileName       String?
+  fileSize       Int?
+  mimeType       String?
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 
-  school       School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  classSession ClassSession @relation(fields: [schoolId, classSessionId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  school       School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classSession ClassSession? @relation(fields: [schoolId, classSessionId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  homework     Homework?     @relation(fields: [schoolId, homeworkId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([schoolId, id])
   @@index([schoolId, classSessionId])
+  @@index([schoolId, homeworkId])
 }
 
 /// One child's marks in one assessment.
@@ -1171,7 +2134,10 @@ model AssessmentResult {
   assessmentId  String
   studentId     String
   marksObtained Int?
-  /// Absent, medical leave, exempted — the reason there is no mark.
+  /// Did not sit the paper. Always has a null mark; never counted as zero
+  /// silently, but fails the paper on a report card.
+  absent        Boolean  @default(false)
+  /// The teacher's remark on this paper, or the reason there is no mark.
   remarks       String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -1315,8 +2281,11 @@ model FeePayment {
   amountMinor       Int
   paidOn            DateTime      @db.Date
   method            PaymentMethod @default(CASH)
-  /// The school's own receipt number, unique within the school.
+  /// The school's own receipt number, unique within the school. Fixed once
+  /// written: every reprint of the receipt shows this same number.
   receiptNo         String
+  /// Cheque number, UPI / bank transaction id — whatever proves the transfer.
+  referenceNo       String?
   notes             String?
   /// Who took the payment.
   recordedById      String?
@@ -1400,19 +2369,44 @@ model Notice {
   title     String
   body      String
   audience  NoticeAudience @default(ALL)
+  scope     NoticeScope    @default(SCHOOL)
+  /// Set when `scope` is CLASS.
+  classId   String?
+  /// Set when `scope` is SECTION.
+  sectionId String?
   status    NoticeStatus   @default(DRAFT)
   isPublic  Boolean        @default(false)
   publishAt DateTime?
   expiresAt DateTime?
   authorId  String?
   author    User?          @relation("NoticeAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  class     Class?         @relation(fields: [schoolId, classId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section   Section?       @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
+
+  recipients NoticeRecipient[]
 
   @@unique([schoolId, id])
   @@index([schoolId, status, publishAt])
   @@index([schoolId, audience, status])
   @@index([schoolId, isPublic, status])
+}
+
+/// One student a STUDENTS-scoped notice is addressed to.
+model NoticeRecipient {
+  id        String @id @default(cuid())
+  schoolId  String
+  noticeId  String
+  studentId String
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  notice  Notice  @relation(fields: [schoolId, noticeId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  student Student @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, noticeId, studentId])
+  @@index([schoolId, studentId])
 }
 
 model Event {
@@ -1433,6 +2427,31 @@ model Event {
   @@unique([schoolId, id])
   @@index([schoolId, date])
   @@index([schoolId, isPublished, date])
+}
+
+/// A day or run of days the school is closed: Diwali, summer vacation, a
+/// rain closure. Both ends are inclusive, so a one-day holiday has
+/// `startDate == endDate`.
+///
+/// Attendance is refused on these days and no attendance row may exist on
+/// one: declaring a holiday over days that were already marked requires
+/// clearing those marks in the same save. Because every percentage in the app
+/// is computed from recorded marks, that single invariant is what keeps a
+/// holiday from ever counting as an absence.
+model Holiday {
+  id          String   @id @default(cuid())
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([schoolId, id])
+  @@index([schoolId, startDate])
+  @@index([schoolId, endDate])
 }
 
 /// A page of the school's public website, edited by the School Admin.
@@ -1472,4 +2491,100 @@ model SchoolMedia {
 
   @@unique([schoolId, id])
   @@index([schoolId, category, sortOrder])
+}
+
+/// Money the school spent that is not a salary: the electricity bill, chalk,
+/// a bus repair.
+///
+/// Like `FeePayment`, one row per outgoing amount and no stored totals — every
+/// figure on the finance dashboard is a sum over these rows.
+model Expense {
+  id           String          @id @default(cuid())
+  schoolId     String
+  category     ExpenseCategory
+  description  String
+  amountMinor  Int
+  spentOn      DateTime        @db.Date
+  method       PaymentMethod   @default(CASH)
+  /// Bill, invoice or voucher number.
+  reference    String?
+  notes        String?
+  recordedById String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  school     School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  recordedBy User?  @relation("ExpenseRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, spentOn])
+  @@index([schoolId, category, spentOn])
+}
+
+/// Salary actually paid to a member of staff for one month.
+///
+/// `TeacherSalary` is what a teacher is owed; this is what left the school's
+/// account. Kept apart so a raise does not rewrite a payment already made.
+model SalaryPayment {
+  id           String        @id @default(cuid())
+  schoolId     String
+  teacherId    String
+  amountMinor  Int
+  paidOn       DateTime      @db.Date
+  /// The first day of the month this payment is for.
+  forMonth     DateTime      @db.Date
+  method       PaymentMethod @default(BANK_TRANSFER)
+  reference    String?
+  notes        String?
+  recordedById String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  school     School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacher    Teacher @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  recordedBy User?   @relation("SalaryPaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  /// One salary payment per teacher per month: paying twice is the mistake
+  /// this table exists to prevent.
+  @@unique([schoolId, teacherId, forMonth])
+  @@index([schoolId, paidOn])
+}
+
+enum InquiryTopic {
+  DEMO
+  PRICING
+  ONBOARDING
+  SUPPORT
+  PARTNERSHIP
+  OTHER
+}
+
+enum InquiryStatus {
+  NEW
+  CONTACTED
+  CLOSED
+}
+
+/// A message from the public contact page to the platform owner.
+///
+/// Platform-level, like `PlatformOffer`: it belongs to no school, and only a
+/// Super Admin can read it. The sender may not have an account at all.
+model PlatformInquiry {
+  id         String        @id @default(cuid())
+  name       String
+  schoolName String?
+  email      String
+  phone      String?
+  city       String?
+  topic      InquiryTopic  @default(DEMO)
+  message    String
+  status     InquiryStatus @default(NEW)
+  /// Kept for abuse handling only; never shown on a public page.
+  ipAddress  String?
+  handledAt  DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@index([status, createdAt])
 }

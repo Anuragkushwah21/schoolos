@@ -2,7 +2,7 @@ import { apiSuccess, platformRoute } from "@/server/api/handler";
 
 /** Who the caller is, and how they proved it. The client's sanity check. */
 export const GET = platformRoute(
-  { roles: ["SUPER_ADMIN", "SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT"] },
+  { roles: ["SUPER_ADMIN", "SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"] },
   async ({ actor }) =>
     apiSuccess({
       user: {

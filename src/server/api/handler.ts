@@ -189,7 +189,7 @@ function handleError(error: unknown) {
   }
 
   console.error("[api] unhandled", error);
-  return apiError("INTERNAL", "Something went wrong. Please try again.");
+  return apiError("INTERNAL", "Something went wrong on our side. Please try again in a moment.");
 }
 
 /**

@@ -14,7 +14,7 @@ records the gap between that and the intended product.
 | Area | State | Note |
 | --- | --- | --- |
 | Multi-tenancy (one app, one database, many schools) | **DONE** | Scoped Prisma client plus composite foreign keys on `(schoolId, parentId)`. No tenant-role input schema accepts a `schoolId`. |
-| Tenant isolation against forged ids | **DONE** | Verified across every write path; the only client-supplied `schoolId` is on Super Admin endpoints, where acting across schools is the role. |
+| Tenant isolation against forged ids | **DONE** | Verified across every write path; the only client-supplied `schoolId` is on Super Admin endpoints, where acting across schools is the role. Re-audited 26 Sep 2026 with an Alpha/Beta suite over the real API — see §10. |
 | Role hierarchy and RBAC | **DONE** | `SUPER_ADMIN → SCHOOL_ADMIN → TEACHER → PARENT`, asserted in the data layer rather than the screens. |
 | Single login, role-based routing | **WAS PARTIAL → DONE** | Three of the four dashboard paths did not match the direction. Renamed; see §2. |
 | Parent as a real authenticated role | **DONE** | The role, model and pages existed; the landing route and the invite-only guarantee did not hold. See §4. |
@@ -256,3 +256,89 @@ Ordered by what blocks the most.
 6. **Decide on the public website** (§7).
 7. **Homework and class records for students and parents** — stored, published,
    and read by nobody yet.
+
+---
+
+## 10. Tenant isolation audit — 26 Sep 2026
+
+Scope: prove, on the server, that one school cannot read or change another
+school's data. No product features were added.
+
+### How isolation works
+
+`session cookie or API token → User → User.schoolId (from the database, with
+the school required to be ACTIVE) → forSchool(schoolId) → every query filtered
+by that school`, backed by composite `(schoolId, id)` foreign keys in
+PostgreSQL. The client never supplies the school: no tenant-role input schema
+has a `schoolId`, and one sent anyway is ignored. Middleware (`proxy.ts`) only
+routes; it is not a security boundary. Details and the per-model tenancy map
+are in [`ARCHITECTURE.md`](ARCHITECTURE.md) §1.
+
+### Results
+
+| Area | Result | Checked by |
+| --- | --- | --- |
+| Students | PASS | list, detail, update, delete, enrol, search, filter, pagination via `/api/v1/students…` |
+| Teachers | PASS | list, detail, search, subject assignment via `/api/v1/teachers…` |
+| Classes / sections / subjects | PASS | lists, `GET /sections/{id}`, `PATCH /classes/{id}`, `PATCH /subjects/{id}` |
+| Attendance | PASS | register read and marking across schools, attendance report |
+| Timetable | PASS (after fix 2) | section and teacher timetables, slot create/delete |
+| Homework and class materials | PASS | service suites; file download route (earlier suites) |
+| Reports | PASS | `/api/v1/reports/attendance`, school report, CSV export (session-scoped) |
+| Parents / guardians | PASS | search, parent picker, update, linking to a student |
+| Notices / admissions | PASS | lists and direct ids |
+| Fees | PASS (after fix 1) | payments, charges, pending, receipts by id |
+| Expenses | PASS | list, remove by id, dashboard totals |
+| Salary | PASS (after fix 1) | salary payments, paying another school's teacher |
+| Search | PASS | names, admission numbers, parents, fee search, dropdowns |
+| Dashboard aggregation | PASS | student/teacher counts, gender, class strength, attendance, finance |
+| Super Admin | PASS | sees both schools with their own counts and revenue; School Admin refused |
+| Forged `schoolId` | PASS | query string, request body and `where` clause all ignored or refused |
+| Database layer | PASS | a raw insert linking Beta's student to Alpha's section is rejected by PostgreSQL |
+
+### Vulnerabilities found and fixed
+
+1. **Ten school-owned models were not tenant-scoped (HIGH, fixed earlier the
+   same day).** `FeeHead`, `FeeCharge`, `FeePayment`, `TeacherSalary`,
+   `ClassTeacherAssignment`, `LessonMaterial`, `Assessment`,
+   `AssessmentResult` (and the new `Expense`, `SalaryPayment`) were missing from
+   `TENANT_MODELS`, so `ctx.db` did not filter them. Concretely,
+   `listPayments(ctx)` with no session filter returned **every school's fee
+   receipts**, and a payment or salary id from another school could be looked
+   up. Fix: all added to `TENANT_MODELS`; every model with a `schoolId` is now
+   scoped (the audit script compares the schema against the list).
+2. **`canAccessSection` passed any section id for a School Admin (LOW,
+   fixed).** It returned `true` without checking the section was in the
+   admin's school. No data leaked — the reads after it are scoped, so another
+   school's section showed an empty timetable — but the check did not do what
+   its name says, and `GET /api/v1/timetable?teacher=` had the same gap. Fix:
+   both now look the id up through the scoped client and answer "not found".
+
+### Checked and found sound
+
+* The unscoped `prisma` client appears only in platform, auth, public-website
+  and public-admission code, each filtered by a server-derived `schoolId`, the
+  signed-in user's own id, or behind a Super Admin check.
+* No raw SQL (`$queryRaw`/`$executeRaw`) in application code.
+* Every `/api/v1` route goes through `apiRoute`, `platformRoute` or
+  `publicRoute`; the two handlers outside it (the API index, the attendance CSV
+  export) are respectively data-free and self-authenticating with a scoped client.
+* Suspended or pending schools: session and token validation refuse every
+  non-platform user whose school is not `ACTIVE`.
+
+### Not covered / limits
+
+* The Super Admin sees each school's details and student/teacher **counts**;
+  there is no per-person list of another school's students or teachers, and
+  none was added (out of scope for this audit).
+* Isolation *within* a school (teacher vs teacher, parent vs other children)
+  is covered by `rbac.test.ts`, `classwork.test.ts` and the portal suites, not
+  re-audited here.
+
+### Tests
+
+`tests/integration/tenant-audit.test.ts` — 17 tests, both directions (Alpha →
+Beta and Beta → Alpha), all through the real route handlers or the services
+the pages call, each asserting that the other school's markers are absent from
+the whole response body. Full suite at the time: 27 files, 377 tests, all passing.
+

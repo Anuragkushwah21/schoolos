@@ -1,15 +1,12 @@
-import Link from "next/link";
-
-import { Logo } from "@/components/shared/logo";
-import { NavLinks } from "@/components/shared/nav-links";
-import { SignOutButton } from "@/features/auth/sign-out-button";
-import { NAV_BY_ROLE } from "@/lib/nav";
-import { ROLE_LABEL } from "@/lib/roles";
+import { ShellChrome } from "@/components/shared/shell-chrome";
+import { NAV_BY_ROLE, type NavItem } from "@/lib/nav";
+import { roleProfilePath } from "@/lib/roles";
 import type { SessionUser } from "@/server/auth/session";
+import { getT } from "@/server/i18n";
 
 /**
- * Chrome shared by every signed-in area: a sidebar of section links and a
- * header identifying who is signed in, to which school, and in what role.
+ * Chrome shared by every signed-in area: a slim sidebar of what people do,
+ * the school's name, the person, and switches for theme and language.
  *
  * Showing the school name at all times is a safety feature as much as a
  * convenience — an administrator who works with more than one school should
@@ -19,41 +16,30 @@ import type { SessionUser } from "@/server/auth/session";
  * client-side navigation between sibling pages, so they are never the
  * authorization boundary: every page repeats its own guard.
  */
-export function AppShell({
+export async function AppShell({
   user,
+  nav,
   children,
 }: {
   user: SessionUser;
+  /** Overrides the role's links — for staff, whose sidebar depends on what they have been granted. */
+  nav?: NavItem[];
   children: React.ReactNode;
 }) {
+  const t = await getT();
+
   return (
-    <div className="flex min-h-full flex-1 flex-col md:flex-row">
-      <aside className="bg-sidebar text-sidebar-foreground border-sidebar-border shrink-0 border-b md:sticky md:top-0 md:h-dvh md:w-60 md:overflow-y-auto md:border-r md:border-b-0">
-        <div className="flex h-14 items-center px-5">
-          <Link href="/" aria-label="SchoolOS home">
-            <Logo />
-          </Link>
-        </div>
-
-        <NavLinks items={NAV_BY_ROLE[user.role]} />
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between gap-4 border-b px-5">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">
-              {user.schoolName ?? "Platform administration"}
-            </p>
-            <p className="text-muted-foreground truncate text-xs">
-              {user.firstName} {user.lastName} · {ROLE_LABEL[user.role]}
-            </p>
-          </div>
-
-          <SignOutButton />
-        </header>
-
-        <main className="min-w-0 flex-1 p-5 md:p-8">{children}</main>
-      </div>
-    </div>
+    <ShellChrome
+      nav={nav ?? NAV_BY_ROLE[user.role]}
+      schoolName={user.schoolName ?? t("nav.platform")}
+      user={{
+        name: `${user.firstName} ${user.lastName}`.trim(),
+        email: user.email,
+        role: user.role,
+        profileHref: roleProfilePath(user.role),
+      }}
+    >
+      {children}
+    </ShellChrome>
   );
 }

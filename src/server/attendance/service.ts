@@ -1,23 +1,25 @@
 import "server-only";
 
 import type { AttendanceStatus, TeacherAttendanceStatus } from "@/generated/prisma/enums";
-import { addDays, formatDate, today, toDateInput } from "@/lib/dates";
-import { AppError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
+import { formatDate, today, toDateInput } from "@/lib/dates";
+import { AppError, NotFoundError, ValidationError } from "@/lib/errors";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireSectionAccess } from "@/server/auth/teacher-access";
 import { sectionLabel } from "@/server/academics/structure";
-import { describeClosure, schoolClosureOn } from "@/server/calendar/holidays";
+import { schoolClosureOn } from "@/server/calendar/holidays";
 import { approvedLeaveOn } from "@/server/staff/leave";
 
 /**
  * Daily attendance.
  *
- * Who may mark a register is decided by `requireSectionAccess` — a School Admin
- * for any section, a teacher only for sections they teach or are class teacher
- * of. On top of that, teachers work within a short window: they can correct
- * the last week, but rewriting last term's registers is an admin's job.
+ * Who may take a register is decided by `requireAttendanceAccess` — a School
+ * Admin for any section, a teacher only for the section they are class
+ * teacher of this session. On top of that, teachers work within a short
+ * window: they can correct the last week, but rewriting last term's registers
+ * is an admin's job. Reading attendance reports stays with everyone who
+ * teaches the section (`requireSectionAccess`).
  *
  * Dates follow the rules of a historical record: today and earlier are
  * allowed, a future date never is. A declared holiday is refused outright —
@@ -26,285 +28,139 @@ import { approvedLeaveOn } from "@/server/staff/leave";
  * expected on one, but a special working Saturday can still be recorded.
  */
 
-export const TEACHER_EDIT_WINDOW_DAYS = 7;
+import { assertNotHoliday, ATTENDANCE_STATUSES, finalizeDueRegisters } from "./register";
 
-export const ATTENDANCE_STATUSES: AttendanceStatus[] = ["PRESENT", "ABSENT", "LATE", "EXCUSED"];
+// The student register — draft, submission, correction window — lives in
+// `./register`; it is re-exported here so existing imports keep working.
+export {
+  ATTENDANCE_STATUSES,
+  type AttendanceEntry,
+  getRegister,
+  markAttendance,
+  saveRegisterDraft,
+  TEACHER_EDIT_WINDOW_DAYS,
+} from "./register";
+
 export const STAFF_ATTENDANCE_STATUSES: TeacherAttendanceStatus[] = ["PRESENT", "ABSENT", "LATE", "ON_LEAVE"];
-
-/** Throws when `date` is a declared holiday. */
-async function assertNotHoliday(ctx: TenantContext, date: Date): Promise<void> {
-  const closure = await schoolClosureOn(ctx, date);
-  if (closure?.kind === "HOLIDAY") {
-    throw new AppError("VALIDATION", `${describeClosure(closure, date)} No attendance is needed.`);
-  }
-}
-
-/** Throws unless `date` is a day this user may mark for this section. */
-function assertMarkableDate(
-  ctx: TenantContext,
-  date: Date,
-  session: { name: string; startDate: Date; endDate: Date },
-): void {
-  const now = today();
-  if (date > now) {
-    throw new AppError("VALIDATION", "Attendance cannot be marked for a future date.");
-  }
-  if (date < session.startDate || date > session.endDate) {
-    throw new AppError("VALIDATION", `${formatDate(date)} is outside the ${session.name} session.`);
-  }
-  if (ctx.user.role === "TEACHER" && date < addDays(now, -TEACHER_EDIT_WINDOW_DAYS)) {
-    throw new ForbiddenError(
-      `Teachers can mark attendance for the last ${TEACHER_EDIT_WINDOW_DAYS} days only. Ask the school office to correct older registers.`,
-    );
-  }
-}
-
-/** The register for one section on one day: every enrolled student and any mark. */
-export async function getRegister(ctx: TenantContext, sectionId: string, date: Date) {
-  await requireSectionAccess(ctx, sectionId);
-
-  const section = await ctx.db.section.findFirst({
-    where: { id: sectionId },
-    select: {
-      id: true,
-      name: true,
-      class: { select: { name: true } },
-      stream: { select: { name: true } },
-      academicSession: { select: { id: true, name: true, startDate: true, endDate: true } },
-    },
-  });
-  if (!section) throw new NotFoundError();
-
-  const [enrollments, marks, closure] = await Promise.all([
-    ctx.db.studentEnrollment.findMany({
-      where: { sectionId: section.id, status: "ACTIVE", student: { status: "ACTIVE" } },
-      select: {
-        rollNumber: true,
-        student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true } },
-      },
-    }),
-    ctx.db.studentAttendance.findMany({
-      where: { sectionId: section.id, date },
-      select: {
-        studentId: true,
-        status: true,
-        remarks: true,
-        markedAt: true,
-        markedBy: { select: { firstName: true, lastName: true } },
-      },
-    }),
-    schoolClosureOn(ctx, date),
-  ]);
-
-  const byStudent = new Map(marks.map((mark) => [mark.studentId, mark]));
-  const rollOrder = (roll: string | null) => (roll && /^\d+$/.test(roll) ? Number(roll) : Number.MAX_SAFE_INTEGER);
-
-  const rows = enrollments
-    .sort(
-      (a, b) =>
-        rollOrder(a.rollNumber) - rollOrder(b.rollNumber) ||
-        a.student.firstName.localeCompare(b.student.firstName),
-    )
-    .map((enrollment) => {
-      const mark = byStudent.get(enrollment.student.id);
-      return {
-        studentId: enrollment.student.id,
-        name: `${enrollment.student.firstName} ${enrollment.student.lastName}`,
-        admissionNumber: enrollment.student.admissionNumber,
-        rollNumber: enrollment.rollNumber,
-        status: mark?.status ?? null,
-        remarks: mark?.remarks ?? null,
-      };
-    });
-
-  const latest = marks.reduce<(typeof marks)[number] | null>(
-    (acc, mark) => (!acc || mark.markedAt > acc.markedAt ? mark : acc),
-    null,
-  );
-
-  let editable = true;
-  let lockedReason: string | null = null;
-  try {
-    assertMarkableDate(ctx, date, section.academicSession);
-    if (closure?.kind === "HOLIDAY") {
-      throw new AppError("VALIDATION", `${describeClosure(closure, date)} No attendance is needed.`);
-    }
-  } catch (error) {
-    editable = false;
-    lockedReason = error instanceof AppError ? error.message : null;
-  }
-
-  return {
-    section: { id: section.id, label: sectionLabel(section), session: section.academicSession },
-    date,
-    rows,
-    marked: marks.length,
-    lastMarked: latest
-      ? {
-          at: latest.markedAt,
-          by: latest.markedBy ? `${latest.markedBy.firstName} ${latest.markedBy.lastName}` : null,
-        }
-      : null,
-    editable,
-    lockedReason,
-    closure: closure ? { kind: closure.kind, label: closure.label } : null,
-  };
-}
-
-export type AttendanceEntry = { studentId: string; status: AttendanceStatus; remarks: string | null };
-
-/**
- * Save a whole register. Every student in the submission must be enrolled in
- * the section; a forged student id — including one from another school —
- * fails the whole save rather than being silently skipped.
- */
-export async function markAttendance(
-  ctx: TenantContext,
-  input: { sectionId: string; date: Date; entries: AttendanceEntry[] },
-): Promise<{ saved: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "TEACHER");
-  await requireSectionAccess(ctx, input.sectionId);
-
-  const section = await ctx.db.section.findFirst({
-    where: { id: input.sectionId },
-    select: {
-      id: true,
-      name: true,
-      class: { select: { name: true } },
-      stream: { select: { name: true } },
-      academicSession: { select: { id: true, name: true, startDate: true, endDate: true } },
-    },
-  });
-  if (!section) throw new NotFoundError();
-  assertMarkableDate(ctx, input.date, section.academicSession);
-  await assertNotHoliday(ctx, input.date);
-
-  if (!input.entries.length) {
-    throw new ValidationError("Mark at least one student before saving.");
-  }
-
-  const enrolled = new Set(
-    (
-      await ctx.db.studentEnrollment.findMany({
-        where: { sectionId: section.id, status: "ACTIVE" },
-        select: { studentId: true },
-      })
-    ).map((row) => row.studentId),
-  );
-  const stranger = input.entries.find((entry) => !enrolled.has(entry.studentId));
-  if (stranger) throw new ForbiddenError("A student in this register is not in this section.");
-
-  await ctx.db.$transaction(
-    input.entries.map((entry) =>
-      ctx.db.studentAttendance.upsert({
-        where: {
-          schoolId_studentId_date: { schoolId: ctx.schoolId, studentId: entry.studentId, date: input.date },
-        },
-        create: {
-          schoolId: ctx.schoolId,
-          academicSessionId: section.academicSession.id,
-          studentId: entry.studentId,
-          sectionId: section.id,
-          date: input.date,
-          status: entry.status,
-          remarks: entry.remarks,
-          markedByUserId: ctx.user.id,
-        },
-        update: {
-          sectionId: section.id,
-          academicSessionId: section.academicSession.id,
-          status: entry.status,
-          remarks: entry.remarks,
-          markedByUserId: ctx.user.id,
-          markedAt: new Date(),
-        },
-      }),
-    ),
-  );
-
-  const absent = input.entries.filter((entry) => entry.status === "ABSENT").length;
-  await recordAudit({
-    action: "ATTENDANCE_MARKED",
-    entityType: "Section",
-    entityId: section.id,
-    schoolId: ctx.schoolId,
-    actorId: ctx.user.id,
-    summary: `Attendance for ${sectionLabel(section)} on ${formatDate(input.date)}: ${input.entries.length} marked, ${absent} absent.`,
-  });
-
-  return { saved: input.entries.length };
-}
 
 // -----------------------------------------------------------------------------
 // Staff attendance (School Admin only)
 // -----------------------------------------------------------------------------
 
+/**
+ * The staff register for one day: every current teacher and non-teaching
+ * staff member, with any mark and approved leave (which pre-fills ON_LEAVE).
+ * Teachers and staff are kept in their own tables; `key` ("t:…" / "s:…") is
+ * what the register form sends back.
+ */
 export async function getStaffRegister(ctx: TenantContext, date: Date) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
-  const [teachers, marks, leave] = await Promise.all([
+  const [teachers, marks, leave, staff, staffMarks, staffLeave] = await Promise.all([
     ctx.db.teacher.findMany({
       where: { status: { in: ["ACTIVE", "ON_LEAVE"] } },
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
-      select: { id: true, firstName: true, lastName: true, employeeId: true, status: true },
+      select: { id: true, firstName: true, lastName: true, employeeId: true, status: true, designation: true },
     }),
-    ctx.db.teacherAttendance.findMany({
-      where: { date },
-      select: { teacherId: true, status: true, remarks: true },
-    }),
+    ctx.db.teacherAttendance.findMany({ where: { date }, select: { teacherId: true, status: true, remarks: true } }),
     approvedLeaveOn(ctx, date),
+    ctx.db.staffMember.findMany({
+      where: { status: { in: ["ACTIVE", "ON_LEAVE"] } },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+      select: { id: true, firstName: true, lastName: true, employeeId: true, status: true, role: true, designation: true },
+    }),
+    ctx.db.staffAttendance.findMany({ where: { date }, select: { staffMemberId: true, status: true, remarks: true } }),
+    ctx.db.leaveRequest.findMany({
+      where: { status: "APPROVED", startDate: { lte: date }, endDate: { gte: date }, staffMemberId: { not: null } },
+      select: { staffMemberId: true },
+    }),
   ]);
 
   const byTeacher = new Map(marks.map((mark) => [mark.teacherId, mark]));
-  return teachers.map((teacher) => ({
-    teacherId: teacher.id,
-    name: `${teacher.firstName} ${teacher.lastName}`,
-    employeeId: teacher.employeeId,
-    onLeave: teacher.status === "ON_LEAVE",
-    status: byTeacher.get(teacher.id)?.status ?? null,
-    remarks: byTeacher.get(teacher.id)?.remarks ?? null,
-    /** Approved leave covering this day: the register pre-fills ON_LEAVE. */
-    onApprovedLeave: leave.has(teacher.id),
-  }));
+  const byStaff = new Map(staffMarks.map((mark) => [mark.staffMemberId, mark]));
+  const staffOnLeave = new Set(staffLeave.map((row) => row.staffMemberId));
+  return [
+    ...teachers.map((teacher) => ({
+      key: `t:${teacher.id}`,
+      kind: "TEACHER" as const,
+      /** Kept for API clients that read the teachers' register. */
+      teacherId: teacher.id as string | null,
+      staffMemberId: null as string | null,
+      name: `${teacher.firstName} ${teacher.lastName}`,
+      employeeId: teacher.employeeId,
+      job: teacher.designation ?? "Teacher",
+      onLeave: teacher.status === "ON_LEAVE",
+      status: byTeacher.get(teacher.id)?.status ?? null,
+      remarks: byTeacher.get(teacher.id)?.remarks ?? null,
+      /** Approved leave covering this day: the register pre-fills ON_LEAVE. */
+      onApprovedLeave: leave.has(teacher.id),
+    })),
+    ...staff.map((member) => ({
+      key: `s:${member.id}`,
+      kind: "STAFF" as const,
+      teacherId: null as string | null,
+      staffMemberId: member.id as string | null,
+      name: `${member.firstName} ${member.lastName}`,
+      employeeId: member.employeeId,
+      job: member.designation ?? member.role.charAt(0) + member.role.slice(1).toLowerCase().replace(/_/g, " "),
+      onLeave: member.status === "ON_LEAVE",
+      status: byStaff.get(member.id)?.status ?? null,
+      remarks: byStaff.get(member.id)?.remarks ?? null,
+      onApprovedLeave: staffOnLeave.has(member.id),
+    })),
+  ];
 }
 
+export type StaffAttendanceEntry = {
+  teacherId?: string | null;
+  staffMemberId?: string | null;
+  status: TeacherAttendanceStatus;
+  remarks: string | null;
+};
+
+/**
+ * Save the staff register: teachers and non-teaching staff together. Each id
+ * is looked up inside the admin's own school; an unknown one fails the save.
+ */
 export async function markStaffAttendance(
   ctx: TenantContext,
-  input: {
-    date: Date;
-    entries: Array<{ teacherId: string; status: TeacherAttendanceStatus; remarks: string | null }>;
-  },
+  input: { date: Date; entries: StaffAttendanceEntry[] },
 ): Promise<{ saved: number }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   if (input.date > today()) throw new AppError("VALIDATION", "Attendance cannot be marked for a future date.");
   await assertNotHoliday(ctx, input.date);
-  if (!input.entries.length) throw new ValidationError("Mark at least one teacher before saving.");
+  if (!input.entries.length) throw new ValidationError("Mark at least one person before saving.");
 
-  const known = new Set(
-    (
-      await ctx.db.teacher.findMany({
-        where: { id: { in: input.entries.map((e) => e.teacherId) } },
-        select: { id: true },
-      })
-    ).map((t) => t.id),
-  );
-  if (input.entries.some((entry) => !known.has(entry.teacherId))) throw new NotFoundError();
+  const teacherEntries = input.entries.filter((entry): entry is StaffAttendanceEntry & { teacherId: string } => Boolean(entry.teacherId));
+  const staffEntries = input.entries.filter((entry): entry is StaffAttendanceEntry & { staffMemberId: string } => !entry.teacherId && Boolean(entry.staffMemberId));
+  if (teacherEntries.length + staffEntries.length !== input.entries.length) throw new NotFoundError();
 
-  await ctx.db.$transaction(
-    input.entries.map((entry) =>
+  const [knownTeachers, knownStaff] = await Promise.all([
+    ctx.db.teacher.findMany({ where: { id: { in: teacherEntries.map((e) => e.teacherId) } }, select: { id: true } }),
+    ctx.db.staffMember.findMany({ where: { id: { in: staffEntries.map((e) => e.staffMemberId) } }, select: { id: true } }),
+  ]);
+  const teacherIds = new Set(knownTeachers.map((t) => t.id));
+  const staffIds = new Set(knownStaff.map((m) => m.id));
+  if (teacherEntries.some((e) => !teacherIds.has(e.teacherId)) || staffEntries.some((e) => !staffIds.has(e.staffMemberId))) {
+    throw new NotFoundError();
+  }
+
+  await ctx.db.$transaction([
+    ...teacherEntries.map((entry) =>
       ctx.db.teacherAttendance.upsert({
         where: { schoolId_teacherId_date: { schoolId: ctx.schoolId, teacherId: entry.teacherId, date: input.date } },
-        create: {
-          schoolId: ctx.schoolId,
-          teacherId: entry.teacherId,
-          date: input.date,
-          status: entry.status,
-          remarks: entry.remarks,
-        },
+        create: { schoolId: ctx.schoolId, teacherId: entry.teacherId, date: input.date, status: entry.status, remarks: entry.remarks },
         update: { status: entry.status, remarks: entry.remarks },
       }),
     ),
-  );
+    ...staffEntries.map((entry) =>
+      ctx.db.staffAttendance.upsert({
+        where: { schoolId_staffMemberId_date: { schoolId: ctx.schoolId, staffMemberId: entry.staffMemberId, date: input.date } },
+        create: { schoolId: ctx.schoolId, staffMemberId: entry.staffMemberId, date: input.date, status: entry.status, remarks: entry.remarks, markedByUserId: ctx.user.id },
+        update: { status: entry.status, remarks: entry.remarks, markedByUserId: ctx.user.id },
+      }),
+    ),
+  ]);
 
   await recordAudit({
     action: "STAFF_ATTENDANCE_MARKED",
@@ -312,7 +168,7 @@ export async function markStaffAttendance(
     entityId: ctx.schoolId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Staff attendance for ${formatDate(input.date)}: ${input.entries.length} marked.`,
+    summary: `Staff attendance for ${formatDate(input.date)}: ${teacherEntries.length} teachers and ${staffEntries.length} other staff marked.`,
   });
 
   return { saved: input.entries.length };
@@ -333,6 +189,34 @@ export function attendedShare(counts: AttendanceCounts): number | null {
   return counts.total ? (counts.PRESENT + counts.LATE) / counts.total : null;
 }
 
+/** The section and its current students, for reports (the caller has checked access). */
+async function reportRoster(ctx: TenantContext, sectionId: string) {
+  const section = await ctx.db.section.findFirst({
+    where: { id: sectionId },
+    select: {
+      id: true,
+      name: true,
+      class: { select: { name: true } },
+      stream: { select: { name: true } },
+      academicSession: { select: { id: true, name: true, startDate: true, endDate: true } },
+      enrollments: {
+        where: { status: "ACTIVE", student: { status: "ACTIVE" } },
+        select: { rollNumber: true, student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true } } },
+      },
+    },
+  });
+  if (!section) throw new NotFoundError();
+  return {
+    section: { id: section.id, label: sectionLabel(section), session: section.academicSession },
+    rows: section.enrollments.map((row) => ({
+      studentId: row.student.id,
+      name: `${row.student.firstName} ${row.student.lastName}`,
+      admissionNumber: row.student.admissionNumber,
+      rollNumber: row.rollNumber,
+    })),
+  };
+}
+
 /**
  * Per-student totals for a section across a date range, lowest attendance
  * first — the order a class teacher wants to read it in.
@@ -341,7 +225,7 @@ export async function sectionReport(ctx: TenantContext, sectionId: string, from:
   await requireSectionAccess(ctx, sectionId);
 
   const [register, grouped, days] = await Promise.all([
-    getRegister(ctx, sectionId, to),
+    reportRoster(ctx, sectionId),
     ctx.db.studentAttendance.groupBy({
       by: ["studentId", "status"],
       where: { sectionId, date: { gte: from, lte: to } },
@@ -423,6 +307,8 @@ export async function schoolReport(ctx: TenantContext, academicSessionId: string
 
 /** Today at a glance, for the admin dashboard. */
 export async function todayOverview(ctx: TenantContext, academicSessionId: string) {
+  // Drafts whose period has ended count as taken from now on.
+  await finalizeDueRegisters(ctx);
   const date = today();
   const [sections, marked, byStatus, staff, closure] = await Promise.all([
     ctx.db.section.count({ where: { academicSessionId, enrollments: { some: { status: "ACTIVE" } } } }),

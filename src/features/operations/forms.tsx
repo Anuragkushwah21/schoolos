@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { ActionForm } from "@/components/forms/action-form";
 import { CheckboxField, FieldRow, SelectField, SubmitButton, TextareaField, TextField } from "@/components/forms/fields";
 import { humanize } from "@/lib/format";
@@ -10,6 +12,7 @@ import {
   BORROWER_KINDS,
   STAFF_PERMISSION_LABEL,
   STAFF_PERMISSIONS,
+  STAFF_ROLE_DEFAULTS,
   STAFF_ROLES,
   VEHICLE_STATUSES,
   VEHICLE_TYPES,
@@ -19,9 +22,11 @@ import {
   addStopAction,
   grantStaffPortalAction,
   issueBookAction,
+  renewLoanAction,
   returnBookAction,
   saveAssetAction,
   saveBookAction,
+  saveLibraryRulesAction,
   saveRouteAction,
   saveStaffAction,
   saveVehicleAction,
@@ -51,6 +56,14 @@ export function StaffForm({
     permissions: string[];
   };
 }) {
+  const [granted, setGranted] = useState<string[]>(staff?.permissions ?? []);
+  // A new staff member's boxes follow the designation until someone ticks by
+  // hand; an existing one's are never changed by switching the designation.
+  const [touched, setTouched] = useState(Boolean(staff));
+  function onRole(role: string) {
+    if (touched) return;
+    setGranted([...(STAFF_ROLE_DEFAULTS[role as (typeof STAFF_ROLES)[number]] ?? [])]);
+  }
   return (
     <ActionForm action={saveStaffAction} resetOnSuccess={!staff} className="max-w-3xl">
       {staff ? <input type="hidden" name="staffId" value={staff.id} /> : null}
@@ -66,7 +79,8 @@ export function StaffForm({
           options={opts(STAFF_ROLES)}
           defaultValue={staff?.role}
           placeholder="Choose"
-          hint="A designation grants no access by itself."
+          hint="A designation grants no access by itself — the ticks below do."
+          onChange={(event) => onRole(event.target.value)}
           required
         />
       </FieldRow>
@@ -87,7 +101,7 @@ export function StaffForm({
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-1 text-sm font-medium">Portal access</legend>
         <p className="text-muted-foreground text-xs">
-          With a login, every staff member sees their profile, staff notices and meetings they are invited to. Tick anything else they may open — all read-only.
+          With a login, every staff member sees their profile, leave, staff notices and meetings they are invited to. Tick anything else they may open. The usual ones for the designation are suggested.
         </p>
         {/* Sent even with nothing ticked, so removing the last permission is saved. */}
         <input type="hidden" name="permissions" value="" />
@@ -98,7 +112,13 @@ export function StaffForm({
                 type="checkbox"
                 name="permissions"
                 value={permission}
-                defaultChecked={staff?.permissions.includes(permission)}
+                checked={granted.includes(permission)}
+                onChange={(event) => {
+                  setTouched(true);
+                  setGranted((current) =>
+                    event.target.checked ? [...current, permission] : current.filter((p) => p !== permission),
+                  );
+                }}
                 className="accent-primary mt-0.5 size-4 shrink-0"
               />
               <span>
@@ -229,22 +249,150 @@ export function BookForm({
   );
 }
 
-/** Issue a copy. Dates: issued today or up to 30 days back, due within 60 days — checked on the server too. */
-export function IssueBookForm({ books, today, defaultDue }: { books: Option[]; today: string; defaultDue: string }) {
+type Borrower = { kind: "STUDENT" | "TEACHER" | "STAFF"; id: string; name: string; code: string; detail: string; booksOut: number };
+
+/**
+ * Find who is borrowing by name, admission no. or employee ID. Results come
+ * from `/api/v1/library/borrowers`, which returns only what the desk needs —
+ * never a parent's phone, fees or marks.
+ */
+function BorrowerPicker({ onPick }: { onPick: (borrower: Borrower) => void }) {
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<Borrower[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function search(term: string) {
+    setQ(term);
+    if (term.trim().length < 2) {
+      setHits([]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/v1/library/borrowers?q=${encodeURIComponent(term.trim())}`, { cache: "no-store" });
+      setHits(response.ok ? ((await response.json()) as { data: Borrower[] }).data : []);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-sm font-medium" htmlFor="borrower-search">
+        Find the borrower
+      </label>
+      <input
+        id="borrower-search"
+        type="search"
+        value={q}
+        onChange={(event) => void search(event.target.value)}
+        placeholder="Student name, admission no. or employee ID"
+        className="border-input h-9 rounded-md border bg-transparent px-3 text-sm"
+        autoComplete="off"
+      />
+      {q.trim().length >= 2 ? (
+        <ul className="max-h-56 divide-y overflow-y-auto rounded-md border text-sm">
+          {busy && !hits.length ? <li className="text-muted-foreground px-3 py-2">Searching…</li> : null}
+          {!busy && !hits.length ? <li className="text-muted-foreground px-3 py-2">No current student, teacher or staff member matches.</li> : null}
+          {hits.map((hit) => (
+            <li key={`${hit.kind}-${hit.id}`}>
+              <button
+                type="button"
+                className="hover:bg-muted flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+                onClick={() => {
+                  onPick(hit);
+                  setQ("");
+                  setHits([]);
+                }}
+              >
+                <span className="min-w-0">
+                  <span className="block font-medium">{hit.name}</span>
+                  <span className="text-muted-foreground block text-xs">
+                    {hit.code} · {hit.detail}
+                  </span>
+                </span>
+                <span className="text-muted-foreground shrink-0 text-xs">{hit.booksOut ? `${hit.booksOut} out` : "no books out"}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Issue Book: find the student (name, admission no., class "9-A" or stream),
+ * choose the book, then one of its copies on the shelf. Issued today; due by
+ * the school's loan period unless changed. Everything is checked again on the
+ * server, including that the copy is still free.
+ */
+export function IssueBookForm({ books, today, defaultDue }: { books: Array<Option & { copies: Option[] }>; today: string; defaultDue: string }) {
+  const [kind, setKind] = useState<string>("STUDENT");
+  const [code, setCode] = useState("");
+  const [picked, setPicked] = useState<Borrower | null>(null);
+  const [bookId, setBookId] = useState("");
+  const copies = books.find((book) => book.value === bookId)?.copies ?? [];
   return (
     <ActionForm action={issueBookAction} resetOnSuccess className="gap-3">
-      <SelectField name="bookId" label="Book" options={books} placeholder="Choose a book with a free copy" required />
+      <BorrowerPicker
+        onPick={(borrower) => {
+          setPicked(borrower);
+          setKind(borrower.kind);
+          setCode(borrower.code);
+        }}
+      />
+      {picked ? (
+        <p className="bg-primary-soft text-primary-strong rounded-md px-3 py-2 text-sm">
+          <span className="font-semibold">{picked.name}</span>
+          <span className="block text-xs">
+            {picked.code} · {picked.detail}
+            {picked.booksOut ? ` · already has ${picked.booksOut} book${picked.booksOut === 1 ? "" : "s"}` : ""}
+          </span>
+        </p>
+      ) : null}
+      <input type="hidden" name="studentId" value={picked?.kind === "STUDENT" && picked.code === code ? picked.id : ""} />
+      <details className="text-sm" open={!picked && code !== ""}>
+        <summary className="text-muted-foreground cursor-pointer text-xs">Enter an admission no. or employee ID instead</summary>
+        <FieldRow>
+          <SelectField name="borrowerKind" label="Borrower" options={opts(BORROWER_KINDS)} value={kind} onChange={(event) => setKind(event.target.value)} required />
+          <TextField name="borrowerCode" label="Admission no. / employee ID" value={code} onChange={(event) => setCode(event.target.value)} />
+        </FieldRow>
+      </details>
+      <SelectField
+        name="bookId"
+        label="Book"
+        options={books.map(({ value, label }) => ({ value, label }))}
+        placeholder={books.length ? "Choose a book" : "No copy is on the shelf"}
+        value={bookId}
+        onChange={(event) => setBookId(event.target.value)}
+        required
+      />
+      <SelectField key={bookId} name="copyId" label="Book copy" options={copies} defaultValue={copies[0]?.value} placeholder={bookId ? "Choose an available copy" : "Choose a book first"} required />
+      <input type="hidden" name="issuedOn" value={today} />
       <FieldRow>
-        <SelectField name="borrowerKind" label="Borrower" options={opts(BORROWER_KINDS)} defaultValue="STUDENT" required />
-        <TextField name="borrowerCode" label="Admission no. / employee ID" required />
-      </FieldRow>
-      <FieldRow>
-        <TextField name="issuedOn" label="Issued on" type="date" defaultValue={today} max={today} required />
-        <TextField name="dueOn" label="Due on" type="date" defaultValue={defaultDue} min={today} required />
+        <p className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Issue date</span>
+          <span className="text-muted-foreground">Today ({today.split("-").reverse().join("/")})</span>
+        </p>
+        <TextField name="dueOn" label="Due date" type="date" defaultValue={defaultDue} min={today} required />
       </FieldRow>
       <div>
-        <SubmitButton size="sm">Issue</SubmitButton>
+        <SubmitButton pendingLabel="Issuing…">Issue Book</SubmitButton>
       </div>
+    </ActionForm>
+  );
+}
+
+/** A new due date for a book still out. */
+export function RenewLoanForm({ issueId, currentDue }: { issueId: string; currentDue: string }) {
+  return (
+    <ActionForm action={renewLoanAction} className="flex-row flex-wrap items-center gap-2">
+      <input type="hidden" name="issueId" value={issueId} />
+      <input type="date" name="dueOn" min={currentDue} required aria-label="New due date" className="border-input h-8 rounded-md border px-2 text-sm" />
+      <SubmitButton size="xs" variant="ghost">
+        Renew
+      </SubmitButton>
     </ActionForm>
   );
 }
@@ -313,6 +461,24 @@ export function AssetForm({
       <TextareaField name="notes" label="Notes" rows={2} defaultValue={asset?.notes ?? ""} />
       <div>
         <SubmitButton size="sm">{asset ? "Save asset" : "Add asset"}</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** School Admin: the library's lending rules. */
+export function LibraryRulesForm({ rules }: { rules: { loanDays: number; maxLoans: number; finePerDayMinor: number } }) {
+  return (
+    <ActionForm action={saveLibraryRulesAction} className="gap-3">
+      <FieldRow>
+        <TextField name="loanDays" label="Loan period (days)" type="number" min={1} max={60} defaultValue={String(rules.loanDays)} required />
+        <TextField name="maxLoans" label="Books per borrower" type="number" min={1} max={20} defaultValue={String(rules.maxLoans)} required />
+      </FieldRow>
+      <TextField name="finePerDayRupees" label="Fine per late day (₹)" type="number" min={0} step="1" defaultValue={String(rules.finePerDayMinor / 100)} hint="0 means no fines." required />
+      <div>
+        <SubmitButton variant="outline" size="sm">
+          Save library rules
+        </SubmitButton>
       </div>
     </ActionForm>
   );

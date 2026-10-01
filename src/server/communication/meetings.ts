@@ -5,7 +5,7 @@ import type { MeetingAudience, MeetingType, UserRole } from "@/generated/prisma/
 import { addDays, formatDate, formatMinutes, today } from "@/lib/dates";
 import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName, humanize } from "@/lib/format";
-import { type MeetingTimeStatus, meetingStatus, schoolNow } from "@/lib/time-status";
+import { type MeetingTimeStatus, countdownLabel, lifecycle, meetingStatus, schoolNow } from "@/lib/time-status";
 import { CURRENT_EMPLOYEE, CURRENT_STUDENT } from "@/lib/validation/lifecycle";
 import { MEETING_AUDIENCE_LABEL, type MeetingGroup, type MeetingInput } from "@/lib/validation/meetings";
 import { getCurrentSession, sectionLabel } from "@/server/academics/structure";
@@ -162,6 +162,8 @@ function present(row: MeetingRow, clock: Clock) {
     .sort((a, b) => a.class.level - b.class.level || a.name.localeCompare(b.name))
     .map((section) => sectionLabel(section));
   const timeStatus = meetingStatus(row, clock);
+  // What people see: Upcoming → Today → Completed, or Cancelled.
+  const stage = lifecycle({ ...row, cancelled: row.status === "CANCELLED" }, clock);
   return {
     id: row.id,
     type: row.type,
@@ -183,11 +185,13 @@ function present(row: MeetingRow, clock: Clock) {
     sectionLabels,
     audience: audienceLabel({ ...row, sectionLabels, people: row._count.recipients + row._count.students }),
     timeStatus,
-    /** Only a meeting that has not started may be rescheduled or re-targeted. */
-    canEdit: timeStatus === "UPCOMING",
+    stage,
+    countdown: countdownLabel(row.date, stage, clock),
+    /** A meeting that has not started may be edited; a cancelled one may be edited to reschedule it. */
+    canEdit: timeStatus === "UPCOMING" || timeStatus === "CANCELLED",
     canCancel: timeStatus === "UPCOMING" || timeStatus === "ONGOING",
-    /** Deleting is for clearing away a cancelled meeting; held meetings stay as history. */
-    canDelete: timeStatus === "CANCELLED",
+    /** The School Admin may delete any meeting; the audit log keeps what it was. */
+    canDelete: true,
   };
 }
 
@@ -342,12 +346,16 @@ async function resolveTargets(ctx: TenantContext, input: MeetingInput) {
   };
 }
 
-/** Create or edit a meeting. Only an upcoming meeting may change, and never into the past. */
+/**
+ * Create or edit a meeting. An upcoming meeting may change; a cancelled one
+ * may be edited to reschedule it (it becomes scheduled again). Never into the
+ * past, and never once it has started.
+ */
 export async function saveMeeting(ctx: TenantContext, input: MeetingInput): Promise<string> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const clock = schoolNow();
 
-  let existing: { id: string; title: string } | null = null;
+  let existing: { id: string; title: string; cancelled: boolean } | null = null;
   if (input.meetingId) {
     const row = await ctx.db.meeting.findFirst({
       where: { id: input.meetingId },
@@ -355,12 +363,10 @@ export async function saveMeeting(ctx: TenantContext, input: MeetingInput): Prom
     });
     if (!row) throw new NotFoundError("That meeting was not found.");
     const status = meetingStatus(row, clock);
-    if (status !== "UPCOMING") {
-      throw new ConflictError(
-        status === "CANCELLED" ? "A cancelled meeting cannot be edited." : "This meeting has already started, so it can no longer be changed.",
-      );
+    if (status !== "UPCOMING" && status !== "CANCELLED") {
+      throw new ConflictError("This meeting has already started, so it can no longer be changed. You can still delete it.");
     }
-    existing = row;
+    existing = { ...row, cancelled: status === "CANCELLED" };
   }
 
   // Today is fine; a start time that has already passed is not.
@@ -387,7 +393,8 @@ export async function saveMeeting(ctx: TenantContext, input: MeetingInput): Prom
   const id = await ctx.db.$transaction(async (tx) => {
     let meetingId: string;
     if (existing) {
-      await tx.meeting.updateMany({ where: { id: existing.id }, data });
+      // Saving a cancelled meeting reschedules it.
+      await tx.meeting.updateMany({ where: { id: existing.id }, data: existing.cancelled ? { ...data, status: "SCHEDULED", cancelledAt: null, cancelReason: null } : data });
       await Promise.all([
         tx.meetingSection.deleteMany({ where: { meetingId: existing.id } }),
         tx.meetingRecipient.deleteMany({ where: { meetingId: existing.id } }),
@@ -421,7 +428,7 @@ export async function saveMeeting(ctx: TenantContext, input: MeetingInput): Prom
     entityId: id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Meeting "${input.title}" ${existing ? "updated" : "scheduled"} for ${formatDate(input.date)} at ${formatMinutes(input.startMinute)} (${input.audiences
+    summary: `Meeting "${input.title}" ${existing ? (existing.cancelled ? "rescheduled" : "updated") : "scheduled"} for ${formatDate(input.date)} at ${formatMinutes(input.startMinute)} (${input.audiences
       .map((value) => MEETING_AUDIENCE_LABEL[value])
       .join(" + ")}).`,
   });
@@ -456,20 +463,34 @@ export async function cancelMeeting(ctx: TenantContext, input: { meetingId: stri
   });
 }
 
-/** Remove a cancelled meeting. A held meeting is history and is never deleted. */
+/**
+ * Delete a meeting — upcoming, cancelled or past — at the School Admin's
+ * decision. It disappears from every invitee's list; the audit log keeps what
+ * it was. A student's support record that used it as an extra class is
+ * unlinked, with a note, rather than blocking the delete.
+ */
 export async function deleteMeeting(ctx: TenantContext, meetingId: string): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
-  const row = await ctx.db.meeting.findFirst({ where: { id: meetingId }, select: { id: true, title: true, status: true } });
+  const row = await ctx.db.meeting.findFirst({ where: { id: meetingId }, select: { id: true, title: true, date: true, startMinute: true, endMinute: true, status: true } });
   if (!row) throw new NotFoundError("That meeting was not found.");
-  if (row.status !== "CANCELLED") throw new ConflictError("Cancel the meeting first. Only cancelled meetings can be deleted.");
-  await ctx.db.meeting.deleteMany({ where: { id: row.id, status: "CANCELLED" } });
+  const status = meetingStatus(row);
+  await ctx.db.$transaction(async (tx) => {
+    const linked = await tx.studentSupport.findMany({ where: { extraClassMeetingId: row.id }, select: { id: true } });
+    if (linked.length) {
+      await tx.studentSupport.updateMany({ where: { id: { in: linked.map((support) => support.id) } }, data: { extraClassMeetingId: null } });
+      await tx.supportNote.createMany({
+        data: linked.map((support) => ({ schoolId: ctx.schoolId, supportId: support.id, authorId: ctx.user.id, note: `The extra class "${row.title}" on ${formatDate(row.date)} was deleted by the School Admin.` })),
+      });
+    }
+    await tx.meeting.deleteMany({ where: { id: row.id } });
+  });
   await recordAudit({
     action: "MEETING_DELETED",
     entityType: "Meeting",
     entityId: row.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Cancelled meeting "${row.title}" deleted.`,
+    summary: `Meeting "${row.title}" on ${formatDate(row.date)} at ${formatMinutes(row.startMinute)} (${status.toLowerCase()}) deleted.`,
   });
 }
 
@@ -566,4 +587,16 @@ export async function meetingAlerts(ctx: TenantContext, href: string) {
       href,
       tone: row.timeStatus === "CANCELLED" || row.date.getTime() === clock.date.getTime() ? ("warning" as const) : ("info" as const),
     }));
+}
+
+/** The dashboard's Meetings card: upcoming count, the next one, and how many are done. */
+export async function meetingSummary(ctx: TenantContext) {
+  const visible = await visibleMeetingWhere(ctx);
+  const clock = schoolNow();
+  const [{ upcoming }, completed] = await Promise.all([
+    myMeetings(ctx, { pastLimit: 0 }),
+    ctx.db.meeting.count({ where: { AND: [visible, { status: "SCHEDULED", date: { lt: clock.date } }] } }),
+  ]);
+  const coming = upcoming.filter((row) => row.stage === "UPCOMING" || row.stage === "TODAY");
+  return { upcoming: coming.length, completed, next: coming[0] ?? null };
 }

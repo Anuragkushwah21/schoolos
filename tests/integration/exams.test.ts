@@ -226,7 +226,7 @@ describe("publishing and visibility", () => {
 
   it("refuses to publish while marks are missing, and then publishes none of the batch", async () => {
     const { ids } = await createExams(adminOf(schoolA), examInput({ name: "Unit Exam", sectionIds: [schoolA.sectionId] }));
-    await expect(publishExams(adminOf(schoolA), [examId, ids[0]!])).rejects.toThrow(/marks missing/);
+    await expect(publishExams(adminOf(schoolA), [examId, ids[0]!])).rejects.toThrow(/still missing/);
     expect((await prisma.exam.findUniqueOrThrow({ where: { id: examId } })).status).toBe("DRAFT");
     await deleteExam(adminOf(schoolA), ids[0]!);
   });

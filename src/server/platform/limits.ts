@@ -51,3 +51,15 @@ export async function remainingStudentCapacity(ctx: TenantContext): Promise<{ re
   const count = await ctx.db.student.count({ where: { status: "ACTIVE" } });
   return { remaining: Math.max(subscription.plan.maxStudents - count, 0), plan: subscription.plan.name };
 }
+
+/** How many more active teachers the plan allows, or null for no limit. */
+export async function remainingTeacherCapacity(ctx: TenantContext): Promise<{ remaining: number; plan: string } | null> {
+  const subscription = await prisma.subscription.findFirst({
+    where: { schoolId: ctx.schoolId, status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] } },
+    orderBy: { createdAt: "desc" },
+    select: { plan: { select: { name: true, maxTeachers: true } } },
+  });
+  if (!subscription || subscription.plan.maxTeachers === null) return null;
+  const count = await ctx.db.teacher.count({ where: { status: { in: ["ACTIVE", "ON_LEAVE"] } } });
+  return { remaining: Math.max(subscription.plan.maxTeachers - count, 0), plan: subscription.plan.name };
+}

@@ -27,9 +27,9 @@ export function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?:
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "flex min-h-10 items-center gap-3 rounded-lg px-3 py-2 text-[0.9rem] transition-colors",
+              "flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 text-[0.9rem] transition-colors",
               active
-                ? "bg-sidebar-primary text-sidebar-primary-foreground font-semibold"
+                ? "bg-[linear-gradient(120deg,var(--brand-from),var(--primary))] font-semibold text-white shadow-[0_6px_16px_-8px_var(--primary)]"
                 : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
             )}
           >
@@ -56,7 +56,7 @@ export function AreaTabsBar({ tabs, active }: { tabs: AreaTab[]; active: Route }
             aria-current={current ? "page" : undefined}
             className={cn(
               "-mb-px min-h-10 border-b-2 px-3 py-2 text-sm whitespace-nowrap transition-colors",
-              current ? "border-primary text-primary-strong font-semibold" : "text-muted-foreground hover:text-foreground border-transparent",
+              current ? "border-primary text-primary-strong font-semibold" : "text-muted-foreground hover:text-foreground hover:border-border border-transparent",
             )}
           >
             {t(tab.labelKey)}
@@ -74,7 +74,7 @@ export function BottomNav({ items, onMore }: { items: NavItem[]; onMore: () => v
   return (
     <nav
       aria-label={t("nav.main")}
-      className="bg-surface fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t pb-[env(safe-area-inset-bottom)] md:hidden print:hidden"
+      className="bg-surface/90 fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t backdrop-blur-lg pb-[env(safe-area-inset-bottom)] md:hidden print:hidden"
     >
       {items.map((item) => {
         const active = isNavActive(item, pathname);
@@ -89,7 +89,9 @@ export function BottomNav({ items, onMore }: { items: NavItem[]; onMore: () => v
               active ? "text-primary-strong font-semibold" : "text-muted-foreground",
             )}
           >
-            <Icon className="size-5" aria-hidden />
+            <span className={cn("flex h-7 w-12 items-center justify-center rounded-full transition-colors", active && "bg-primary-soft")}>
+              <Icon className="size-5" aria-hidden />
+            </span>
             <span className="max-w-full truncate">{t(item.labelKey)}</span>
           </Link>
         );

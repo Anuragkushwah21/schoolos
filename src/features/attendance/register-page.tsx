@@ -2,6 +2,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { formatDateTime, formatDayShort, parseDateInput, today, toDateInput } from "@/lib/dates";
 import type { TenantContext } from "@/server/auth/current-user";
+import { ForbiddenError } from "@/lib/errors";
 import { getRegister } from "@/server/attendance/service";
 
 import { StudentRegister } from "./register";
@@ -28,21 +29,37 @@ export async function RegisterScreen({
     return (
       <EmptyState title="No classes to mark">
         {ctx.user.role === "TEACHER"
-          ? "You are not assigned to any section this session. Ask the school office to assign your subjects."
+          ? "Daily attendance is taken by each section's class teacher, and you are not class teacher of a section this session. Ask the school office if you should be."
           : "Create sections for the current session under Academics."}
       </EmptyState>
     );
   }
 
+  // A section not in the list is ignored, not opened: the list is what this
+  // person may take, and `getRegister` refuses anything else anyway.
   const section = sections.find((s) => s.value === sectionParam) ?? sections[0]!;
+  const single = sections.length === 1;
   const date = parseDateInput(dateParam) ?? today();
-  const register = await getRegister(ctx, section.value, date);
+  let register;
+  try {
+    register = await getRegister(ctx, section.value, date);
+  } catch (error) {
+    // A class handed over for one day is theirs on that day only.
+    if (!(error instanceof ForbiddenError)) throw error;
+    return (
+      <EmptyState title="Not your register on this date">
+        You can take this class&apos;s attendance on the day the school office assigned it to you. Choose that date, or
+        your own class.
+      </EmptyState>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
       <FilterBar
         action={basePath}
-        selects={[{ name: "section", label: "Section", defaultValue: section.value, options: sections }]}
+        selects={single ? [] : [{ name: "section", label: "Section", defaultValue: section.value, options: sections }]}
+        hidden={single ? { section: section.value } : {}}
         dates={[{ name: "date", label: "Date", defaultValue: toDateInput(date), max: toDateInput(today()) }]}
       />
 
@@ -51,9 +68,11 @@ export async function RegisterScreen({
           {register.section.label} · {formatDayShort(date)}
         </h2>
         <p className="text-muted-foreground text-sm">
-          {register.lastMarked
-            ? `Last saved ${formatDateTime(register.lastMarked.at)}${register.lastMarked.by ? ` by ${register.lastMarked.by}` : ""}`
-            : "Not marked yet"}
+          {register.phase === "DRAFT"
+            ? "Draft — not submitted yet"
+            : register.submittedAt
+              ? `Submitted ${formatDateTime(register.submittedAt)}${register.autoSubmitted ? " (automatically)" : register.lastMarked?.by ? ` · last saved by ${register.lastMarked.by}` : ""}`
+              : "Not taken yet"}
         </p>
       </div>
 
@@ -74,12 +93,19 @@ export async function RegisterScreen({
           sectionId={register.section.id}
           date={toDateInput(date)}
           editable={register.editable}
+          phase={register.phase}
+          deadline={register.deadline?.toISOString() ?? null}
+          finalizeAt={register.finalizeAt?.toISOString() ?? null}
+          draftSavedAt={register.draftSavedAt?.toISOString() ?? null}
+          submission={register.submission}
+          isAdmin={register.isAdmin}
           rows={register.rows.map((row) => ({
             id: row.studentId,
             name: row.name,
             detail: [row.rollNumber ? `Roll ${row.rollNumber}` : null, row.admissionNumber].filter(Boolean).join(" · "),
             status: row.status,
             remarks: row.remarks,
+            leave: row.leave,
           }))}
         />
       ) : (

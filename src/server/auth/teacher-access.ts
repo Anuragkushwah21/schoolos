@@ -1,3 +1,4 @@
+import { today } from "@/lib/dates";
 import type { TenantContext } from "@/server/auth/current-user";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 
@@ -68,14 +69,16 @@ export async function canAccessSection(
 
   if (!teacher) return false;
 
-  // Either they teach a subject to this section, or they are its class teacher.
+  // Either they teach a subject to this section, or they are its class
+  // teacher — in the current session. Last year's assignment does not carry
+  // over: a teacher who taught 6-A in 2025-26 has no access to it in 2026-27.
   const [assignment, classTeacherOf] = await Promise.all([
     ctx.db.teacherSubjectAssignment.findFirst({
-      where: { teacherId: teacher.id, sectionId },
+      where: { teacherId: teacher.id, sectionId, academicSession: { isCurrent: true } },
       select: { id: true },
     }),
     ctx.db.section.findFirst({
-      where: { id: sectionId, classTeacherId: teacher.id },
+      where: { id: sectionId, classTeacherId: teacher.id, academicSession: { isCurrent: true } },
       select: { id: true },
     }),
   ]);
@@ -166,4 +169,68 @@ export async function accessibleSectionIds(
       ...classTeacherSections.map((s) => s.id),
     ]),
   ];
+}
+
+/**
+ * Who may take a section's daily register.
+ *
+ * The daily register is one mark per student per day for the whole school
+ * day, so it belongs to the section's class teacher — not to everyone who
+ * teaches a subject there, who could otherwise overwrite it. For a teacher
+ * that means: class teacher of this section, in the current session, right
+ * now (`Section.classTeacherId` is the live assignment, so a change by the
+ * School Admin takes effect on the next request). The School Admin may take
+ * any register in their own school.
+ *
+ * Everything is looked up from the session's user through the tenant-scoped
+ * client; nothing in the request decides it.
+ */
+export async function canMarkAttendance(ctx: TenantContext, sectionId: string, date: Date = today()): Promise<boolean> {
+  if (ctx.user.role === "SCHOOL_ADMIN") {
+    return (await ctx.db.section.count({ where: { id: sectionId } })) > 0;
+  }
+  if (ctx.user.role !== "TEACHER") return false;
+  const teacher = await ctx.db.teacher.findFirst({ where: { userId: ctx.user.id }, select: { id: true } });
+  if (!teacher) return false;
+  const [own, cover] = await Promise.all([
+    ctx.db.section.findFirst({
+      where: { id: sectionId, classTeacherId: teacher.id, academicSession: { isCurrent: true } },
+      select: { id: true },
+    }),
+    // Or the office handed them this register for this one day.
+    ctx.db.registerCover.findFirst({
+      where: { sectionId, date, teacherId: teacher.id, section: { academicSession: { isCurrent: true } } },
+      select: { id: true },
+    }),
+  ]);
+  return Boolean(own ?? cover);
+}
+
+export async function requireAttendanceAccess(ctx: TenantContext, sectionId: string, date: Date = today()): Promise<void> {
+  if (!(await canMarkAttendance(ctx, sectionId, date))) {
+    throw new ForbiddenError("Only this section's class teacher, or a teacher the school office assigns for the day, can take its attendance.");
+  }
+}
+
+/**
+ * Sections whose register this user may take on `date`: every one for the
+ * admin; for a teacher, the class they lead plus any the office handed them
+ * for that day.
+ */
+export async function attendanceSectionIds(ctx: TenantContext, academicSessionId: string, date: Date = today()): Promise<string[] | "ALL"> {
+  if (ctx.user.role === "SCHOOL_ADMIN") return "ALL";
+  if (ctx.user.role !== "TEACHER") return [];
+  const teacher = await ctx.db.teacher.findFirst({ where: { userId: ctx.user.id }, select: { id: true } });
+  if (!teacher) return [];
+  const [own, covers] = await Promise.all([
+    ctx.db.section.findMany({
+      where: { classTeacherId: teacher.id, academicSessionId, academicSession: { isCurrent: true } },
+      select: { id: true },
+    }),
+    ctx.db.registerCover.findMany({
+      where: { teacherId: teacher.id, date, section: { academicSessionId, academicSession: { isCurrent: true } } },
+      select: { sectionId: true },
+    }),
+  ]);
+  return [...new Set([...own.map((row) => row.id), ...covers.map((row) => row.sectionId)])];
 }

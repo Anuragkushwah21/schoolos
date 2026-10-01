@@ -6,9 +6,9 @@ import { fullName } from "@/lib/format";
 import type { ReceiptSettingsInput } from "@/lib/validation/school";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
+import { staffPermissions } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { findChild } from "@/server/parent/access";
-import { findStudentSelf } from "@/server/student/access";
 
 /**
  * Printable fee receipts.
@@ -23,8 +23,8 @@ import { findStudentSelf } from "@/server/student/access";
  * Who may open one:
  *   * School Admin — any payment of their school.
  *   * Parent       — payments of a child they are linked to.
- *   * Student      — their own payments, and only when the school has turned
- *                    on `showFeesToStudents`.
+ *   * Fee-desk staff (COLLECT_FEES) — what they collect.
+ * Students never see fees or receipts — fees are for parents only.
  * Everyone else, and anyone asking for a payment outside those, gets the same
  * "not found", so an id reveals nothing about whether it exists.
  */
@@ -52,6 +52,8 @@ export type Receipt = {
     notes: string | null;
     amountMinor: number;
     recordedBy: string | null;
+    /** Set when the receipt was voided; it then paid nothing. */
+    voided: { at: Date; reason: string | null } | null;
   };
   session: { name: string };
   student: {
@@ -82,16 +84,13 @@ async function assertCanSeeStudentReceipts(ctx: TenantContext, studentId: string
   switch (ctx.user.role) {
     case "SCHOOL_ADMIN":
       return;
+    case "NON_TEACHING_STAFF":
+      // The fee desk prints what it collects.
+      if ((await staffPermissions(ctx)).includes("COLLECT_FEES")) return;
+      break;
     case "PARENT": {
       const child = await findChild(ctx, studentId).catch(() => null);
       if (child) return;
-      break;
-    }
-    case "STUDENT": {
-      const school = await ctx.db.school.findFirst({ select: { showFeesToStudents: true } });
-      if (!school?.showFeesToStudents) break;
-      const self = await findStudentSelf(ctx).catch(() => null);
-      if (self?.student.id === studentId) return;
       break;
     }
   }
@@ -99,7 +98,7 @@ async function assertCanSeeStudentReceipts(ctx: TenantContext, studentId: string
 }
 
 export async function getReceipt(ctx: TenantContext, paymentId: string): Promise<Receipt> {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "PARENT", "STUDENT");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PARENT", "NON_TEACHING_STAFF");
 
   const payment = await ctx.db.feePayment.findFirst({
     where: { id: paymentId },
@@ -114,6 +113,8 @@ export async function getReceipt(ctx: TenantContext, paymentId: string): Promise
       receiptNo: true,
       referenceNo: true,
       notes: true,
+      voidedAt: true,
+      voidReason: true,
       recordedBy: { select: { firstName: true, lastName: true } },
       academicSession: { select: { name: true } },
       student: {
@@ -168,6 +169,7 @@ export async function getReceipt(ctx: TenantContext, paymentId: string): Promise
         studentId: payment.studentId,
         academicSessionId: payment.academicSessionId,
         id: { not: payment.id },
+        voidedAt: null,
         OR: [
           { paidOn: { lt: payment.paidOn } },
           { paidOn: payment.paidOn, createdAt: { lt: payment.createdAt } },
@@ -207,6 +209,7 @@ export async function getReceipt(ctx: TenantContext, paymentId: string): Promise
       notes: payment.notes,
       amountMinor: payment.amountMinor,
       recordedBy: payment.recordedBy ? fullName(payment.recordedBy) : null,
+      voided: payment.voidedAt ? { at: payment.voidedAt, reason: payment.voidReason } : null,
     },
     session: { name: payment.academicSession.name },
     student: {
@@ -237,7 +240,7 @@ export async function listStudentReceipts(ctx: TenantContext, studentId: string)
   return ctx.db.feePayment.findMany({
     where: { studentId },
     orderBy: [{ paidOn: "desc" }, { createdAt: "desc" }],
-    select: { id: true, receiptNo: true, paidOn: true, amountMinor: true, method: true },
+    select: { id: true, receiptNo: true, paidOn: true, amountMinor: true, method: true, voidedAt: true },
   });
 }
 
@@ -259,6 +262,6 @@ export async function saveReceiptSettings(ctx: TenantContext, input: ReceiptSett
     entityId: ctx.schoolId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Fee receipt settings updated${input.showFeesToStudents ? "; students can see their fees" : ""}.`,
+    summary: "Fee receipt settings updated.",
   });
 }

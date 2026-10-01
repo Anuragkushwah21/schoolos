@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { PersonAvatar } from "@/components/shared/person-avatar";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,10 @@ import {
 import { formatDate } from "@/lib/dates";
 import { formatPercent, pluralize } from "@/lib/format";
 import { NoSessionNotice } from "@/components/shared/no-session-notice";
+import { humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
+import { photoUrlsFor } from "@/server/people/photos";
+import { canMarkAttendance } from "@/server/auth/teacher-access";
 import { getCurrentSession } from "@/server/academics/structure";
 import { orHidden } from "@/server/page-helpers";
 import { getMyRoster } from "@/server/people/teacher-self";
@@ -45,8 +49,13 @@ export default async function TeacherClassRosterPage(
   // not teach, both come back as 404 rather than as two different refusals.
   const { section, students, from, to } = await orHidden(getMyRoster(ctx, sectionId));
 
+  // Photos the teacher may see (their own section's students); initials otherwise.
+  const photos = await photoUrlsFor(ctx, "STUDENT", students.map((student) => student.studentId));
   const marked = students.filter((student) => student.counts.total > 0);
   const lowest = marked.filter((student) => (student.share ?? 1) < 0.75).length;
+
+  // Only the class teacher takes this section's daily register.
+  const takesRegister = await canMarkAttendance(ctx, section.id);
 
   return (
     <>
@@ -55,9 +64,11 @@ export default async function TeacherClassRosterPage(
         title={section.label}
         description={`${pluralize(students.length, "student")} · attendance since ${formatDate(from)}`}
         actions={
-          <Button asChild>
-            <Link href={`/teacher/attendance?section=${section.id}`}>Mark attendance</Link>
-          </Button>
+          takesRegister ? (
+            <Button asChild>
+              <Link href={`/teacher/attendance?section=${section.id}`}>Mark attendance</Link>
+            </Button>
+          ) : null
         }
       />
 
@@ -75,6 +86,7 @@ export default async function TeacherClassRosterPage(
               <TableRow>
                 <TableHead className="w-16">Roll</TableHead>
                 <TableHead>Student</TableHead>
+                <TableHead className="hidden w-24 sm:table-cell">Gender</TableHead>
                 <TableHead className="w-28">Status</TableHead>
                 <TableHead className="w-28 text-right">Attendance</TableHead>
                 <TableHead className="w-24 text-right">Marked</TableHead>
@@ -87,25 +99,15 @@ export default async function TeacherClassRosterPage(
                   <TableCell className="tabular-nums">{student.rollNumber ?? "—"}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-3">
-                      {student.photoUrl ? (
-                        // A school-supplied URL; no upload pipeline in V1.
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={student.photoUrl}
-                          alt=""
-                          className="size-8 shrink-0 rounded-full object-cover"
-                        />
-                      ) : (
-                        <span
-                          className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-medium"
-                          aria-hidden
-                        >
-                          {student.name.slice(0, 1)}
-                        </span>
-                      )}
-                      <span className="font-medium">{student.name}</span>
+                      <PersonAvatar name={student.name} photoUrl={photos.get(student.studentId)} />
+                      <span className="font-medium">
+                        {student.name}
+                        {/* On a phone the column is hidden, so it rides under the name. */}
+                        {student.gender ? <span className="text-muted-foreground block text-xs font-normal sm:hidden">{humanize(student.gender)}</span> : null}
+                      </span>
                     </div>
                   </TableCell>
+                  <TableCell className="text-muted-foreground hidden sm:table-cell">{student.gender ? humanize(student.gender) : "—"}</TableCell>
                   <TableCell>
                     <StatusBadge status={student.status} />
                   </TableCell>

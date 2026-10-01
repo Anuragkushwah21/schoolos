@@ -36,6 +36,8 @@ import { resetPortalPassword } from "@/server/people/accounts";
 import { listStudents } from "@/server/people/students";
 import { staffStudentDirectory } from "@/server/staff/portal";
 
+import { redeemAccountLink } from "@/server/auth/account-links";
+import { activate, tokenFrom } from "../helpers/mail";
 import { adminOf, contextFor, teacherOf } from "../helpers/context";
 import { type SeededSchool, createIsolationFixture, destroyIsolationFixture } from "../helpers/isolation-fixture";
 
@@ -75,16 +77,16 @@ describe("non-teaching staff", () => {
     for (const [key, school] of [["A", schoolA], ["B", schoolB]] as const) {
       const staffId = await saveStaff(
         adminOf(school),
-        staffSchema.parse({ employeeId: `NT-${key}`, firstName: "Sunita", lastName: key, role: "LIBRARIAN", department: "Library", phone: "+91 90000 11111" }),
+        staffSchema.parse({ employeeId: `NT-${key}`, firstName: "Sunita", lastName: key, role: "OFFICE_STAFF", department: "Library", phone: "+91 90000 11111" }),
       );
       const email = `staff-${key.toLowerCase()}@iso-test-staff.test`;
-      const credentials = await grantStaffPortal(adminOf(school), staffId, email);
+      await grantStaffPortal(adminOf(school), staffId, email);
       const record = await prisma.staffMember.findUniqueOrThrow({ where: { id: staffId }, include: { user: true } });
       expect(record.user?.role).toBe("NON_TEACHING_STAFF");
       expect(record.user?.schoolId).toBe(school.schoolId);
       expect(record.department).toBe("Library");
       expect(record.permissions).toEqual([]);
-      staff[key] = { staffId, userId: record.userId!, email, password: credentials.password };
+      staff[key] = { staffId, userId: record.userId!, email, password: await activate(email) };
     }
   });
 
@@ -112,9 +114,9 @@ describe("non-teaching staff", () => {
 
   it("sees their own profile and nothing of the School Admin's", async () => {
     const self = await requireStaffSelf(staffOf(schoolA));
-    expect(self).toMatchObject({ id: staff.A.staffId, role: "LIBRARIAN" });
+    expect(self).toMatchObject({ id: staff.A.staffId, role: "OFFICE_STAFF" });
 
-    // The designation (Librarian) grants nothing by itself.
+    // A designation grants nothing by itself (Librarian is the one exception: it always runs the library).
     await expect(listBooks(staffOf(schoolA))).rejects.toBeInstanceOf(ForbiddenError);
     await expect(listRoutes(staffOf(schoolA))).rejects.toBeInstanceOf(ForbiddenError);
     await expect(staffStudentDirectory(staffOf(schoolA))).rejects.toBeInstanceOf(ForbiddenError);
@@ -124,14 +126,14 @@ describe("non-teaching staff", () => {
     await expect(getStaff(staffOf(schoolA), staff.A.staffId)).rejects.toBeInstanceOf(ForbiddenError);
     await expect(listMeetingsForAdmin(staffOf(schoolA))).rejects.toBeInstanceOf(ForbiddenError);
     await expect(saveMeeting(staffOf(schoolA), meeting())).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(saveStaff(staffOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "S", lastName: "A", role: "LIBRARIAN", permissions: ["VIEW_STUDENTS"] }))).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(saveStaff(staffOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "S", lastName: "A", role: "OFFICE_STAFF", permissions: ["VIEW_STUDENTS"] }))).rejects.toBeInstanceOf(ForbiddenError);
     await expect(resetPortalPassword(staffOf(schoolA), staff.A.userId)).rejects.toBeInstanceOf(ForbiddenError);
   });
 
   it("opens exactly the modules the admin grants, within their own school", async () => {
     await saveStaff(
       adminOf(schoolA),
-      staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "LIBRARIAN", permissions: ["", "VIEW_STUDENTS"] }),
+      staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF", permissions: ["", "VIEW_STUDENTS"] }),
     );
     expect(await staffPermissions(staffOf(schoolA))).toEqual(["VIEW_STUDENTS"]);
 
@@ -145,19 +147,19 @@ describe("non-teaching staff", () => {
     await expect(staffStudentDirectory(staffOf(schoolB))).rejects.toBeInstanceOf(ForbiddenError);
 
     // Saving without a permissions field (CSV/API style) leaves them alone…
-    await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "LIBRARIAN" }));
+    await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF" }));
     expect(await staffPermissions(staffOf(schoolA))).toEqual(["VIEW_STUDENTS"]);
     // …and the form's empty marker revokes them all.
-    await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "LIBRARIAN", permissions: "" }));
+    await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF", permissions: "" }));
     await expect(assertAdminOrStaffPermission(staffOf(schoolA), "VIEW_STUDENTS")).rejects.toBeInstanceOf(ForbiddenError);
 
-    await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "LIBRARIAN", permissions: ["VIEW_LIBRARY", "VIEW_TRANSPORT"] }));
+    await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF", permissions: ["VIEW_LIBRARY", "VIEW_TRANSPORT"] }));
     await expect(listBooks(staffOf(schoolA))).resolves.toEqual([]);
     await expect(listRoutes(staffOf(schoolA))).resolves.toEqual([]);
   });
 
   it("signs out and locks the login while the staff member is inactive", async () => {
-    const base = { staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "LIBRARIAN" };
+    const base = { staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF" };
     const { token } = await createSession(staff.A.userId);
     await saveStaff(adminOf(schoolA), staffSchema.parse({ ...base, status: "INACTIVE" }));
     expect(await validateSessionToken(token)).toBeNull();
@@ -170,9 +172,12 @@ describe("non-teaching staff", () => {
 
   it("lets the admin reset a staff password, but not another school's", async () => {
     await expect(resetPortalPassword(adminOf(schoolB), staff.A.userId)).rejects.toBeInstanceOf(NotFoundError);
-    const credentials = await resetPortalPassword(adminOf(schoolA), staff.A.userId);
-    expect(await authenticate(staff.A.email, credentials.password)).toMatchObject({ ok: true });
-    staff.A.password = credentials.password;
+    // The admin sends a reset link; the staff member chooses the new password.
+    const invite = await resetPortalPassword(adminOf(schoolA), staff.A.userId);
+    expect(invite.delivered).toBe(true);
+    await redeemAccountLink(tokenFrom(staff.A.email, "reset-password"), "PASSWORD_RESET", "Reset-password-2", "Reset-password-2");
+    expect(await authenticate(staff.A.email, "Reset-password-2")).toMatchObject({ ok: true });
+    staff.A.password = "Reset-password-2";
   });
 
   it("sees whole-school notices for everyone or for staff, never class notices", async () => {
@@ -344,24 +349,34 @@ describe("meeting times and status", () => {
     expect(mine.upcoming.map((row) => row.id)).toContain(upcoming);
     expect(mine.past.find((row) => row.id === past)?.timeStatus).toBe("COMPLETED");
 
-    // A held meeting cannot be edited, cancelled or deleted.
+    // A held meeting cannot be edited or cancelled — but the School Admin may delete it.
     await expect(saveMeeting(admin, meeting({ meetingId: past }))).rejects.toBeInstanceOf(ConflictError);
     await expect(cancelMeeting(admin, { meetingId: past, reason: null })).rejects.toBeInstanceOf(ConflictError);
-    await expect(deleteMeeting(admin, past)).rejects.toBeInstanceOf(ConflictError);
-    expect((await getMeetingForAdmin(admin, past)).canEdit).toBe(false);
+    expect(await getMeetingForAdmin(admin, past)).toMatchObject({ canEdit: false, canDelete: true });
+    await deleteMeeting(admin, past);
+    expect(await prisma.meeting.count({ where: { id: past } })).toBe(0);
+    expect((await myMeetings(parentOf(schoolA))).past.map((row) => row.id)).not.toContain(past);
   });
 
-  it("edits an upcoming meeting, cancels it for good, then allows deleting it", async () => {
+  it("creates, edits, cancels, reschedules and deletes a meeting", async () => {
     const admin = adminOf(schoolA);
+    // An upcoming meeting can be deleted straight away.
+    const direct = await saveMeeting(admin, meeting({ title: "Delete me", audiences: ["PARENTS"] }));
+    await deleteMeeting(admin, direct);
+    expect(await prisma.meeting.count({ where: { id: direct } })).toBe(0);
+
     const id = await saveMeeting(admin, meeting({ title: "To cancel", audiences: ["PARENTS"] }));
     await saveMeeting(admin, meeting({ meetingId: id, title: "Renamed", audiences: ["PARENTS"], location: "Hall" }));
     expect((await getMeetingForAdmin(admin, id)).title).toBe("Renamed");
 
-    // Deleting a scheduled meeting is refused: cancel it first.
-    await expect(deleteMeeting(admin, id)).rejects.toBeInstanceOf(ConflictError);
     await cancelMeeting(admin, { meetingId: id, reason: "Rain" });
     await expect(cancelMeeting(admin, { meetingId: id, reason: null })).rejects.toBeInstanceOf(ConflictError);
-    await expect(saveMeeting(admin, meeting({ meetingId: id }))).rejects.toBeInstanceOf(ConflictError);
+
+    // A cancelled meeting can be rescheduled: saving it makes it active again.
+    const resched = await saveMeeting(admin, meeting({ title: "Resched", audiences: ["PARENTS"] }));
+    await cancelMeeting(admin, { meetingId: resched, reason: "Clash" });
+    await saveMeeting(admin, meeting({ meetingId: resched, title: "Resched", audiences: ["PARENTS"], date: toDateInput(addDays(today(), 5)) }));
+    expect(await getMeetingForAdmin(admin, resched)).toMatchObject({ timeStatus: "UPCOMING", cancelReason: null });
 
     // Invitees still see it, marked cancelled — even once its date has passed.
     const seen = (await myMeetings(parentOf(schoolA))).upcoming.find((row) => row.id === id);

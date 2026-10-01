@@ -18,6 +18,7 @@ import {
   listStreams,
   resolveSession,
 } from "@/server/academics/structure";
+import { seatPlans } from "@/server/academics/streams";
 import { teacherOptions } from "@/server/people/teachers";
 
 export const metadata: Metadata = { title: "Classes & sections" };
@@ -45,6 +46,8 @@ export default async function ClassesPage(props: PageProps<"/school-admin/academ
   ]);
 
   const activeClasses = classes.filter((klass) => klass.isActive);
+  // Each section's stream shares, for the "Science 15 · Commerce 10" line.
+  const plans = await seatPlans(ctx.db, classes.flatMap((klass) => klass.sections.map((section) => section.id)));
 
   return (
     <>
@@ -125,6 +128,15 @@ export default async function ClassesPage(props: PageProps<"/school-admin/academ
                           Section {section.name}
                           {section.stream ? ` · ${section.stream.name}` : ""}
                         </span>
+                        {section.capacity !== null ? (
+                          <span
+                            className={`text-xs font-semibold tabular-nums ${section._count.enrollments >= section.capacity ? "text-danger-strong" : "text-success-strong"}`}
+                          >
+                            {section._count.enrollments >= section.capacity
+                              ? "Full"
+                              : `${section.capacity - section._count.enrollments} seats left`}
+                          </span>
+                        ) : null}
                         <span className="text-muted-foreground text-xs">
                           {section._count.enrollments}
                           {section.capacity ? ` / ${section.capacity}` : ""} students
@@ -132,6 +144,21 @@ export default async function ClassesPage(props: PageProps<"/school-admin/academ
                             ? ` · ${section.classTeacher.firstName} ${section.classTeacher.lastName}`
                             : " · no class teacher"}
                         </span>
+                        {plans.get(section.id)?.allocations.length ? (
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            {plans.get(section.id)!.allocations.map((row) => (
+                              <span
+                                key={row.streamId}
+                                className={`rounded-full px-1.5 py-0.5 text-[11px] tabular-nums ${row.full ? "bg-warning-soft text-warning-strong" : "bg-info-soft text-info-strong"}`}
+                              >
+                                {row.name} {row.occupied}/{row.capacity}
+                              </span>
+                            ))}
+                            {plans.get(section.id)!.unallocated ? (
+                              <span className="bg-muted text-muted-foreground rounded-full px-1.5 py-0.5 text-[11px] tabular-nums">{plans.get(section.id)!.unallocated} unallocated</span>
+                            ) : null}
+                          </span>
+                        ) : null}
                       </Link>
                     </li>
                   ))}

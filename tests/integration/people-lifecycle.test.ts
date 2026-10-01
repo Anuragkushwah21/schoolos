@@ -191,8 +191,8 @@ describe("non-teaching staff who leave", () => {
   it("lose the login, their permissions and their bus route, and stay on record", async () => {
     const ctx = adminOf(schoolA);
     const staffId = await saveStaff(ctx, staffSchema.parse({ employeeId: "LC-1", firstName: "Ramesh", lastName: "Driver", role: "DRIVER", permissions: ["VIEW_TRANSPORT"] }));
-    const { password } = await grantStaffPortal(ctx, staffId, "lc-driver@iso-test-staff.test");
-    expect(password).toBeTruthy();
+    const invite = await grantStaffPortal(ctx, staffId, "lc-driver@iso-test-staff.test");
+    expect(invite.delivered).toBe(true);
     const route = await prisma.transportRoute.create({ data: { schoolId: schoolA.schoolId, name: "Route LC", driverId: staffId } });
     const user = await prisma.staffMember.findUniqueOrThrow({ where: { id: staffId }, select: { userId: true } });
     const staffCtx = contextFor(schoolA, user.userId!, "NON_TEACHING_STAFF");

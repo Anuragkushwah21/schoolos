@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { ActionButton } from "@/components/forms/action-button";
 import { PageHeader } from "@/components/shared/page-header";
-import { TimeStatusBadge } from "@/components/shared/time-status-badge";
+import { LifecycleBadge } from "@/components/shared/lifecycle-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { deleteMeetingAction } from "@/features/communication/meeting-actions";
 import { CancelMeetingForm, MeetingForm } from "@/features/communication/meeting-forms";
@@ -22,7 +22,7 @@ export default async function AdminMeetingPage(props: PageProps<"/school-admin/m
 
   return (
     <>
-      <PageHeader back={{ href: "/school-admin/meetings", label: "Meetings" }} title={meeting.title} actions={<TimeStatusBadge status={meeting.timeStatus} />} />
+      <PageHeader back={{ href: "/school-admin/meetings", label: "Meetings" }} title={meeting.title} actions={<LifecycleBadge status={meeting.stage} countdown={meeting.countdown} />} />
       <div className="grid gap-6 xl:grid-cols-[1fr_1.3fr]">
         <div className="flex flex-col gap-6">
           <Card>
@@ -66,7 +66,7 @@ export default async function AdminMeetingPage(props: PageProps<"/school-admin/m
             <Card>
               <CardHeader>
                 <CardTitle>Delete</CardTitle>
-                <CardDescription>Removes this cancelled meeting from every list. Meetings that took place are kept as history and cannot be deleted.</CardDescription>
+                <CardDescription>Removes this meeting from everyone&apos;s list. To keep it visible as called off, cancel it instead.</CardDescription>
               </CardHeader>
               <CardContent>
                 <ActionButton
@@ -82,10 +82,14 @@ export default async function AdminMeetingPage(props: PageProps<"/school-admin/m
           ) : null}
         </div>
         {options ? (
-          <Card>
+          <Card id="edit" className="scroll-mt-24">
             <CardHeader>
               <CardTitle>Edit</CardTitle>
-              <CardDescription>Changes show in invitees&apos; portals straight away. Once the meeting starts it can no longer be edited.</CardDescription>
+              <CardDescription>
+                {meeting.timeStatus === "CANCELLED"
+                  ? "Choose a new date and time and save to reschedule this cancelled meeting — it becomes active again for everyone invited."
+                  : "Changes show in invitees' portals straight away. Once the meeting starts it can no longer be edited."}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <MeetingForm

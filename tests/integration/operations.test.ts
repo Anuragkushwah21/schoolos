@@ -14,6 +14,7 @@ import { handleComplaint, bulkComplaintStatus, getComplaint, listComplaints, rai
 import { prisma } from "@/server/db/prisma";
 import { getPayroll, payPayroll } from "@/server/finance/payroll";
 import { setSalary } from "@/server/finance/salary";
+import { createRoom } from "@/server/academics/rooms";
 import { createSlot } from "@/server/timetable/service";
 
 import { adminOf, contextFor, teacherOf } from "../helpers/context";
@@ -144,6 +145,8 @@ describe("timetable rooms", () => {
     const otherTeacher = await prisma.teacher.create({
       data: { schoolId: schoolA.schoolId, userId: other.id, employeeId: "ROOM1", firstName: "Room", lastName: "Teacher" },
     });
+    const room = (name: string) => createRoom(adminOf(schoolA), { name, type: "LAB", capacity: null, building: null, floor: null, description: null });
+    const [lab1, lab2] = [await room("Lab 1"), await room("Lab 2")];
     await createSlot(adminOf(schoolA), {
       sectionId: schoolA.sectionId,
       subjectId: schoolA.subjectId,
@@ -151,7 +154,7 @@ describe("timetable rooms", () => {
       dayOfWeek: "TUESDAY",
       startMinute: 600,
       endMinute: 645,
-      room: "Lab 1",
+      roomId: lab1,
     });
     await expect(
       createSlot(adminOf(schoolA), {
@@ -161,9 +164,9 @@ describe("timetable rooms", () => {
         dayOfWeek: "TUESDAY",
         startMinute: 620,
         endMinute: 665,
-        room: " lab 1 ",
+        roomId: lab1,
       }),
-    ).rejects.toThrow(/Room Lab 1|Room lab 1/);
+    ).rejects.toThrow(/Room Lab 1 is already occupied/);
     // A different room at the same time is fine.
     await createSlot(adminOf(schoolA), {
       sectionId: schoolA.unassignedSectionId,
@@ -172,7 +175,7 @@ describe("timetable rooms", () => {
       dayOfWeek: "TUESDAY",
       startMinute: 620,
       endMinute: 665,
-      room: "Lab 2",
+      roomId: lab2,
     });
   });
 });

@@ -6,6 +6,7 @@ import { fullName } from "@/lib/format";
 import { requireCurrentSession, sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { isUniqueViolation } from "@/server/db/errors";
 
@@ -346,7 +347,7 @@ export async function recordPayment(
   ctx: TenantContext,
   input: PaymentInput,
 ): Promise<{ id: string }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "COLLECT_FEES");
   const session = await requireCurrentSession(ctx);
 
   if (input.amountMinor <= 0) {
@@ -397,7 +398,12 @@ export async function recordPayment(
   }
 }
 
-export async function removePayment(ctx: TenantContext, paymentId: string): Promise<void> {
+/**
+ * Void a payment entered by mistake. It is never deleted: the receipt keeps
+ * its number, prints as VOID, and stops counting towards what was paid — so
+ * the receipt book has no gaps and the correction is on record.
+ */
+export async function voidPayment(ctx: TenantContext, paymentId: string, reason: string): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
   const payment = await ctx.db.feePayment.findFirst({
@@ -407,12 +413,17 @@ export async function removePayment(ctx: TenantContext, paymentId: string): Prom
       amountMinor: true,
       receiptNo: true,
       studentId: true,
+      voidedAt: true,
       student: { select: { firstName: true, lastName: true } },
     },
   });
   if (!payment) throw new NotFoundError("That payment was not found.");
+  if (payment.voidedAt) throw new ConflictError(`Receipt ${payment.receiptNo} is already void.`);
 
-  await ctx.db.feePayment.deleteMany({ where: { id: payment.id } });
+  await ctx.db.feePayment.updateMany({
+    where: { id: payment.id, voidedAt: null },
+    data: { voidedAt: new Date(), voidedById: ctx.user.id, voidReason: reason },
+  });
 
   await recordAudit({
     action: "FEE_PAYMENT_REMOVED",
@@ -420,13 +431,13 @@ export async function removePayment(ctx: TenantContext, paymentId: string): Prom
     entityId: payment.studentId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Receipt ${payment.receiptNo} for ${formatMinor(payment.amountMinor)} from ${fullName(payment.student)} removed.`,
+    summary: `Receipt ${payment.receiptNo} for ${formatMinor(payment.amountMinor)} from ${fullName(payment.student)} voided: ${reason}`,
   });
 }
 
 /** The next receipt number for this school, so the office does not invent one. */
 export async function suggestReceiptNo(ctx: TenantContext): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "COLLECT_FEES");
   const rows = await ctx.db.feePayment.findMany({
     where: { receiptNo: { startsWith: "REC-" } },
     select: { receiptNo: true },
@@ -454,7 +465,7 @@ export async function getStudentFees(
   studentId: string,
   academicSessionId?: string,
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "COLLECT_FEES");
   return readStudentFees(ctx, studentId, academicSessionId);
 }
 
@@ -517,11 +528,14 @@ export async function readStudentFees(
         receiptNo: true,
         referenceNo: true,
         notes: true,
+        voidedAt: true,
+        voidReason: true,
       },
     }),
   ]);
 
-  return { session, charges, payments, summary: summarise(charges, payments) };
+  // A void receipt stays on the list, marked, but paid nothing.
+  return { session, charges, payments, summary: summarise(charges, payments.filter((p) => !p.voidedAt)) };
 }
 
 export const FEE_STATUSES = ["PAID", "PARTIAL", "PENDING", "NONE"] as const;
@@ -545,7 +559,7 @@ export async function listFeePositions(
     page?: number;
   } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "COLLECT_FEES");
   const session = filters.academicSessionId
     ? await ctx.db.academicSession.findFirst({
         where: { id: filters.academicSessionId },
@@ -619,7 +633,7 @@ export async function listFeePositions(
       : Promise.resolve([]),
     studentIds.length
       ? ctx.db.feePayment.findMany({
-          where: { academicSessionId: session.id, studentId: { in: studentIds } },
+          where: { academicSessionId: session.id, studentId: { in: studentIds }, voidedAt: null },
           select: { studentId: true, amountMinor: true },
         })
       : Promise.resolve([]),
@@ -695,6 +709,7 @@ export async function listPayments(
       paidOn: true,
       method: true,
       receiptNo: true,
+      voidedAt: true,
       student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true } },
       recordedBy: { select: { email: true } },
     },

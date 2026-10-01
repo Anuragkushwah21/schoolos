@@ -2,6 +2,7 @@ import { ExternalLinkIcon } from "lucide-react";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { RichText } from "@/components/shared/rich-text";
+import { DateTile, LifecycleBadge } from "@/components/shared/lifecycle-badge";
 import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate, formatDateTime } from "@/lib/dates";
@@ -51,18 +52,22 @@ export function MeetingDetails({ meeting, showCreator = false }: { meeting: Meet
 }
 
 function MeetingCard({ meeting }: { meeting: MeetingView }) {
-  const muted = meeting.timeStatus === "COMPLETED" || meeting.timeStatus === "CANCELLED";
+  const muted = meeting.stage === "COMPLETED" || meeting.stage === "CANCELLED";
   return (
     <Card className={muted ? "opacity-80" : undefined}>
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2">
-          <span className={meeting.timeStatus === "CANCELLED" ? "line-through" : undefined}>{meeting.title}</span>
-          <TimeStatusBadge status={meeting.timeStatus} label={meeting.timeStatus === "ONGOING" ? "Happening now" : undefined} />
-        </CardTitle>
-        <CardDescription>
-          {formatDate(meeting.date)} · {meeting.time}
-          {meeting.location ? ` · ${meeting.location}` : ""}
-        </CardDescription>
+      <CardHeader className="flex flex-row items-start gap-4">
+        <DateTile date={meeting.date} tone={muted ? "neutral" : "cyan"} />
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            <span className={meeting.stage === "CANCELLED" ? "line-through" : undefined}>{meeting.title}</span>
+            <LifecycleBadge status={meeting.stage} countdown={meeting.countdown} />
+            {meeting.timeStatus === "ONGOING" ? <TimeStatusBadge status="ONGOING" label="Happening now" /> : null}
+          </CardTitle>
+          <CardDescription>
+            {formatDate(meeting.date)} · {meeting.time}
+            {meeting.location ? ` · ${meeting.location}` : ""}
+          </CardDescription>
+        </div>
       </CardHeader>
       <CardContent>
         <MeetingDetails meeting={meeting} />
@@ -88,7 +93,7 @@ export function MyMeetings({ upcoming, past, emptyHint }: { upcoming: MeetingVie
       </section>
       {past.length ? (
         <section className="flex flex-col gap-4">
-          <h2 className="text-lg font-semibold">Past meetings</h2>
+          <h2 className="text-lg font-semibold">Completed</h2>
           {past.map((meeting) => (
             <MeetingCard key={meeting.id} meeting={meeting} />
           ))}

@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { MyPhotoCard } from "@/features/photos/my-photo-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +36,7 @@ export default async function ParentProfilePage() {
           </Button>
         }
       />
+      <MyPhotoCard ctx={ctx} name={`${parent.firstName} ${parent.lastName}`} className="mb-6 max-w-2xl" />
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Card>

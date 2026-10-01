@@ -3,7 +3,7 @@ import "server-only";
 import type { DayOfWeek } from "@/generated/prisma/enums";
 import { DAY_LABEL, formatMinutes } from "@/lib/dates";
 import { ConflictError, NotFoundError } from "@/lib/errors";
-import type { SlotInput } from "@/lib/validation/timetable";
+import type { SlotInput, SlotUpdateInput } from "@/lib/validation/timetable";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -16,6 +16,10 @@ import { isUniqueViolation } from "@/server/db/errors";
  * The schema forbids two periods starting at the same minute for one section
  * or one teacher. That catches exact collisions only, so partial overlaps
  * (9:00–9:55 against 9:30–10:25) are checked here before anything is written.
+ *
+ * Rooms come from School Setup → Rooms. A room is checked by id, and its row
+ * is locked while a period is written, so two admins cannot book one room
+ * for the same time in the same moment.
  */
 
 const SLOT_SELECT = {
@@ -24,6 +28,7 @@ const SLOT_SELECT = {
   startMinute: true,
   endMinute: true,
   room: true,
+  roomId: true,
   subject: { select: { id: true, name: true, code: true } },
   teacher: { select: { id: true, firstName: true, lastName: true } },
   section: {
@@ -47,28 +52,13 @@ export async function getTeacherTimetable(ctx: TenantContext, teacherId: string,
   });
 }
 
-/** Everything timetabled in one room — rooms are free text, matched ignoring case and spaces. */
-export async function getRoomTimetable(ctx: TenantContext, room: string, academicSessionId: string) {
+/** Everything timetabled in one room this session. */
+export async function getRoomTimetable(ctx: TenantContext, roomId: string, academicSessionId: string) {
   return ctx.db.timetableSlot.findMany({
-    where: { academicSessionId, room: { equals: room.trim(), mode: "insensitive" } },
+    where: { academicSessionId, roomId },
     orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
     select: SLOT_SELECT,
   });
-}
-
-/** The rooms in use this session, for the room filter. */
-export async function listRooms(ctx: TenantContext, academicSessionId: string): Promise<string[]> {
-  const rows = await ctx.db.timetableSlot.findMany({
-    where: { academicSessionId, room: { not: null } },
-    distinct: ["room"],
-    select: { room: true },
-  });
-  const seen = new Map<string, string>();
-  for (const row of rows) {
-    const key = row.room!.trim().toLowerCase();
-    if (key && !seen.has(key)) seen.set(key, row.room!.trim());
-  }
-  return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 export type TimetableSlotView = Awaited<ReturnType<typeof getSectionTimetable>>[number];
@@ -80,52 +70,122 @@ function overlapMessage(
   return `${who} already has a period on ${DAY_LABEL[clash.dayOfWeek]} from ${formatMinutes(clash.startMinute)} to ${formatMinutes(clash.endMinute)}.`;
 }
 
-export async function createSlot(ctx: TenantContext, input: SlotInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
-  const session = await requireCurrentSession(ctx);
+/** A period as the service takes it; `roomId` may be left out for no room. */
+type PeriodInput = Omit<SlotInput, "roomId" | "sectionId"> & { roomId?: string | null };
 
-  const [section, subject, teacher] = await Promise.all([
-    ctx.db.section.findFirst({
-      where: { id: input.sectionId, academicSessionId: session.id },
-      select: { id: true, name: true, class: { select: { name: true } }, stream: { select: { name: true } } },
-    }),
+type SectionRef = { id: string; name: string; class: { name: string }; stream: { name: string } | null };
+
+const SECTION_LABEL_SELECT = { id: true, name: true, class: { select: { name: true } }, stream: { select: { name: true } } } as const;
+
+/**
+ * Everything a period needs before it is written: the subject, teacher and
+ * room exist (and are in use), and neither the section nor the teacher has
+ * another period overlapping it. `exceptSlotId` is the period being edited.
+ * The room clash is checked later, under the room's lock.
+ */
+async function checkPeriod(
+  ctx: TenantContext,
+  sessionId: string,
+  section: SectionRef,
+  input: PeriodInput,
+  existing?: { id: string; roomId: string | null },
+) {
+  const roomId = input.roomId ?? null;
+  const [subject, teacher, room] = await Promise.all([
     ctx.db.subject.findFirst({ where: { id: input.subjectId, isActive: true }, select: { id: true, name: true } }),
     ctx.db.teacher.findFirst({
       where: { id: input.teacherId, status: { in: ["ACTIVE", "ON_LEAVE"] } },
       select: { id: true, firstName: true, lastName: true },
     }),
+    roomId ? ctx.db.room.findFirst({ where: { id: roomId }, select: { id: true, name: true, isActive: true } }) : Promise.resolve(null),
   ]);
-  if (!section || !subject || !teacher) throw new NotFoundError();
+  if (!subject || !teacher) throw new NotFoundError();
+  if (roomId && !room) throw new NotFoundError("That room was not found. It may have been deleted — choose another.");
+  // A deactivated room keeps the periods already in it, but takes no new ones.
+  if (room && !room.isActive && existing?.roomId !== room.id) {
+    throw new ConflictError(`Room ${room.name} is inactive. Choose another room, or activate it under School Setup → Rooms.`);
+  }
 
   const overlapping = {
-    academicSessionId: session.id,
+    academicSessionId: sessionId,
     dayOfWeek: input.dayOfWeek,
     startMinute: { lt: input.endMinute },
     endMinute: { gt: input.startMinute },
+    ...(existing ? { id: { not: existing.id } } : {}),
   };
-
-  const room = input.room?.trim() || null;
-  const [sectionClash, teacherClash, roomClash] = await Promise.all([
+  const [sectionClash, teacherClash] = await Promise.all([
     ctx.db.timetableSlot.findFirst({ where: { ...overlapping, sectionId: section.id } }),
     ctx.db.timetableSlot.findFirst({ where: { ...overlapping, teacherId: teacher.id } }),
-    // Two classes cannot share a room at the same time.
-    room
-      ? ctx.db.timetableSlot.findFirst({
-          where: { ...overlapping, room: { equals: room, mode: "insensitive" } },
-          select: { dayOfWeek: true, startMinute: true, endMinute: true, section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } } },
-        })
-      : Promise.resolve(null),
   ]);
   if (sectionClash) throw new ConflictError(overlapMessage(sectionLabel(section), sectionClash));
   if (teacherClash) {
     throw new ConflictError(overlapMessage(`${teacher.firstName} ${teacher.lastName}`, teacherClash));
   }
-  if (roomClash) {
-    throw new ConflictError(`${overlapMessage(`Room ${room}`, roomClash)} (${sectionLabel(roomClash.section)})`);
+  return { subject, teacher, room, overlapping };
+}
+
+type Tx = Parameters<Parameters<TenantContext["db"]["$transaction"]>[0]>[0];
+
+/**
+ * Lock the room and make sure nothing else is in it at that time. Runs inside
+ * the transaction that writes the period, so the check and the write cannot
+ * be split by another admin's save.
+ */
+async function claimRoom(
+  tx: Tx,
+  schoolId: string,
+  room: { id: string; name: string },
+  overlapping: Record<string, unknown>,
+) {
+  await tx.room.updateMany({ where: { schoolId, id: room.id }, data: { updatedAt: new Date() } });
+  const clash = await tx.timetableSlot.findFirst({
+    where: { schoolId, ...overlapping, roomId: room.id },
+    select: {
+      dayOfWeek: true,
+      startMinute: true,
+      endMinute: true,
+      subject: { select: { name: true } },
+      section: { select: SECTION_LABEL_SELECT },
+    },
+  });
+  if (clash) {
+    throw new ConflictError(
+      `Room ${room.name} is already occupied on ${DAY_LABEL[clash.dayOfWeek]} from ${formatMinutes(clash.startMinute)} to ${formatMinutes(clash.endMinute)} (${sectionLabel(clash.section)}, ${clash.subject.name}). Choose another room or time.`,
+    );
   }
+}
+
+/**
+ * Teaching a period implies teaching the subject to that section, which is
+ * also what lets the teacher mark its attendance. An assignment the admin
+ * already made — for the whole section or one stream — is kept as it is;
+ * only a teacher with none gets a whole-section one.
+ */
+async function ensureAssignment(tx: Tx, schoolId: string, sessionId: string, sectionId: string, teacherId: string, subjectId: string) {
+  const assigned = await tx.teacherSubjectAssignment.count({
+    where: { schoolId, academicSessionId: sessionId, teacherId, subjectId, sectionId },
+  });
+  if (!assigned) {
+    await tx.teacherSubjectAssignment.create({
+      data: { schoolId, academicSessionId: sessionId, teacherId, subjectId, sectionId },
+    });
+  }
+}
+
+export async function createSlot(ctx: TenantContext, input: PeriodInput & { sectionId: string }): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const session = await requireCurrentSession(ctx);
+
+  const section = await ctx.db.section.findFirst({
+    where: { id: input.sectionId, academicSessionId: session.id },
+    select: SECTION_LABEL_SELECT,
+  });
+  if (!section) throw new NotFoundError();
+  const { subject, teacher, room, overlapping } = await checkPeriod(ctx, session.id, section, input);
 
   try {
     await ctx.db.$transaction(async (tx) => {
+      if (room) await claimRoom(tx, ctx.schoolId, room, overlapping);
       await tx.timetableSlot.create({
         data: {
           schoolId: ctx.schoolId,
@@ -136,31 +196,11 @@ export async function createSlot(ctx: TenantContext, input: SlotInput): Promise<
           dayOfWeek: input.dayOfWeek,
           startMinute: input.startMinute,
           endMinute: input.endMinute,
-          room,
+          roomId: room?.id ?? null,
+          room: room?.name ?? null,
         },
       });
-
-      // Teaching a period implies teaching the subject to that section, which
-      // is also what lets the teacher mark its attendance.
-      await tx.teacherSubjectAssignment.upsert({
-        where: {
-          schoolId_academicSessionId_teacherId_subjectId_sectionId: {
-            schoolId: ctx.schoolId,
-            academicSessionId: session.id,
-            teacherId: teacher.id,
-            subjectId: subject.id,
-            sectionId: section.id,
-          },
-        },
-        create: {
-          schoolId: ctx.schoolId,
-          academicSessionId: session.id,
-          teacherId: teacher.id,
-          subjectId: subject.id,
-          sectionId: section.id,
-        },
-        update: {},
-      });
+      await ensureAssignment(tx, ctx.schoolId, session.id, section.id, teacher.id, subject.id);
     });
   } catch (error) {
     // Two admins saving the same slot at once: the unique index wins.
@@ -174,7 +214,90 @@ export async function createSlot(ctx: TenantContext, input: SlotInput): Promise<
     entityId: section.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${subject.name} with ${teacher.firstName} ${teacher.lastName} added to ${sectionLabel(section)} on ${DAY_LABEL[input.dayOfWeek]} at ${formatMinutes(input.startMinute)}.`,
+    summary: `${subject.name} with ${teacher.firstName} ${teacher.lastName} added to ${sectionLabel(section)} on ${DAY_LABEL[input.dayOfWeek]} at ${formatMinutes(input.startMinute)}${room ? ` in ${room.name}` : ""}.`,
+  });
+}
+
+/** One period of this session's timetable, for the edit form. */
+export async function getSlot(ctx: TenantContext, slotId: string) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const session = await requireCurrentSession(ctx);
+  const slot = await ctx.db.timetableSlot.findFirst({
+    where: { id: slotId, academicSessionId: session.id },
+    select: { ...SLOT_SELECT, sectionId: true, subjectId: true, teacherId: true, _count: { select: { classSessions: true } } },
+  });
+  if (!slot) throw new NotFoundError("That period was not found in this session's timetable.");
+  const { _count, ...rest } = slot;
+  return { ...rest, hasRecords: _count.classSessions > 0 };
+}
+
+/**
+ * Edit a period of this session's timetable. Once lessons have been recorded
+ * against it, only its room can change — its day, time, subject and teacher
+ * are what those records describe.
+ */
+export async function updateSlot(ctx: TenantContext, input: Omit<SlotUpdateInput, "roomId"> & { roomId?: string | null }): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const session = await requireCurrentSession(ctx);
+  const slot = await ctx.db.timetableSlot.findFirst({
+    where: { id: input.slotId, academicSessionId: session.id },
+    select: {
+      id: true,
+      dayOfWeek: true,
+      startMinute: true,
+      endMinute: true,
+      subjectId: true,
+      teacherId: true,
+      roomId: true,
+      section: { select: SECTION_LABEL_SELECT },
+      _count: { select: { classSessions: true } },
+    },
+  });
+  if (!slot) throw new NotFoundError("That period was not found in this session's timetable.");
+
+  const lessonChanged =
+    slot.dayOfWeek !== input.dayOfWeek ||
+    slot.startMinute !== input.startMinute ||
+    slot.endMinute !== input.endMinute ||
+    slot.subjectId !== input.subjectId ||
+    slot.teacherId !== input.teacherId;
+  if (lessonChanged && slot._count.classSessions) {
+    throw new ConflictError(
+      "Lessons have already been recorded for this period, so only its room can change. To change the day, time, subject or teacher, add a new period.",
+    );
+  }
+
+  const { subject, teacher, room, overlapping } = await checkPeriod(ctx, session.id, slot.section, input, slot);
+
+  try {
+    await ctx.db.$transaction(async (tx) => {
+      if (room) await claimRoom(tx, ctx.schoolId, room, overlapping);
+      await tx.timetableSlot.updateMany({
+        where: { schoolId: ctx.schoolId, id: slot.id },
+        data: {
+          subjectId: subject.id,
+          teacherId: teacher.id,
+          dayOfWeek: input.dayOfWeek,
+          startMinute: input.startMinute,
+          endMinute: input.endMinute,
+          roomId: room?.id ?? null,
+          room: room?.name ?? null,
+        },
+      });
+      await ensureAssignment(tx, ctx.schoolId, session.id, slot.section.id, teacher.id, subject.id);
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new ConflictError("That time is already taken.");
+    throw error;
+  }
+
+  await recordAudit({
+    action: "TIMETABLE_UPDATED",
+    entityType: "Section",
+    entityId: slot.section.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Period changed: ${subject.name} with ${teacher.firstName} ${teacher.lastName}, ${sectionLabel(slot.section)}, ${DAY_LABEL[input.dayOfWeek]} at ${formatMinutes(input.startMinute)}${room ? ` in ${room.name}` : ", no room"}.`,
   });
 }
 

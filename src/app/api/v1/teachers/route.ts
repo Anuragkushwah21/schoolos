@@ -10,11 +10,11 @@ export const GET = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }
 });
 
 /**
- * Add a teacher. The staff record and their login are created together, and
- * the one-time password is returned here only.
+ * Add a teacher. The staff record and their login are created together; the
+ * teacher activates the login from the email they receive.
  */
 export const POST = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }) => {
   const input = await readJson(request, createTeacherSchema);
-  const { teacherId, credentials } = await createTeacher(ctx, input);
-  return apiSuccess({ teacherId, credentials }, { status: 201 });
+  const { teacherId, invite } = await createTeacher(ctx, input);
+  return apiSuccess({ teacherId, activationEmail: invite }, { status: 201 });
 });

@@ -5,7 +5,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { NoticeList } from "@/features/communication/feed";
+import { SchoolLifeCards } from "@/features/dashboard/school-life";
 import { ChildCard, ChildSwitcher } from "@/features/parent/child-nav";
 import { AlertList, FocusList, TodaysUpdate } from "@/features/parent/today";
 import { param } from "@/lib/search-params";
@@ -13,7 +13,6 @@ import { greetingKey } from "@/lib/greeting";
 import { requireTenant } from "@/server/auth/current-user";
 import { getT } from "@/server/i18n";
 import { attendedShare, emptyCounts } from "@/server/attendance/service";
-import { noticesFor } from "@/server/communication/notices";
 import { listMyChildren } from "@/server/parent/access";
 import { getParentAlerts } from "@/server/parent/alerts";
 import { familySupport } from "@/server/support/service";
@@ -38,17 +37,16 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
   const t = await getT();
   const search = await props.searchParams;
 
-  const [{ parent, children }, alerts, notices, family] = await Promise.all([
+  const [{ parent, children }, alerts, family] = await Promise.all([
     listMyChildren(ctx),
     getParentAlerts(ctx),
-    noticesFor(ctx, { take: 4 }),
     familySupport(ctx),
   ]);
 
   if (children.length === 0) {
     return (
       <>
-        <PageHeader title={`${t(greetingKey(), { name: parent.firstName })} 👋`} />
+        <PageHeader variant="hero" title={`${t(greetingKey(), { name: parent.firstName })} 👋`} />
         <EmptyState title={t("dashboard.parent.noChildren")}>
           The school office links a guardian to their children. Ask them to add yours, and
           everything about their day appears here.
@@ -75,7 +73,7 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
 
   return (
     <>
-      <PageHeader
+      <PageHeader variant="hero"
         title={`${t(greetingKey(), { name: parent.firstName })} 👋`}
         description={
           children.length === 1
@@ -103,6 +101,8 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
           <AlertList alerts={alerts} />
         </CardContent>
       </Card>
+
+      <SchoolLifeCards ctx={ctx} base="/parent" />
 
       <section className="mb-6">
         <h2 className="mb-3 font-semibold">
@@ -145,7 +145,7 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
                 <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
                   <CardTitle>{t("support.childSupport")}</CardTitle>
                   <Button asChild size="sm">
-                    <Link href="/parent/support">+ {t("support.raiseConcern")}</Link>
+                    <Link href="/parent/concerns">+ {t("support.raiseConcern")}</Link>
                   </Button>
                 </CardHeader>
                 <CardContent>
@@ -172,17 +172,6 @@ export default async function ParentDashboardPage(props: PageProps<"/parent/dash
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between gap-2">
-                  <CardTitle>{t("dashboard.notices")}</CardTitle>
-                  <Button asChild variant="ghost" size="sm">
-                    <Link href="/parent/notices">All</Link>
-                  </Button>
-                </CardHeader>
-                <CardContent>
-                  <NoticeList notices={notices} compact />
-                </CardContent>
-              </Card>
 
               <Card>
                 <CardHeader>

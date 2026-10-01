@@ -1,6 +1,6 @@
 import { InboxIcon, type LucideIcon } from "lucide-react";
 
-import { type AccentTone, TONE_ICON } from "@/components/shared/tones";
+import { type AccentTone, TONE_GLOW, TONE_SOLID } from "@/components/shared/tones";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,8 +22,9 @@ export function EmptyState({
   tone?: AccentTone;
 }) {
   return (
-    <div className="bg-card/60 flex flex-col items-center gap-3 rounded-2xl border border-dashed px-6 py-12 text-center">
-      <span className={cn("flex size-12 items-center justify-center rounded-2xl", TONE_ICON[tone])}>
+    <div className="bg-card/70 relative isolate flex flex-col items-center gap-3 overflow-hidden rounded-2xl border border-dashed px-6 py-12 text-center">
+      <span className={cn("absolute top-0 left-1/2 -z-10 size-40 -translate-x-1/2 -translate-y-1/2 rounded-full blur-3xl", TONE_GLOW[tone])} aria-hidden />
+      <span className={cn("flex size-12 items-center justify-center rounded-2xl", TONE_SOLID[tone])}>
         <Icon className="size-6" aria-hidden />
       </span>
       <p className="text-base font-semibold">{title}</p>

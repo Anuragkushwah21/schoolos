@@ -20,9 +20,9 @@ export default async function ImportStudentsPage() {
         <CardHeader>
           <CardTitle>From a spreadsheet</CardTitle>
           <CardDescription>
-            Students are placed in the current session. Every row is checked first; if any row has a problem, nothing is
-            imported and each problem is listed by row. A guardian whose phone number the school already has is linked,
-            not added twice.
+            Students are placed in the current session. &quot;Check file&quot; reads every row and saves nothing; the
+            preview shows valid rows, warnings and errors, and you then import the valid rows in one go. A guardian whose
+            phone number the school already has is linked, not added twice.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">

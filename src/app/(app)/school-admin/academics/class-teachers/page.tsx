@@ -11,7 +11,7 @@ import { ClassTeacherControl } from "@/features/school/academics-forms";
 import { fullName } from "@/lib/format";
 import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
-import { getCurrentSession, listSections } from "@/server/academics/structure";
+import { resolveSession, listSections } from "@/server/academics/structure";
 
 export const metadata: Metadata = { title: "Class teachers" };
 
@@ -24,10 +24,12 @@ export const metadata: Metadata = { title: "Class teachers" };
  */
 export default async function ClassTeachersPage(props: PageProps<"/school-admin/academics/class-teachers">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
-  const session = await getCurrentSession(ctx);
+  const search = await props.searchParams;
+  // The current session by default; `?session=` reviews another one — next
+  // year's, straight after promotion.
+  const session = await resolveSession(ctx, param(search.session));
   if (!session) return <SetupNotice title="Class teachers" need="session" />;
 
-  const search = await props.searchParams;
   const classId = param(search.class);
   const onlyUnassigned = param(search.show) === "unassigned";
 
@@ -65,7 +67,7 @@ export default async function ClassTeachersPage(props: PageProps<"/school-admin/
         <StatCard
           label="No class teacher"
           value={sections.length - assigned}
-          href="/school-admin/academics/class-teachers?show=unassigned"
+          href={`/school-admin/academics/class-teachers?show=unassigned${session.isCurrent ? "" : `&session=${session.id}`}` as Route}
         />
       </div>
 
@@ -73,6 +75,7 @@ export default async function ClassTeachersPage(props: PageProps<"/school-admin/
         <>
           <FilterBar
             action="/school-admin/academics/class-teachers"
+            hidden={{ session: session.isCurrent ? undefined : session.id }}
             selects={[
               {
                 name: "class",

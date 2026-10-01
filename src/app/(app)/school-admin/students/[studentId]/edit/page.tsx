@@ -40,6 +40,12 @@ export default async function EditStudentPage(props: PageProps<"/school-admin/st
           emergencyContactPhone: student.emergencyContactPhone,
           status: student.status,
         }}
+        email={
+          // Nursery–5 have no email: they are reached through their parent.
+          (student.enrollments.find((row) => row.academicSession.isCurrent)?.section.class.level ?? 0) >= 6 || student.user
+            ? { value: student.user?.email ?? student.email ?? null, hasLogin: Boolean(student.user) }
+            : null
+        }
       />
     </>
   );

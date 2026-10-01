@@ -218,11 +218,17 @@ const DOWNLOADS: Array<{ kind: string; label: string; hint: string; ranged?: boo
   { kind: "students", label: "Student list", hint: "Class, section, roll, gender and guardian, this session" },
   { kind: "teachers", label: "Teacher list", hint: "Contact, status and subject assignments" },
   { kind: "class-strength", label: "Class strength", hint: "Boys and girls per class" },
-  { kind: "staff-attendance", label: "Teacher attendance", hint: "For the dates chosen above", ranged: true },
+  { kind: "staff-attendance", label: "Staff attendance", hint: "Teachers and all other staff, for the dates above", ranged: true },
   { kind: "exam-performance", label: "Exam performance", hint: "Average and pass rate per exam" },
   { kind: "teacher-workload", label: "Teacher workload", hint: "Periods, cover, missed classes and leave for the dates above", ranged: true },
   { kind: "fees", label: "Fee positions", hint: "Every student's total, paid and pending" },
   { kind: "fees-pending", label: "Pending fees", hint: "Only students who still owe" },
+  { kind: "fee-payments", label: "Fee receipts", hint: "Every receipt in the dates above, void ones marked", ranged: true },
+  { kind: "expenses", label: "Expenses", hint: "What was spent in the dates above, by category", ranged: true },
+  { kind: "salary-payments", label: "Salary payments", hint: "Salaries paid in the dates above", ranged: true },
+  { kind: "substitutes", label: "Substitute & missed classes", hint: "Who took whose class, and what was missed", ranged: true },
+  { kind: "homework", label: "Homework set", hint: "By class, subject and teacher for the dates above", ranged: true },
+  { kind: "support", label: "Student support", hint: "Support records this session (staff only)" },
 ];
 
 function Downloads({ range }: { range: { from: string; to: string } }) {
@@ -317,14 +323,14 @@ async function StaffAttendance({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Teacher attendance</CardTitle>
+        <CardTitle>Staff attendance</CardTitle>
       </CardHeader>
       <CardContent>
         {rows.length ? (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Teacher</TableHead>
+                <TableHead>Name</TableHead>
                 <TableHead className="text-right">Present</TableHead>
                 <TableHead className="text-right">Late</TableHead>
                 <TableHead className="text-right">Absent</TableHead>
@@ -337,7 +343,9 @@ async function StaffAttendance({
                 <TableRow key={row.id}>
                   <TableCell>
                     <span className="font-medium">{row.name}</span>
-                    <span className="text-muted-foreground block text-xs">{row.employeeId}</span>
+                    <span className="text-muted-foreground block text-xs">
+                      {row.job} · {row.employeeId}
+                    </span>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{row.counts.PRESENT}</TableCell>
                   <TableCell className="text-right tabular-nums">{row.counts.LATE}</TableCell>
@@ -351,7 +359,7 @@ async function StaffAttendance({
             </TableBody>
           </Table>
         ) : (
-          <EmptyState title="No teachers yet" />
+          <EmptyState title="No staff yet" />
         )}
       </CardContent>
     </Card>

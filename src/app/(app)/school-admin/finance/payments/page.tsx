@@ -1,10 +1,9 @@
 import { WalletIcon } from "lucide-react";
-import type { Metadata, Route } from "next";
+import type { Metadata } from "next";
 import Link from "next/link";
 
 import { ActionButton } from "@/components/forms/action-button";
 import { EmptyState } from "@/components/shared/empty-state";
-import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { SetupNotice } from "@/components/shared/setup-notice";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -19,10 +18,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { removeChargeAction, removePaymentAction } from "@/features/finance/actions";
-import { PaymentForm } from "@/features/finance/forms";
+import { FeeDesk } from "@/features/finance/fee-desk";
 import { ReceiptLinks } from "@/features/finance/receipt-links";
 import { FEE_STATUS_LABEL, FEE_STATUS_TONE, rupees } from "@/features/finance/money";
-import { formatDate, toDateInput, today } from "@/lib/dates";
+import { formatDate } from "@/lib/dates";
 import { humanize } from "@/lib/format";
 import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
@@ -89,100 +88,18 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
         }
       />
 
-      {justRecorded ? (
-        <div
-          role="status"
-          className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-success/30 bg-success-soft px-4 py-3 text-sm text-success-strong"
-        >
-          <p>
-            {rupees(justRecorded.amountMinor)} recorded · receipt <span className="font-mono">{justRecorded.receiptNo}</span>
-          </p>
-          <span className="flex gap-2">
-            <Button asChild size="sm" variant="outline">
-              <Link href={`/receipts/${justRecorded.id}` as Route} target="_blank">
-                View receipt
-              </Link>
-            </Button>
-            <Button asChild size="sm">
-              <Link href={`/receipts/${justRecorded.id}?print=1` as Route} target="_blank">
-                Print receipt
-              </Link>
-            </Button>
-          </span>
-        </div>
-      ) : null}
-
       <div className="grid gap-6 xl:grid-cols-[1fr_1.3fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Record a payment</CardTitle>
-            <CardDescription>Find the student first, then enter what was received.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-5">
-            <FilterBar
-              action="/school-admin/finance/payments"
-              search={{ defaultValue: q, placeholder: "Student, admission no, parent or mobile" }}
-            />
-
-            {selected && account ? (
-              <>
-                <div className="rounded-lg border p-3">
-                  <p className="text-sm font-medium">{selected.name}</p>
-                  <p className="text-muted-foreground text-xs">
-                    {selected.section} · {selected.admissionNumber}
-                    {selected.parentName ? ` · ${selected.parentName}` : ""}
-                  </p>
-                  <dl className="mt-3 grid grid-cols-3 gap-2 text-sm">
-                    <div>
-                      <dt className="text-muted-foreground text-xs">Charged</dt>
-                      <dd className="tabular-nums">{rupees(account.summary.chargedMinor)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted-foreground text-xs">Paid</dt>
-                      <dd className="tabular-nums">{rupees(account.summary.paidMinor)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted-foreground text-xs">Pending</dt>
-                      <dd className="tabular-nums">{rupees(account.summary.pendingMinor)}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <PaymentForm
-                  studentId={selected.studentId}
-                  today={toDateInput(today())}
-                  suggestedReceiptNo={receiptNo}
-                />
-              </>
-            ) : positions.rows.length && q ? (
-              <div className="flex flex-col gap-2">
-                <p className="text-muted-foreground text-sm">Choose the student:</p>
-                <ul className="divide-y rounded-lg border">
-                  {positions.rows.slice(0, 8).map((row) => (
-                    <li key={row.studentId} className="flex items-center gap-3 px-3 py-2.5">
-                      <span className="min-w-0 flex-1 text-sm">
-                        <span className="block font-medium">{row.name}</span>
-                        <span className="text-muted-foreground block text-xs">
-                          {row.section} · pending {rupees(row.summary.pendingMinor)}
-                        </span>
-                      </span>
-                      <Button asChild size="sm" variant="outline">
-                        <Link
-                          href={`/school-admin/finance/payments?student=${row.studentId}` as Route}
-                        >
-                          Select
-                        </Link>
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">
-                Search for a student above to record a payment against their account.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        <div className="flex flex-col gap-6">
+          <FeeDesk
+            basePath="/school-admin/finance/payments"
+            q={q}
+            positions={positions.rows}
+            selected={selected}
+            account={account}
+            receiptNo={receiptNo}
+            justRecorded={justRecorded}
+          />
+        </div>
 
         <Card>
           <CardHeader>
@@ -215,30 +132,35 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
                             {payment.student.admissionNumber}
                           </p>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{payment.receiptNo}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {payment.receiptNo}
+                          {payment.voidedAt ? <StatusBadge status="VOID" tone="negative" label="Void" className="ml-1" /> : null}
+                        </TableCell>
                         <TableCell className="text-muted-foreground hidden md:table-cell">
                           {humanize(payment.method)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">
+                        <TableCell className={`text-right tabular-nums ${payment.voidedAt ? "text-muted-foreground line-through" : ""}`}>
                           {rupees(payment.amountMinor)}
                         </TableCell>
                         <TableCell className="text-right whitespace-nowrap">
                           <ReceiptLinks paymentId={payment.id} receiptNo={payment.receiptNo} />
+                          {payment.voidedAt ? null : (
                           <ActionButton
                             action={removePaymentAction}
                             fields={{ paymentId: payment.id }}
                             variant="ghost"
                             size="xs"
-                            pendingLabel="Removing…"
+                            pendingLabel="Voiding…"
                             confirm={{
-                              title: `Remove receipt ${payment.receiptNo}?`,
+                              title: `Void receipt ${payment.receiptNo}?`,
                               description:
-                                "The family's pending amount goes back up by this much. Use it for a receipt entered by mistake.",
-                              confirmLabel: "Remove",
+                                "For a receipt entered by mistake. It stays on record marked VOID, and the family's pending amount goes back up by this much.",
+                              confirmLabel: "Void receipt",
                             }}
                           >
-                            Remove
+                            Void
                           </ActionButton>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

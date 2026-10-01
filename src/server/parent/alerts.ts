@@ -7,6 +7,8 @@ import type { TenantContext } from "@/server/auth/current-user";
 import { upcomingHolidays } from "@/server/calendar/holidays";
 import { meetingAlerts } from "@/server/communication/meetings";
 import { visibleNoticeWhere } from "@/server/communication/notices";
+import { familyLeaveAlerts } from "@/server/attendance/student-leave";
+import { parentConcernAlerts } from "@/server/support/concerns";
 import { parentSupportAlerts } from "@/server/support/service";
 import { VISIBLE_PAPER } from "@/server/exams/service";
 import { readStudentFees } from "@/server/finance/fees";
@@ -41,6 +43,8 @@ export const ALERT_KINDS = [
   "results-published",
   "meeting",
   "support",
+  "concern",
+  "student-leave",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -361,8 +365,12 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
   }
 
   const TONE_ORDER = { critical: 0, warning: 1, info: 2 } as const;
-  // --- support: concerns reviewed and help arranged ----------------------------
-  alerts.push(...(await parentSupportAlerts(ctx, placed)));
+  // --- support arranged, and teachers' concerns and replies -------------------
+  alerts.push(
+    ...(await parentSupportAlerts(ctx, placed)),
+    ...(await parentConcernAlerts(ctx, placed)),
+    ...(await familyLeaveAlerts(ctx, placed.map((child) => child.id), "/parent/leave")),
+  );
 
   return alerts.sort(
     (a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || b.at.getTime() - a.at.getTime(),

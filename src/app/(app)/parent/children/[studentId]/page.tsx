@@ -2,12 +2,15 @@ import type { Metadata } from "next";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChildSwitcher, ChildTabs } from "@/features/parent/child-nav";
 import { FocusList, TodaysUpdate } from "@/features/parent/today";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
 import { childTransport } from "@/server/operations/transport";
+import { formatDate } from "@/lib/dates";
+import { childLoans } from "@/server/operations/library";
 import { findChild, listMyChildren } from "@/server/parent/access";
 import { getChildFocus, getChildToday } from "@/server/parent/child";
 
@@ -41,12 +44,14 @@ export default async function ParentChildPage(props: PageProps<"/parent/children
     );
   }
 
-  const [{ children }, today, focus, transport] = await Promise.all([
+  const [{ children }, today, focus, transport, loans] = await Promise.all([
     listMyChildren(ctx),
     orNotFound(getChildToday(ctx, studentId)),
     orNotFound(getChildFocus(ctx, studentId)),
     // After `findChild` above: only a linked child's transport is read.
     childTransport(ctx, child.student.id),
+    // Also after `findChild`: only this linked child's books.
+    childLoans(ctx, child.student.id),
   ]);
 
   const placed = children.filter((sibling) => sibling.sectionId !== null);
@@ -77,6 +82,40 @@ export default async function ParentChildPage(props: PageProps<"/parent/children
           </CardContent>
         </Card>
       </div>
+
+      {loans.length ? (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Library</CardTitle>
+            <CardDescription>
+              {loans.filter((loan) => !loan.returnedOn).length
+                ? `${loans.filter((loan) => !loan.returnedOn).length} book(s) out now`
+                : "No books out right now"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y text-sm">
+              {loans.slice(0, 8).map((loan) => (
+                <li key={loan.id} className="flex flex-wrap items-center gap-2 py-2">
+                  <span className="min-w-0 flex-1">
+                    <span className="font-medium">{loan.book.title}</span>
+                    {loan.copyCode ? <span className="bg-muted ml-2 rounded px-1.5 py-0.5 font-mono text-xs">{loan.copyCode}</span> : null}
+                    <span className="text-muted-foreground block text-xs">
+                      Issued {formatDate(loan.issuedOn)} · {loan.returnedOn ? `returned ${formatDate(loan.returnedOn)}` : `due ${formatDate(loan.dueOn)}`}
+                    </span>
+                  </span>
+                  <StatusBadge
+                    status={loan.status}
+                    tone={loan.status === "OVERDUE" ? "negative" : loan.status === "RETURNED" ? "neutral" : "info"}
+                    label={loan.status === "OVERDUE" ? "Overdue" : loan.status === "RETURNED" ? "Returned" : "Issued"}
+                  />
+                  {loan.fineMinor && !loan.finePaid ? <StatusBadge status="FINE" tone="warning" label="Fine due" /> : null}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {transport ? (
         <Card className="mt-6">

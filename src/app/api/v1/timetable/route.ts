@@ -8,7 +8,7 @@ import { createSlot, getRoomTimetable, getSectionTimetable, getTeacherTimetable 
 
 /**
  * The weekly timetable for one section (`?section=`), one teacher
- * (`?teacher=`) or one room (`?room=`, School Admin). A teacher asking for a
+ * (`?teacher=`) or one room (`?room=<roomId>`, School Admin). A teacher asking for a
  * section must be entitled to it.
  */
 export const GET = apiRoute(
@@ -33,6 +33,8 @@ export const GET = apiRoute(
 
     if (query.room) {
       if (ctx.user.role !== "SCHOOL_ADMIN") throw new AppError("FORBIDDEN", "Room timetables are for the school office.");
+      // Another school's room id is not found, not an empty week.
+      if (!(await ctx.db.room.count({ where: { id: query.room } }))) throw new AppError("NOT_FOUND", "That room was not found.");
       return apiSuccess(await getRoomTimetable(ctx, query.room, session.id), { meta: { session } });
     }
 
@@ -47,7 +49,7 @@ export const GET = apiRoute(
   },
 );
 
-/** Add a period. Clashes for the section or the teacher are refused. */
+/** Add a period. Clashes for the section, the teacher or the room (`roomId`) are refused. */
 export const POST = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }) => {
   const input = await readJson(request, slotSchema);
   await createSlot(ctx, input);

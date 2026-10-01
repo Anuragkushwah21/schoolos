@@ -33,6 +33,41 @@ export function today(now: Date = new Date()): Date {
 }
 
 /** `YYYY-MM-DD`, the value an `<input type="date">` expects. */
+/**
+ * The instant that is `minute` minutes into `date` (a UTC-midnight date) on
+ * the school's clock — "10:15 on 28 Sep" in the school's time zone, as a real
+ * moment, whatever time zone the server runs in.
+ */
+export function schoolInstant(date: Date, minute: number): Date {
+  const guess = new Date(date.getTime() + minute * 60_000);
+  // The school's UTC offset at that moment (India has no daylight saving,
+  // but this stays right for any zone).
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: SCHOOL_TIME_ZONE,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(guess);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  const asIfUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  const offset = asIfUtc - guess.getTime();
+  return new Date(guess.getTime() - offset);
+}
+
+/** The last second of `date` on the school's clock (23:59:59). */
+export function endOfSchoolDay(date: Date): Date {
+  return new Date(schoolInstant(date, 24 * 60).getTime() - 1000);
+}
+
+/** "11:00 am" on the school's clock. */
+export function formatSchoolTime(instant: Date): string {
+  return new Intl.DateTimeFormat("en-IN", { timeZone: SCHOOL_TIME_ZONE, hour: "numeric", minute: "2-digit" }).format(instant);
+}
+
 export function toDateInput(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

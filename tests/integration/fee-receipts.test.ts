@@ -276,18 +276,15 @@ describe("who may open a receipt", () => {
     await expect(getReceipt(parentOf(schoolB), ids.aSecond)).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it("shows a student their own receipts only when the school allows it", async () => {
-    await expect(getReceipt(studentOf(schoolA), ids.aSecond)).rejects.toBeInstanceOf(NotFoundError);
+  it("never shows a student a receipt — fees are for parents only, whatever the old setting says", async () => {
+    await expect(getReceipt(studentOf(schoolA), ids.aSecond)).rejects.toBeInstanceOf(ForbiddenError);
 
     await saveReceiptSettings(
       adminOf(schoolA),
       receiptSettingsSchema.parse({ receiptHeaderNote: "Affiliated to CBSE · No. 1030001", showFeesToStudents: "on" }),
     );
-    expect((await getReceipt(studentOf(schoolA), ids.aSecond)).student.admissionNumber).toBe("ADM1");
-    // Never a classmate's.
-    await expect(getReceipt(studentOf(schoolA), ids.aSibling)).rejects.toBeInstanceOf(NotFoundError);
-    // School B has not opted in.
-    await expect(getReceipt(studentOf(schoolB), ids.b)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(getReceipt(studentOf(schoolA), ids.aSecond)).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(getReceipt(studentOf(schoolB), ids.b)).rejects.toBeInstanceOf(ForbiddenError);
   });
 
   it("keeps teachers out", async () => {

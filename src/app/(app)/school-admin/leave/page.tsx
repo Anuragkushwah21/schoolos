@@ -12,9 +12,9 @@ import { Button } from "@/components/ui/button";
 import { decideLeaveAction } from "@/features/staff/actions";
 import { formatSpan } from "@/lib/calendar";
 import { humanize, pluralize } from "@/lib/format";
-import { enumParam } from "@/lib/search-params";
+import { enumParam, param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
-import { listLeaveRequests } from "@/server/staff/leave";
+import { applicantOf, listLeaveRequests, parseEmployeeFilter } from "@/server/staff/leave";
 
 export const metadata: Metadata = { title: "Leave" };
 
@@ -24,14 +24,19 @@ export default async function AdminLeavePage(props: PageProps<"/school-admin/lea
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
   const status = enumParam(search.status, [...STATUSES, "ALL"] as const) ?? "PENDING";
-  const requests = await listLeaveRequests(ctx, { status: status === "ALL" ? undefined : status });
+  const employee = param(search.employee);
+  const [requests, teachers, staff] = await Promise.all([
+    listLeaveRequests(ctx, { status: status === "ALL" ? undefined : status, ...parseEmployeeFilter(employee) }),
+    ctx.db.teacher.findMany({ orderBy: [{ firstName: "asc" }, { lastName: "asc" }], select: { id: true, firstName: true, lastName: true } }),
+    ctx.db.staffMember.findMany({ orderBy: [{ firstName: "asc" }, { lastName: "asc" }], select: { id: true, firstName: true, lastName: true } }),
+  ]);
   const pending = requests.filter((request) => request.status === "PENDING");
 
   return (
     <>
       <PageHeader icon={CalendarClockIcon} tone="purple"
         title="Leave"
-        description="Approved leave fills the staff register and shows the classes that need cover."
+        description="Leave from teachers and staff. Approved teacher leave fills the register and shows the classes that need cover."
         actions={
           <Button asChild variant="outline">
             <Link href="/school-admin/substitutes">Arrange cover</Link>
@@ -47,6 +52,16 @@ export default async function AdminLeavePage(props: PageProps<"/school-admin/lea
             defaultValue: status,
             options: [...STATUSES.map((value) => ({ value, label: humanize(value) })), { value: "ALL", label: "All" }],
           },
+          {
+            name: "employee",
+            label: "Employee",
+            defaultValue: employee,
+            allLabel: "Everyone",
+            options: [
+              ...teachers.map((t) => ({ value: `t:${t.id}`, label: `${t.firstName} ${t.lastName} (teacher)` })),
+              ...staff.map((m) => ({ value: `s:${m.id}`, label: `${m.firstName} ${m.lastName} (staff)` })),
+            ],
+          },
         ]}
       />
       {requests.length ? (
@@ -58,14 +73,16 @@ export default async function AdminLeavePage(props: PageProps<"/school-admin/lea
                   <th className="w-10 px-3 py-2">
                     <span className="sr-only">Select</span>
                   </th>
-                  <th className="px-3 py-2 font-medium">Teacher</th>
+                  <th className="px-3 py-2 font-medium">Employee</th>
                   <th className="px-3 py-2 font-medium">Leave</th>
                   <th className="px-3 py-2 font-medium">Reason</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {requests.map((request) => (
+                {requests.map((request) => {
+                  const person = applicantOf(request);
+                  return (
                   <tr key={request.id} className="border-t align-top">
                     <td className="px-3 py-2">
                       {request.status === "PENDING" ? (
@@ -74,9 +91,11 @@ export default async function AdminLeavePage(props: PageProps<"/school-admin/lea
                     </td>
                     <td className="px-3 py-2">
                       <Link href={`/school-admin/leave/${request.id}` as Route} className="font-medium hover:underline">
-                        {request.teacher.firstName} {request.teacher.lastName}
+                        {person.firstName} {person.lastName}
                       </Link>
-                      <span className="text-muted-foreground block text-xs">{request.teacher.employeeId}</span>
+                      <span className="text-muted-foreground block text-xs">
+                        {person.employeeId} · {person.kind === "TEACHER" ? "Teacher" : "Staff"}
+                      </span>
                     </td>
                     <td className="px-3 py-2">
                       {humanize(request.type)} · {formatSpan(request.startDate, request.endDate)}
@@ -87,13 +106,14 @@ export default async function AdminLeavePage(props: PageProps<"/school-admin/lea
                       <TimeStatusBadge status={request.timeStatus} />
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
           {pending.length ? (
             <div className="flex flex-wrap items-end gap-3">
-              <TextField name="note" label="Note to the teacher" hint="Required when rejecting." className="min-w-64 flex-1" />
+              <TextField name="note" label="Note to the employee" hint="Required when rejecting." className="min-w-64 flex-1" />
               <select name="decision" aria-label="Decision" className="border-input h-9 rounded-md border px-2 text-sm" defaultValue="APPROVED">
                 <option value="APPROVED">Approve selected</option>
                 <option value="REJECTED">Reject selected</option>

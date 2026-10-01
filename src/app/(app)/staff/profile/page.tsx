@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
+
+import { effectiveStaffPermissions } from "@/lib/validation/operations";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/shared/page-header";
+import { MyPhotoCard } from "@/features/photos/my-photo-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/dates";
@@ -36,6 +39,7 @@ export default async function StaffProfilePage() {
   return (
     <>
       <PageHeader title={fullName(staff)} description="Your record at the school. Ask the office if anything here is wrong." />
+      <MyPhotoCard ctx={ctx} name={fullName(staff)} className="mb-6 max-w-2xl" />
       <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
         <Card>
           <CardHeader>
@@ -59,9 +63,9 @@ export default async function StaffProfilePage() {
           </CardHeader>
           <CardContent className="text-sm">
             <ul className="flex list-disc flex-col gap-1 pl-5">
-              <li>Your profile, school notices and meetings you are invited to</li>
-              {staff.permissions.map((permission) => (
-                <li key={permission}>{STAFF_PERMISSION_LABEL[permission].label} (read-only)</li>
+              <li>Your profile, leave, school notices and meetings you are invited to</li>
+              {effectiveStaffPermissions(staff).map((permission) => (
+                <li key={permission}>{STAFF_PERMISSION_LABEL[permission].label}</li>
               ))}
             </ul>
             <p className="text-muted-foreground mt-4">

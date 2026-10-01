@@ -25,7 +25,7 @@ export default async function StaffAttendancePage(props: PageProps<"/school-admi
       <PageHeader icon={ClipboardCheckIcon} tone="green"
         back={{ href: "/school-admin/attendance", label: "Attendance" }}
         title="Staff attendance"
-        description={formatDayShort(date)}
+        description={`${formatDayShort(date)} · teachers and all other staff`}
       />
       <FilterBar
         action="/school-admin/attendance/staff"
@@ -49,9 +49,9 @@ export default async function StaffAttendancePage(props: PageProps<"/school-admi
           date={toDateInput(date)}
           editable={!holiday}
           rows={rows.map((row) => ({
-            id: row.teacherId,
+            id: row.key,
             name: row.name,
-            detail: `${row.employeeId}${row.onApprovedLeave ? " · approved leave" : row.onLeave ? " · on leave" : ""}`,
+            detail: `${row.job} · ${row.employeeId}${row.onApprovedLeave ? " · approved leave" : row.onLeave ? " · on leave" : ""}`,
             // Approved leave pre-fills the register; it is saved with the rest.
             status: row.status ?? (row.onApprovedLeave ? "ON_LEAVE" : null),
             remarks: row.remarks ?? (row.onApprovedLeave && !row.status ? "Approved leave" : null),

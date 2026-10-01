@@ -20,7 +20,7 @@ export const GET = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }
 /** Admit a student: the person, their placement and optionally a guardian. */
 export const POST = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }) => {
   const input = await readJson(request, createStudentSchema);
-  const studentId = await createStudent(ctx, input);
-  const { student } = await getStudentProfile(ctx, studentId);
-  return apiSuccess(student, { status: 201 });
+  const result = await createStudent(ctx, input);
+  const { student } = await getStudentProfile(ctx, result.studentId);
+  return apiSuccess(student, { status: 201, meta: { activationEmails: result.invites, notes: result.notes } });
 });

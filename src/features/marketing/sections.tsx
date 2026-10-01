@@ -20,6 +20,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 
+import { type AccentTone, TONE_GLOW, TONE_SOLID } from "@/components/shared/tones";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/format";
@@ -41,8 +42,8 @@ function SectionHeading({
 }) {
   return (
     <div className={cn("mx-auto flex max-w-2xl flex-col gap-3 text-center", className)}>
-      <p className="text-primary text-sm font-semibold tracking-wide uppercase">{eyebrow}</p>
-      <h2 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">{title}</h2>
+      <p className="bg-primary-soft text-primary-strong mx-auto w-fit rounded-full px-3 py-1 text-xs font-semibold tracking-wide uppercase">{eyebrow}</p>
+      <h2 className="text-3xl font-extrabold tracking-tight text-balance sm:text-4xl">{title}</h2>
       {description ? (
         <p className="text-muted-foreground text-lg text-pretty">{description}</p>
       ) : null}
@@ -59,15 +60,19 @@ export function Hero({ offer }: { offer: LiveOffer | undefined }) {
     <section className="relative overflow-hidden">
       <div
         aria-hidden
-        className="absolute inset-0 -z-10 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:44px_44px] [mask-image:radial-gradient(ellipse_70%_60%_at_50%_0%,black,transparent)] opacity-60"
+        className="absolute inset-0 -z-10 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:44px_44px] [mask-image:radial-gradient(ellipse_70%_60%_at_50%_0%,black,transparent)] opacity-50"
       />
+      {/* Colour mesh behind the headline and the product preview. */}
+      <div aria-hidden className="absolute -top-40 -left-32 -z-10 size-[34rem] rounded-full bg-[var(--brand-from)] opacity-20 blur-[110px]" />
+      <div aria-hidden className="absolute top-10 -right-24 -z-10 size-[30rem] rounded-full bg-[var(--brand-to)] opacity-20 blur-[110px]" />
+      <div aria-hidden className="absolute bottom-0 left-1/3 -z-10 size-[24rem] rounded-full bg-[var(--purple)] opacity-10 blur-[100px]" />
 
       <div className="mx-auto grid w-full max-w-6xl items-center gap-14 px-4 pt-16 pb-24 sm:px-6 md:pt-24 lg:grid-cols-[1.05fr_1fr]">
         <div className="flex flex-col items-start gap-6">
           {offer ? (
             <Link
               href={(offer.ctaHref ?? "/register") as Route}
-              className="bg-primary/10 text-primary hover:bg-primary/15 inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium transition-colors"
+              className="bg-card text-primary-strong ring-primary/20 hover:ring-primary/40 inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium shadow-card ring-1 transition"
             >
               <SparklesIcon className="size-4" aria-hidden />
               {offer.title}
@@ -75,15 +80,15 @@ export function Hero({ offer }: { offer: LiveOffer | undefined }) {
               <ArrowRightIcon className="size-3.5" aria-hidden />
             </Link>
           ) : (
-            <p className="bg-muted text-muted-foreground inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium">
+            <p className="bg-card text-primary-strong ring-primary/20 shadow-card inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium ring-1">
               <GraduationCapIcon className="size-4" aria-hidden />
               For schools from Nursery to Class 12
             </p>
           )}
 
-          <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl lg:text-6xl">
+          <h1 className="text-4xl font-extrabold tracking-tight text-balance sm:text-5xl lg:text-6xl">
             Run your whole school from{" "}
-            <span className="from-primary bg-gradient-to-r to-sky-500 bg-clip-text text-transparent">
+            <span className="text-brand-gradient">
               one screen.
             </span>
           </h1>
@@ -113,7 +118,9 @@ export function Hero({ offer }: { offer: LiveOffer | undefined }) {
               "Parents see only their children",
             ].map((point) => (
               <li key={point} className="flex items-center gap-2">
-                <CheckIcon className="text-primary size-4 shrink-0" aria-hidden />
+                <span className="bg-success-soft text-success-strong flex size-5 shrink-0 items-center justify-center rounded-full">
+                  <CheckIcon className="size-3.5" aria-hidden />
+                </span>
                 {point}
               </li>
             ))}
@@ -147,8 +154,8 @@ export function OffersSection({
     <section id="offers" className="mx-auto w-full max-w-6xl scroll-mt-20 px-4 sm:px-6" aria-labelledby="offers-heading">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-col gap-1">
-          <p className="text-primary text-sm font-semibold tracking-wide uppercase">Offers</p>
-          <h2 id="offers-heading" className="text-2xl font-semibold tracking-tight sm:text-3xl">
+          <p className="bg-orange-soft text-orange-strong w-fit rounded-full px-3 py-1 text-xs font-semibold tracking-wide uppercase">Offers</p>
+          <h2 id="offers-heading" className="text-2xl font-extrabold tracking-tight sm:text-3xl">
             Current offers for schools
           </h2>
         </div>
@@ -171,7 +178,7 @@ export function OffersSection({
           {offers.map((offer) => (
             <div
               key={offer.id}
-              className="from-primary relative flex flex-col gap-4 overflow-hidden rounded-2xl bg-gradient-to-r to-sky-600 p-6 text-white sm:flex-row sm:items-center sm:justify-between sm:p-8"
+              className="bg-brand-gradient relative flex flex-col gap-4 overflow-hidden rounded-3xl p-6 text-white shadow-[0_20px_40px_-24px_var(--primary)] sm:flex-row sm:items-center sm:justify-between sm:p-8"
             >
               <div
                 aria-hidden
@@ -239,41 +246,49 @@ export function OffersSection({
 const FEATURES = [
   {
     icon: UserPlusIcon,
+    tone: "blue" as AccentTone,
     title: "Admissions",
     body: "Parents apply from your school website. Review, waitlist or accept — acceptance creates the student and guardian records for you.",
   },
   {
     icon: UsersIcon,
+    tone: "purple" as AccentTone,
     title: "Students & guardians",
     body: "One record per child, one per guardian. Siblings share a parent, and every year's class placement is kept, not overwritten.",
   },
   {
     icon: UserCogIcon,
+    tone: "green" as AccentTone,
     title: "Teachers & subjects",
     body: "Staff profiles, subject assignments by section, and class teachers — which decide exactly what each teacher can touch.",
   },
   {
     icon: CalendarClockIcon,
+    tone: "orange" as AccentTone,
     title: "Timetable",
     body: "Build the weekly timetable section by section. Clashes for a class or a teacher are refused before they are saved.",
   },
   {
     icon: ClipboardCheckIcon,
+    tone: "cyan" as AccentTone,
     title: "Attendance",
     body: "Teachers mark their own classes in seconds from a phone. Staff attendance sits alongside, and nothing is marked twice.",
   },
   {
     icon: MegaphoneIcon,
+    tone: "red" as AccentTone,
     title: "Notices & events",
     body: "Address a notice to teachers, students, parents or everyone, and choose whether it also appears on the public website.",
   },
   {
     icon: GlobeIcon,
+    tone: "amber" as AccentTone,
     title: "Your school website",
     body: "About, academics, facilities, notices, events and an admission form — under your own address, edited by your admin.",
   },
   {
     icon: BarChart3Icon,
+    tone: "purple" as AccentTone,
     title: "Reports",
     body: "Attendance by class and by student across any date range, with the children who need attention listed first.",
   },
@@ -289,10 +304,14 @@ export function Features() {
           description="Every module is included on every plan. Plans differ only in how many people they hold."
         />
 
-        <div className="mt-14 grid gap-px overflow-hidden rounded-2xl border bg-[var(--border)] sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {FEATURES.map((feature) => (
-            <div key={feature.title} className="bg-background flex flex-col gap-3 p-6">
-              <span className="bg-primary/10 text-primary flex size-10 items-center justify-center rounded-lg">
+            <div
+              key={feature.title}
+              className="group bg-card shadow-card hover:shadow-lift relative isolate flex flex-col gap-3 overflow-hidden rounded-2xl border border-border/70 p-6 transition-[box-shadow,transform] hover:-translate-y-1"
+            >
+              <span aria-hidden className={cn("absolute -top-12 -right-12 -z-10 size-32 rounded-full blur-2xl transition-opacity", TONE_GLOW[feature.tone])} />
+              <span className={cn("flex size-11 items-center justify-center rounded-xl", TONE_SOLID[feature.tone])}>
                 <feature.icon className="size-5" aria-hidden />
               </span>
               <h3 className="font-semibold">{feature.title}</h3>
@@ -313,7 +332,7 @@ const ROLES = [
   {
     icon: UserCogIcon,
     role: "School admin",
-    tone: "bg-primary/10 text-primary",
+    tone: "blue" as AccentTone,
     points: [
       "Live counts of students, staff and admissions",
       "Classes, sections, subjects and sessions",
@@ -324,7 +343,7 @@ const ROLES = [
   {
     icon: ClipboardCheckIcon,
     role: "Teacher",
-    tone: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+    tone: "green" as AccentTone,
     points: [
       "Today's periods the moment they sign in",
       "Attendance for their own classes only",
@@ -335,7 +354,7 @@ const ROLES = [
   {
     icon: GraduationCapIcon,
     role: "Student",
-    tone: "bg-sky-500/10 text-sky-700 dark:text-sky-400",
+    tone: "cyan" as AccentTone,
     points: [
       "Class, section and roll number",
       "Today's timetable and the full week",
@@ -346,7 +365,7 @@ const ROLES = [
   {
     icon: HeartHandshakeIcon,
     role: "Parent",
-    tone: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+    tone: "orange" as AccentTone,
     points: [
       "Every child at the school in one login",
       "Whether each child is in class today",
@@ -358,7 +377,8 @@ const ROLES = [
 
 export function Roles() {
   return (
-    <section id="roles" className="bg-muted/40 scroll-mt-20 border-y py-24">
+    <section id="roles" className="bg-muted/50 relative isolate scroll-mt-20 overflow-hidden border-y py-24">
+      <div aria-hidden className="absolute -top-32 right-0 -z-10 size-96 rounded-full bg-[var(--brand-to)] opacity-10 blur-[100px]" />
       <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
         <SectionHeading
           eyebrow="The right view for everyone"
@@ -368,8 +388,9 @@ export function Roles() {
 
         <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {ROLES.map((item) => (
-            <div key={item.role} className="bg-card ring-foreground/10 flex flex-col gap-4 rounded-2xl p-6 ring-1">
-              <span className={cn("flex size-10 items-center justify-center rounded-lg", item.tone)}>
+            <div key={item.role} className="bg-card shadow-card relative isolate flex flex-col gap-4 overflow-hidden rounded-2xl border border-border/70 p-6">
+              <span aria-hidden className={cn("absolute inset-x-0 top-0 h-1.5", TONE_SOLID[item.tone])} />
+              <span className={cn("flex size-11 items-center justify-center rounded-xl", TONE_SOLID[item.tone])}>
                 <item.icon className="size-5" aria-hidden />
               </span>
               <h3 className="text-lg font-semibold">{item.role}</h3>
@@ -418,13 +439,15 @@ const GUARANTEES = [
 
 export function Security() {
   return (
-    <section id="security" className="scroll-mt-20 bg-slate-950 py-24 text-slate-50">
+    <section id="security" className="relative isolate scroll-mt-20 overflow-hidden bg-slate-950 py-24 text-slate-50">
+      <div aria-hidden className="absolute -top-40 -left-20 -z-10 size-[30rem] rounded-full bg-indigo-600 opacity-30 blur-[120px]" />
+      <div aria-hidden className="absolute -right-20 -bottom-40 -z-10 size-[28rem] rounded-full bg-cyan-500 opacity-20 blur-[120px]" />
       <div className="mx-auto grid w-full max-w-6xl gap-14 px-4 sm:px-6 lg:grid-cols-[1fr_1.4fr]">
         <div className="flex flex-col gap-4">
-          <p className="text-sm font-semibold tracking-wide text-sky-400 uppercase">
+          <p className="w-fit rounded-full bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-cyan-300 uppercase">
             Security by design
           </p>
-          <h2 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+          <h2 className="text-3xl font-extrabold tracking-tight text-balance sm:text-4xl">
             Your children&apos;s records stay inside your school.
           </h2>
           <p className="text-lg text-slate-300">
@@ -435,8 +458,10 @@ export function Security() {
 
         <div className="grid gap-5 sm:grid-cols-2">
           {GUARANTEES.map((item) => (
-            <div key={item.title} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-6">
-              <item.icon className="size-5 text-sky-400" aria-hidden />
+            <div key={item.title} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.05] p-6 backdrop-blur">
+              <span className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-500 text-white">
+                <item.icon className="size-5" aria-hidden />
+              </span>
               <h3 className="font-semibold">{item.title}</h3>
               <p className="text-sm leading-relaxed text-slate-300">{item.body}</p>
             </div>
@@ -474,8 +499,8 @@ export function Steps() {
 
         <ol className="mt-14 grid gap-6 md:grid-cols-3">
           {STEPS.map((step, index) => (
-            <li key={step.title} className="relative flex flex-col gap-3 rounded-2xl border p-6">
-              <span className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-full text-sm font-semibold">
+            <li key={step.title} className="bg-card shadow-card relative flex flex-col gap-3 rounded-2xl border border-border/70 p-6">
+              <span className={cn("flex size-10 items-center justify-center rounded-xl text-base font-bold", TONE_SOLID[(["blue", "purple", "green"] as const)[index] ?? "blue"])}>
                 {index + 1}
               </span>
               <h3 className="text-lg font-semibold">{step.title}</h3>
@@ -508,7 +533,7 @@ export function Pricing({ plans }: { plans: PublicPlan[] }) {
   const featured = plans.length >= 3 ? plans[1]?.id : undefined;
 
   return (
-    <section id="pricing" className="bg-muted/40 scroll-mt-20 border-y py-24">
+    <section id="pricing" className="bg-muted/50 scroll-mt-20 border-y py-24">
       <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
         <SectionHeading
           eyebrow="Pricing"
@@ -523,14 +548,14 @@ export function Pricing({ plans }: { plans: PublicPlan[] }) {
               <div
                 key={plan.id}
                 className={cn(
-                  "bg-card flex flex-col gap-6 rounded-2xl p-7 ring-1",
+                  "bg-card shadow-card relative flex flex-col gap-6 rounded-3xl p-7 ring-1",
                   isFeatured
-                    ? "ring-primary shadow-primary/10 relative shadow-xl ring-2"
-                    : "ring-foreground/10",
+                    ? "ring-primary shadow-[0_24px_50px_-24px_var(--primary)] ring-2 lg:-translate-y-3"
+                    : "ring-border",
                 )}
               >
                 {isFeatured ? (
-                  <span className="bg-primary text-primary-foreground absolute -top-3 left-7 rounded-full px-3 py-0.5 text-xs font-medium">
+                  <span className="bg-brand-gradient absolute -top-3 left-7 rounded-full px-3 py-0.5 text-xs font-semibold text-white shadow-md">
                     Most popular
                   </span>
                 ) : null}
@@ -543,7 +568,7 @@ export function Pricing({ plans }: { plans: PublicPlan[] }) {
                 </div>
 
                 <p className="flex items-baseline gap-1">
-                  <span className="text-4xl font-semibold tracking-tight tabular-nums">
+                  <span className={cn("text-4xl font-extrabold tracking-tight tabular-nums", isFeatured && "text-brand-gradient")}>
                     {formatMoney(plan.priceMinor, plan.currency)}
                   </span>
                   <span className="text-muted-foreground text-sm">/ year</span>
@@ -618,14 +643,14 @@ export function Faq() {
       <div className="mx-auto w-full max-w-3xl px-4 sm:px-6">
         <SectionHeading eyebrow="FAQ" title="Questions schools ask us" />
 
-        <div className="mt-12 divide-y rounded-2xl border">
+        <div className="bg-card shadow-card mt-12 divide-y rounded-2xl border border-border/70">
           {FAQS.map((item) => (
             <details key={item.q} className="group px-6 py-5 [&_summary::-webkit-details-marker]:hidden">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-medium">
                 {item.q}
                 <span
                   aria-hidden
-                  className="text-muted-foreground text-xl leading-none transition-transform group-open:rotate-45"
+                  className="bg-primary-soft text-primary-strong flex size-7 shrink-0 items-center justify-center rounded-full text-lg leading-none transition-transform group-open:rotate-45"
                 >
                   +
                 </span>
@@ -646,15 +671,16 @@ export function Faq() {
 export function ClosingCta() {
   return (
     <section className="px-4 pb-24 sm:px-6">
-      <div className="bg-primary text-primary-foreground relative mx-auto flex w-full max-w-6xl flex-col items-center gap-6 overflow-hidden rounded-3xl px-6 py-16 text-center">
+      <div className="bg-brand-gradient relative isolate mx-auto flex w-full max-w-6xl flex-col items-center gap-6 overflow-hidden rounded-3xl px-6 py-16 text-center text-white shadow-[0_30px_60px_-30px_var(--primary)]">
+        <div aria-hidden className="bg-dots absolute inset-0 -z-10" />
         <div
           aria-hidden
           className="absolute inset-0 [background-image:radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.18),transparent_40%),radial-gradient(circle_at_80%_80%,rgba(56,189,248,0.35),transparent_45%)]"
         />
-        <h2 className="relative max-w-2xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+        <h2 className="relative max-w-2xl text-3xl font-extrabold tracking-tight text-balance sm:text-4xl">
           Bring your school onto SchoolOS this session.
         </h2>
-        <p className="text-primary-foreground/85 relative max-w-xl text-lg">
+        <p className="relative max-w-xl text-lg text-white/85">
           Register today. Once approved, your administrator can start adding
           classes, staff and students straight away.
         </p>
@@ -669,7 +695,7 @@ export function ClosingCta() {
             asChild
             size="lg"
             variant="ghost"
-            className="text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground h-11 px-5 text-base"
+            className="h-11 px-5 text-base text-white hover:bg-white/15 hover:text-white"
           >
             <Link href="/login">Sign in</Link>
           </Button>

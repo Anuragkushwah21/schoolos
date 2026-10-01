@@ -15,6 +15,6 @@ export async function GET() {
   }
   return csvResponse("student-import-template.csv", {
     head: [...STUDENT_IMPORT_COLUMNS],
-    rows: [["", "Aarav", "Sharma", "Male", "2014-03-12", "Class 5", "A", "1", "Rakesh", "Sharma", "9876543210", "", "Father"]],
+    rows: [["", "Aarav", "Sharma", "Male", "2014-03-12", "Class 5", "A", "", "1", "Rakesh", "Sharma", "9876543210", "", "Father"]],
   });
 }

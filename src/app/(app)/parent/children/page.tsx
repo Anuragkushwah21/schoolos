@@ -1,7 +1,10 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
+import Link from "next/link";
+import { CalendarOffIcon } from "lucide-react";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { Button } from "@/components/ui/button";
 import { ChildCard } from "@/features/parent/child-nav";
 import { today } from "@/lib/dates";
 import { attendedShare, emptyCounts } from "@/server/attendance/service";
@@ -61,12 +64,21 @@ export default async function ParentChildrenPage() {
       />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {children.map((child) => (
-          <ChildCard
-            key={child.id}
-            child={child}
-            attendanceShare={counts.has(child.id) ? attendedShare(counts.get(child.id)!) : null}
-            todayStatus={todayByChild.get(child.id) ?? null}
-          />
+          <div key={child.id} className="flex flex-col gap-2">
+            <ChildCard
+              child={child}
+              attendanceShare={counts.has(child.id) ? attendedShare(counts.get(child.id)!) : null}
+              todayStatus={todayByChild.get(child.id) ?? null}
+            />
+            {child.current ? (
+              <Button asChild variant="outline" size="sm" className="w-fit">
+                <Link href={`/parent/leave?child=${child.id}` as Route}>
+                  <CalendarOffIcon aria-hidden />
+                  Apply Leave
+                </Link>
+              </Button>
+            ) : null}
+          </div>
         ))}
       </div>
     </>

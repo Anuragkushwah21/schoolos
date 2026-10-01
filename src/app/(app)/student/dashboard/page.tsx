@@ -8,7 +8,7 @@ import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { NoticeList } from "@/features/communication/feed";
+import { SchoolLifeCards } from "@/features/dashboard/school-life";
 import { AlertList } from "@/features/parent/today";
 import { StudentTabs } from "@/features/student/nav";
 import { getStudentAlerts } from "@/server/alerts/feeds";
@@ -17,7 +17,6 @@ import { humanize, pluralize } from "@/lib/format";
 import { greetingKey } from "@/lib/greeting";
 import { requireTenant } from "@/server/auth/current-user";
 import { getT } from "@/server/i18n";
-import { noticesFor } from "@/server/communication/notices";
 import { findStudentSelf } from "@/server/student/access";
 import { mySupport } from "@/server/support/service";
 import {
@@ -46,7 +45,7 @@ export default async function StudentDashboardPage() {
   if (!me.placement) {
     return (
       <>
-        <PageHeader title={`${t(greetingKey(), { name: me.student.firstName })} 👋`} />
+        <PageHeader variant="hero" title={`${t(greetingKey(), { name: me.student.firstName })} 👋`} />
         <EmptyState title={t("dashboard.student.notPlaced")}>
           Your school will put you in a section for the current session. Your timetable, classes and
           homework appear here once they do.
@@ -55,13 +54,12 @@ export default async function StudentDashboardPage() {
     );
   }
 
-  const [day, homework, results, attendance, upcoming, notices, support] = await Promise.all([
+  const [day, homework, results, attendance, upcoming, support] = await Promise.all([
     getMyDay(ctx),
     getMyHomework(ctx),
     getMyResults(ctx),
     getMyAttendance(ctx),
     getMyUpcomingLessons(ctx, { days: 7 }),
-    noticesFor(ctx, { take: 4 }),
     mySupport(ctx),
   ]);
 
@@ -70,7 +68,7 @@ export default async function StudentDashboardPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader variant="hero"
         title={`${t(greetingKey(), { name: me.student.firstName })} 👋`}
         description={`${me.placement.sectionLabel}${me.placement.rollNumber ? `, roll ${me.placement.rollNumber}` : ""} · ${me.placement.sessionName}`}
       />
@@ -146,6 +144,8 @@ export default async function StudentDashboardPage() {
           </CardContent>
         </Card>
       ) : null}
+
+      <SchoolLifeCards ctx={ctx} base="/student" />
 
       <Card className="mb-6">
         <CardHeader>
@@ -313,17 +313,6 @@ export default async function StudentDashboardPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2">
-              <CardTitle>{t("dashboard.notices")}</CardTitle>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/student/notices">All</Link>
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <NoticeList notices={notices} compact />
-            </CardContent>
-          </Card>
         </div>
       </div>
     </>

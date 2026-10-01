@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { RegisterScreen } from "@/features/attendance/register-page";
 import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
-import { accessibleSectionIds } from "@/server/auth/teacher-access";
+import { attendanceSectionIds } from "@/server/auth/teacher-access";
 import { getCurrentSession, sectionOptions } from "@/server/academics/structure";
 import { TEACHER_EDIT_WINDOW_DAYS } from "@/server/attendance/service";
 
@@ -18,15 +18,16 @@ export default async function TeacherAttendancePage(props: PageProps<"/teacher/a
 
   if (!session) return <NoSessionNotice title="Attendance" />;
 
-  // Only the sections this teacher teaches or is class teacher of.
-  const ids = await accessibleSectionIds(ctx, session.id);
+  // Only the section(s) this teacher is class teacher of. The server checks
+  // the same rule again on every read and save, whatever is in the URL.
+  const ids = await attendanceSectionIds(ctx, session.id);
   const sections = await sectionOptions(ctx, session.id, ids === "ALL" ? [] : ids);
 
   return (
     <>
       <PageHeader
         title="Attendance"
-        description={`Your classes. You can mark today and correct the last ${TEACHER_EDIT_WINDOW_DAYS} days.`}
+        description={`Your class as class teacher. After attendance is submitted you can correct it for 2 hours, on the same day; a day you missed can be taken up to ${TEACHER_EDIT_WINDOW_DAYS} days later.`}
       />
       <RegisterScreen
         ctx={ctx}

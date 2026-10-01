@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { SetupNotice } from "@/components/shared/setup-notice";
 import { CreateStudentForm } from "@/features/school/people-forms";
 import { requireTenant } from "@/server/auth/current-user";
+import { admissionSeatOptions } from "@/server/academics/streams";
 import { getCurrentSession, sectionOptions } from "@/server/academics/structure";
 import { searchParents } from "@/server/people/students";
 
@@ -23,7 +24,14 @@ export default async function NewStudentPage() {
     );
   }
 
-  const [sections, parents] = await Promise.all([sectionOptions(ctx, session.id), searchParents(ctx)]);
+  const [sections, levels, parents, seats] = await Promise.all([
+    sectionOptions(ctx, session.id),
+    // The class level decides whether a student account is offered (Class 6 up).
+    ctx.db.section.findMany({ where: { academicSessionId: session.id }, select: { id: true, class: { select: { level: true } } } }),
+    searchParents(ctx),
+    admissionSeatOptions(ctx, session.id),
+  ]);
+  const levelOf = new Map(levels.map((row) => [row.id, row.class.level]));
 
   if (!sections.length) {
     return (
@@ -40,8 +48,15 @@ export default async function NewStudentPage() {
       <PageHeader back={back} title="Add student" description="Admit a student directly. Online applications are under Admissions." />
       <CreateStudentForm
         sessionName={session.name}
-        sections={sections}
-        parents={parents.map((p) => ({ value: p.id, label: `${p.firstName} ${p.lastName} · ${p.phone}` }))}
+        sections={sections.map((section) => {
+          // "Class 9 – A · 3 seats left" — or full — so the office sees room before choosing.
+          const plan = seats[section.value];
+          const left = plan?.capacity != null ? plan.capacity - plan.occupied : null;
+          const note = left === null ? "" : left <= 0 ? " · full" : ` · ${left} seat${left === 1 ? "" : "s"} left`;
+          return { ...section, label: `${section.label}${note}`, level: levelOf.get(section.value) ?? 0 };
+        })}
+        seats={seats}
+        parents={parents.map((p) => ({ value: p.id, label: `${p.firstName} ${p.lastName} · ${p.phone}${p.email ? ` · ${p.email}` : ""}` }))}
       />
     </>
   );

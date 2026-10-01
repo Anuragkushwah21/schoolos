@@ -112,6 +112,8 @@ export const admissionStatusSchema = z.object({
 export const acceptAdmissionSchema = z.object({
   applicationId: id,
   sectionId: id,
+  /** Where the section shares seats among streams; blank uses the stream applied for. */
+  streamId: optionalId,
   rollNumber: optionalText(10),
   admissionNumber: optionalText(30),
   reviewNotes: optionalText(1000),

@@ -7,9 +7,15 @@ import { csvResponse } from "@/server/reports/csv";
 import {
   classStrengthTable,
   examPerformanceTable,
+  expensesTable,
+  feePaymentsTable,
   feePositionsTable,
+  homeworkTable,
+  salaryPaymentsTable,
   staffAttendanceTable,
   studentListReport,
+  substituteClassesTable,
+  supportTable,
   teacherListReport,
   teacherWorkloadTable,
 } from "@/server/reports/exports";
@@ -49,6 +55,12 @@ const KINDS = [
   "template-transport",
   "exam-performance",
   "teacher-workload",
+  "fee-payments",
+  "expenses",
+  "salary-payments",
+  "substitutes",
+  "homework",
+  "support",
 ] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -90,6 +102,17 @@ export async function GET(request: NextRequest) {
       if (!from || !to || from > to) return new NextResponse("Choose a valid date range.", { status: 400 });
       return csvResponse(`${school}-teacher-workload-${toDateInput(from)}-to-${toDateInput(to)}.csv`, await teacherWorkloadTable(ctx, from, to));
     }
+    case "fee-payments":
+    case "expenses":
+    case "salary-payments":
+    case "substitutes":
+    case "homework": {
+      if (!from || !to || from > to) return new NextResponse("Choose a valid date range.", { status: 400 });
+      const build = { "fee-payments": feePaymentsTable, expenses: expensesTable, "salary-payments": salaryPaymentsTable, substitutes: substituteClassesTable, homework: homeworkTable }[kind];
+      return csvResponse(`${school}-${kind}-${toDateInput(from)}-to-${toDateInput(to)}.csv`, await build(ctx, from, to));
+    }
+    case "support":
+      return csvResponse(`${school}-student-support-${stamp}.csv`, await supportTable(ctx));
     case "staff":
       return csvResponse(`${school}-staff-${stamp}.csv`, await staffTable(ctx));
     case "transport":

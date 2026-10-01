@@ -7,7 +7,9 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LifecyclePanel } from "@/features/people/lifecycle-panel";
 import { humanize } from "@/lib/format";
+import { PersonPhoto } from "@/components/shared/person-photo";
 import { requireTenant } from "@/server/auth/current-user";
+import { photoUrlFor } from "@/server/people/photos";
 import { orNotFound } from "@/server/page-helpers";
 import { getParentWithChildren } from "@/server/people/parents";
 
@@ -23,6 +25,8 @@ export default async function ParentProfilePage(props: PageProps<"/school-admin/
   const { parentId } = await props.params;
   const parent = await orNotFound(getParentWithChildren(ctx, parentId));
 
+  const photoUrl = await photoUrlFor(ctx, { type: "PARENT", id: parent.id });
+
   return (
     <>
       <PageHeader
@@ -32,6 +36,9 @@ export default async function ParentProfilePage(props: PageProps<"/school-admin/
         title={parent.name}
         description={`${parent.phone}${parent.email ? ` · ${parent.email}` : ""}`}
       />
+      <div className="mb-6">
+        <PersonPhoto name={`${parent.firstName} ${parent.lastName}`} photoUrl={photoUrl} who="The parent" />
+      </div>
       <div className="grid gap-6 xl:grid-cols-[1.3fr_1fr]">
         <Card>
           <CardHeader>

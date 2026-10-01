@@ -24,6 +24,26 @@ const nextConfig: NextConfig = {
     ];
   },
 
+  /**
+   * Baseline security headers on every response. No page is meant to be
+   * framed, so framing is refused outright (clickjacking on screens like
+   * password reset or disabling a login).
+   */
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+        ],
+      },
+    ];
+  },
+
   experimental: {
     serverActions: {
       /**

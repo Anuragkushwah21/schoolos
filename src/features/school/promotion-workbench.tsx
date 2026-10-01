@@ -250,6 +250,9 @@ export function PromotionWorkbench({ from, to, classes }: { from: Session; to: S
                 Review exceptions
               </Button>
             ) : null}
+            <Button asChild variant="outline">
+              <Link href={`/school-admin/setup?session=${to.id}`}>Set up {to.name}: class teachers, subjects, timetable</Link>
+            </Button>
             <Button asChild variant="ghost">
               <Link href="/school-admin/academics">Back to Academics</Link>
             </Button>

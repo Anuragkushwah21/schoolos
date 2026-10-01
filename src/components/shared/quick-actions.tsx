@@ -2,7 +2,7 @@ import type { Route } from "next";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 
-import { type AccentTone, TONE_ICON } from "@/components/shared/tones";
+import { type AccentTone, TONE_GLOW, TONE_SOLID } from "@/components/shared/tones";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,9 +25,10 @@ export function QuickActions({
           <li key={href}>
             <Link
               href={href}
-              className="bg-card hover:border-primary/40 flex h-full min-h-24 flex-col items-start justify-between gap-3 rounded-2xl border p-4 text-sm font-semibold shadow-[0_1px_3px_rgb(15_23_42/0.06)] transition-[box-shadow,border-color,transform] hover:-translate-y-0.5 hover:shadow-md"
+              className="group/qa bg-card shadow-card hover:border-primary/40 hover:shadow-lift relative isolate flex h-full min-h-24 flex-col items-start justify-between gap-3 overflow-hidden rounded-2xl border border-border/70 p-4 text-sm font-semibold transition-[box-shadow,border-color,transform] hover:-translate-y-0.5"
             >
-              <span className={cn("flex size-10 items-center justify-center rounded-xl", TONE_ICON[tone])}>
+              <span className={cn("absolute -right-8 -bottom-8 -z-10 size-24 rounded-full opacity-0 blur-2xl transition-opacity group-hover/qa:opacity-100", TONE_GLOW[tone])} aria-hidden />
+              <span className={cn("flex size-10 items-center justify-center rounded-xl transition-transform group-hover/qa:scale-105", TONE_SOLID[tone])}>
                 <Icon className="size-5" aria-hidden />
               </span>
               {label}

@@ -1,18 +1,21 @@
 import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
-import type { ConcernStatus, SupportPriority, SupportSource, SupportStatus } from "@/generated/prisma/enums";
+import type { SupportPriority, SupportSource, SupportStatus } from "@/generated/prisma/enums";
 import { addDays, formatDate, today } from "@/lib/dates";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName, humanize } from "@/lib/format";
 import { CURRENT_EMPLOYEE, CURRENT_STUDENT } from "@/lib/validation/lifecycle";
-import { OPEN_SUPPORT, type ConcernInput, type ConcernReviewInput, type SupportFollowUpInput, type SupportInput } from "@/lib/validation/support";
+import { OPEN_SUPPORT, type SupportFollowUpInput, type SupportInput } from "@/lib/validation/support";
 import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
-import { accessibleSectionIds, requireSectionAccess, requireTeacherSelf } from "@/server/auth/teacher-access";
-import { findChild, listMyChildren } from "@/server/parent/access";
+import { requireTeacherSelf } from "@/server/auth/teacher-access";
+import { groupLabel, groupSubjectTeachers, type Placement } from "@/server/academics/streams";
+import { listMyChildren } from "@/server/parent/access";
+import { teacherConcernOptions } from "@/server/support/concerns";
+import { teachesStudentSubject } from "@/server/support/teaching";
 
 /**
  * Student support — "which students need extra help, why, and what is being
@@ -50,48 +53,58 @@ async function currentPlacement(ctx: TenantContext, studentId: string) {
       lastName: true,
       enrollments: {
         where: { academicSession: { isCurrent: true }, status: "ACTIVE" },
-        select: { academicSessionId: true, section: { select: SECTION_SELECT } },
+        select: { academicSessionId: true, streamId: true, section: { select: { ...SECTION_SELECT, streamId: true } } },
       },
     },
   });
   const placement = student?.enrollments[0];
   if (!student || !placement) throw new NotFoundError("That student was not found in a class this year.");
-  return { student, academicSessionId: placement.academicSessionId, section: placement.section };
+  return {
+    student,
+    academicSessionId: placement.academicSessionId,
+    section: placement.section,
+    // The student's academic group: section and stream (a whole-stream section's students are in it).
+    group: { academicSessionId: placement.academicSessionId, sectionId: placement.section.id, streamId: placement.streamId ?? placement.section.streamId },
+  };
 }
 
-/** Who teaches this subject to this section this year; else the class teacher. */
-async function responsibleTeacher(ctx: TenantContext, section: { id: string; classTeacherId: string | null }, subjectId: string | null): Promise<string | null> {
-  if (subjectId) {
-    const assignment = await ctx.db.teacherSubjectAssignment.findFirst({
-      where: { sectionId: section.id, subjectId, academicSession: { isCurrent: true }, teacher: { status: { in: [...CURRENT_EMPLOYEE] } } },
-      select: { teacherId: true },
-    });
-    if (assignment) return assignment.teacherId;
-  }
+/**
+ * Who looks after support the office adds: the student's own subject teacher
+ * (stream-aware), else — for support not about one subject — the class teacher.
+ */
+async function responsibleTeacher(ctx: TenantContext, section: { classTeacherId: string | null }, group: Placement, subjectId: string | null): Promise<string | null> {
+  if (subjectId) return (await groupSubjectTeachers(ctx.db, group, subjectId))[0] ?? null;
   return section.classTeacherId;
 }
 
 /**
- * A teacher may add support for a subject they teach in that section, or for
- * any subject (or none) as its class teacher.
+ * A teacher may add support only for a student they teach, in the subject
+ * they teach them — the same rule as concerns (`teaching.ts`); covering a
+ * period is not teaching the class. Support not about one subject is the
+ * class teacher's. Returns the teacher the record belongs to.
  */
-async function assertTeacherMaySupport(ctx: TenantContext, teacherId: string, section: { id: string; classTeacherId: string | null }, subjectId: string | null) {
-  await requireSectionAccess(ctx, section.id);
-  if (section.classTeacherId === teacherId) return;
-  if (!subjectId) throw new ForbiddenError("Only the class teacher can add support that is not about one subject.");
-  const teaches = await ctx.db.teacherSubjectAssignment.count({ where: { teacherId, sectionId: section.id, subjectId, academicSession: { isCurrent: true } } });
-  if (!teaches) throw new ForbiddenError("You can add support only for a subject you teach to this class.");
+async function assertTeacherMaySupport(ctx: TenantContext, teacherId: string, section: { classTeacherId: string | null }, group: Placement, subjectId: string | null): Promise<string> {
+  if (!subjectId) {
+    if (section.classTeacherId === teacherId) return teacherId;
+    throw new ForbiddenError("Only the class teacher can add support that is not about one subject.");
+  }
+  if (!(await teachesStudentSubject(ctx, teacherId, group, subjectId))) {
+    throw new ForbiddenError("You can add support only for a student you teach, in the subject you teach them.");
+  }
+  return teacherId;
 }
 
 /** Which support records the caller may see: all (admin) or their sections (teacher). */
+/** Which support records the caller may see: all (admin); for a teacher, their own and their class-teacher sections'. */
 async function visibleSupportWhere(ctx: TenantContext): Promise<Prisma.StudentSupportWhereInput> {
   if (ctx.user.role === "SCHOOL_ADMIN") return {};
   assertRole(ctx.user, "TEACHER");
   const teacher = await requireTeacherSelf(ctx);
-  const sections = await accessibleSectionIds(ctx);
-  return { OR: [{ teacherId: teacher.id }, { sectionId: { in: Array.isArray(sections) ? sections : [] } }] };
+  const classTeacherOf = await ctx.db.section.findMany({ where: { classTeacherId: teacher.id, academicSession: { isCurrent: true } }, select: { id: true } });
+  return { OR: [{ teacherId: teacher.id }, { sectionId: { in: classTeacherOf.map((row) => row.id) } }] };
 }
 
+/** The owner or the class teacher may change a record; the admin always may. */
 /** The owner or the class teacher may change a record; the admin always may. */
 async function assertMayEdit(ctx: TenantContext, support: { teacherId: string | null; section: { classTeacherId: string | null } }) {
   if (ctx.user.role === "SCHOOL_ADMIN") return;
@@ -161,7 +174,7 @@ export type SupportRow = ReturnType<typeof shape>;
 
 export async function createSupport(ctx: TenantContext, input: SupportInput): Promise<string> {
   assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
-  const { student, academicSessionId, section } = await currentPlacement(ctx, input.studentId);
+  const { student, academicSessionId, section, group } = await currentPlacement(ctx, input.studentId);
 
   if (input.subjectId && !(await ctx.db.subject.count({ where: { id: input.subjectId } }))) {
     throw new ValidationError("Please correct the highlighted fields.", { subjectId: ["Choose a subject"] });
@@ -170,8 +183,7 @@ export async function createSupport(ctx: TenantContext, input: SupportInput): Pr
   let teacherId: string | null;
   let source: SupportSource;
   if (ctx.user.role === "TEACHER") {
-    teacherId = (await requireTeacherSelf(ctx)).id;
-    await assertTeacherMaySupport(ctx, teacherId, section, input.subjectId);
+    teacherId = await assertTeacherMaySupport(ctx, (await requireTeacherSelf(ctx)).id, section, group, input.subjectId);
     source = "TEACHER";
   } else {
     // The office may name the teacher; otherwise the subject teacher (or class teacher) takes it.
@@ -180,7 +192,7 @@ export async function createSupport(ctx: TenantContext, input: SupportInput): Pr
       if (!teacher) throw new ValidationError("Please correct the highlighted fields.", { teacherId: ["Choose a current teacher"] });
       teacherId = teacher.id;
     } else {
-      teacherId = await responsibleTeacher(ctx, section, input.subjectId);
+      teacherId = await responsibleTeacher(ctx, section, group, input.subjectId);
     }
     source = "SCHOOL_ADMIN";
   }
@@ -232,8 +244,8 @@ export async function createSupport(ctx: TenantContext, input: SupportInput): Pr
     });
     if (concernId) {
       await tx.supportConcern.updateMany({
-        where: { id: concernId, status: { in: ["NEW", "REVIEWING"] } },
-        data: { status: "ACTION_TAKEN", reviewedAt: new Date() },
+        where: { id: concernId, status: "OPEN" },
+        data: { status: "IN_PROGRESS", reviewedAt: new Date() },
       });
     }
     return created.id;
@@ -255,7 +267,7 @@ export async function followUpSupport(ctx: TenantContext, input: SupportFollowUp
   assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
   const support = await ctx.db.studentSupport.findFirst({
     where: { AND: [{ id: input.supportId }, await visibleSupportWhere(ctx)] },
-    select: { id: true, status: true, priority: true, action: true, teacherId: true, student: { select: { firstName: true, lastName: true } }, section: { select: { classTeacherId: true } } },
+    select: { id: true, status: true, priority: true, action: true, teacherId: true, subjectId: true, student: { select: { firstName: true, lastName: true } }, section: { select: { id: true, classTeacherId: true } } },
   });
   if (!support) throw new NotFoundError("That support record was not found.");
   await assertMayEdit(ctx, support);
@@ -358,7 +370,7 @@ export async function supportSummary(ctx: TenantContext) {
       select: { studentId: true, subject: { select: { name: true } } },
     }),
     ctx.db.studentSupport.groupBy({ by: ["status"], _count: { _all: true } }),
-    ctx.db.supportConcern.count({ where: { status: { in: ["NEW", "REVIEWING"] } } }),
+    ctx.db.supportConcern.count({ where: { status: "OPEN" } }),
     ctx.db.studentSupport.groupBy({ by: ["source"], where: { status: { in: [...OPEN_SUPPORT] } }, _count: { _all: true } }),
   ]);
   const subjects = new Map<string, number>();
@@ -384,7 +396,17 @@ export async function getSupport(ctx: TenantContext, supportId: string) {
     where: { AND: [{ id: supportId }, await visibleSupportWhere(ctx)] },
     select: {
       ...ROW_SELECT,
-      concern: { select: { id: true, reason: true, message: true, status: true, createdAt: true, parent: { select: { firstName: true, lastName: true, phone: true } } } },
+      concern: {
+        select: {
+          id: true,
+          number: true,
+          type: true,
+          status: true,
+          createdAt: true,
+          parent: { select: { firstName: true, lastName: true, phone: true } },
+          messages: { where: { internal: false }, orderBy: { createdAt: "asc" }, take: 1, select: { body: true } },
+        },
+      },
       extraClass: { select: { id: true, title: true, date: true, startMinute: true, status: true } },
       notes: {
         orderBy: { createdAt: "desc" },
@@ -403,7 +425,16 @@ export async function getSupport(ctx: TenantContext, supportId: string) {
     ...shape(row),
     mayEdit,
     concern: row.concern
-      ? { ...row.concern, parent: fullName(row.concern.parent), parentPhone: row.concern.parent.phone }
+      ? {
+          id: row.concern.id,
+          ref: `CON-${row.concern.number}`,
+          type: row.concern.type,
+          status: row.concern.status,
+          createdAt: row.concern.createdAt,
+          message: row.concern.messages[0]?.body ?? null,
+          parent: row.concern.parent ? fullName(row.concern.parent) : null,
+          parentPhone: row.concern.parent?.phone ?? null,
+        }
       : null,
     extraClass: row.extraClass,
     notes: row.notes.map((note) => ({ ...note, author: note.author ? fullName(note.author) : null })),
@@ -423,143 +454,20 @@ export async function supportForStudent(ctx: TenantContext, studentId: string) {
 }
 
 // -----------------------------------------------------------------------------
-// Parent concerns
-// -----------------------------------------------------------------------------
-
-/** A parent raises a concern about one of their current children. */
-export async function raiseConcern(ctx: TenantContext, input: ConcernInput): Promise<string> {
-  assertRole(ctx.user, "PARENT");
-  // Linked to this parent and still a current student — or simply not found.
-  const child = await findChild(ctx, input.studentId);
-  if (!child.placement) throw new NotFoundError(`${child.student.name} is not placed in a class this year.`);
-  if (input.subjectId && !(await ctx.db.subject.count({ where: { id: input.subjectId } }))) {
-    throw new ValidationError("Please correct the highlighted fields.", { subjectId: ["Choose a subject"] });
-  }
-  const open = await ctx.db.supportConcern.findFirst({
-    where: { studentId: child.student.id, parentId: child.parentId, subjectId: input.subjectId, status: { in: ["NEW", "REVIEWING"] } },
-    select: { id: true },
-  });
-  if (open) throw new ConflictError("You have already raised this, and the teacher is looking at it. You'll see their reply here.");
-
-  const section = await ctx.db.section.findFirst({ where: { id: child.placement.sectionId }, select: { id: true, classTeacherId: true } });
-  const teacherId = section ? await responsibleTeacher(ctx, section, input.subjectId) : null;
-
-  const concern = await ctx.db.supportConcern.create({
-    data: {
-      schoolId: ctx.schoolId,
-      studentId: child.student.id,
-      parentId: child.parentId,
-      subjectId: input.subjectId,
-      teacherId,
-      reason: input.reason,
-      message: input.message,
-    },
-    select: { id: true },
-  });
-  await recordAudit({
-    action: "CONCERN_RAISED",
-    entityType: "SupportConcern",
-    entityId: concern.id,
-    schoolId: ctx.schoolId,
-    actorId: ctx.user.id,
-    summary: `A parent raised a concern about ${child.student.name} (${humanize(input.reason)}).`,
-  });
-  return concern.id;
-}
-
-/** Concerns for staff: the teacher's own (routed to them), or all for the admin. */
-export async function listConcerns(ctx: TenantContext, filters: { status?: ConcernStatus | "OPEN" } = {}) {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
-  const status = filters.status ?? "OPEN";
-  const mine = ctx.user.role === "TEACHER" ? { teacherId: (await requireTeacherSelf(ctx)).id } : {};
-  const rows = await ctx.db.supportConcern.findMany({
-    where: { ...mine, ...(status === "OPEN" ? { status: { in: ["NEW", "REVIEWING"] } } : { status }) },
-    orderBy: { createdAt: "asc" },
-    take: 200,
-    select: {
-      id: true,
-      reason: true,
-      message: true,
-      status: true,
-      response: true,
-      createdAt: true,
-      student: {
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          enrollments: { where: { academicSession: { isCurrent: true } }, select: { section: { select: SECTION_SELECT } } },
-        },
-      },
-      parent: { select: { firstName: true, lastName: true, phone: true } },
-      subject: { select: { name: true } },
-      teacher: { select: { firstName: true, lastName: true } },
-      supports: { select: { id: true } },
-    },
-  });
-  return rows.map((row) => ({
-    id: row.id,
-    reason: row.reason,
-    message: row.message,
-    status: row.status,
-    response: row.response,
-    createdAt: row.createdAt,
-    studentId: row.student.id,
-    student: fullName(row.student),
-    section: row.student.enrollments[0] ? sectionLabel(row.student.enrollments[0].section) : null,
-    parent: fullName(row.parent),
-    parentPhone: row.parent.phone,
-    subject: row.subject?.name ?? null,
-    teacher: row.teacher ? fullName(row.teacher) : null,
-    supportId: row.supports[0]?.id ?? null,
-  }));
-}
-
-/** The teacher (or the office) reviews a concern and tells the parent what is happening. */
-export async function reviewConcern(ctx: TenantContext, input: ConcernReviewInput): Promise<void> {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
-  const mine = ctx.user.role === "TEACHER" ? { teacherId: (await requireTeacherSelf(ctx)).id } : {};
-  const concern = await ctx.db.supportConcern.findFirst({
-    where: { id: input.concernId, ...mine },
-    select: { id: true, status: true, student: { select: { firstName: true, lastName: true } } },
-  });
-  if (!concern) throw new NotFoundError("That concern was not found.");
-  if (concern.status === "RESOLVED") throw new ConflictError("This concern is already resolved.");
-  const now = new Date();
-  await ctx.db.supportConcern.updateMany({
-    where: { id: concern.id },
-    data: {
-      status: input.status,
-      ...(input.response ? { response: input.response } : {}),
-      reviewedAt: now,
-      resolvedAt: input.status === "RESOLVED" ? now : null,
-    },
-  });
-  await recordAudit({
-    action: "CONCERN_UPDATED",
-    entityType: "SupportConcern",
-    entityId: concern.id,
-    schoolId: ctx.schoolId,
-    actorId: ctx.user.id,
-    summary: `Concern about ${fullName(concern.student)}: ${humanize(concern.status)} → ${humanize(input.status)}.`,
-  });
-}
-
-// -----------------------------------------------------------------------------
 // Families
 // -----------------------------------------------------------------------------
 
 /**
  * What a parent sees: for each current child, the help being given (subject,
- * topic, what is being done, how it is going — no staff notes, no priority),
- * and their own concerns with the school's reply.
+ * topic, what is being done, how it is going — no staff notes, no priority).
+ * Concerns and their conversations are in `concerns.ts`.
  */
 export async function familySupport(ctx: TenantContext) {
   assertRole(ctx.user, "PARENT");
-  const { parent, children } = await listMyChildren(ctx);
+  const { children } = await listMyChildren(ctx);
   const current = children.filter((child) => child.current);
   const ids = current.map((child) => child.id);
-  const [supports, concerns] = await Promise.all([
+  const [supports] = await Promise.all([
     ctx.db.studentSupport.findMany({
       where: { studentId: { in: ids }, OR: [{ status: { in: [...OPEN_SUPPORT] } }, { resolvedAt: { gte: addDays(today(), -30) } }] },
       orderBy: { updatedAt: "desc" },
@@ -577,13 +485,6 @@ export async function familySupport(ctx: TenantContext) {
         extraClass: { select: { title: true, date: true, startMinute: true, status: true } },
       },
     }),
-    ctx.db.supportConcern.findMany({
-      where: { parentId: parent.id, studentId: { in: ids } },
-      orderBy: { createdAt: "desc" },
-      take: 20,
-      // The parent sees the status and the reply meant for them — nothing internal.
-      select: { id: true, studentId: true, reason: true, message: true, status: true, response: true, createdAt: true, reviewedAt: true, subject: { select: { name: true } } },
-    }),
   ]);
   const nameOf = new Map(current.map((child) => [child.id, child.name]));
   return {
@@ -594,21 +495,7 @@ export async function familySupport(ctx: TenantContext) {
       subject: row.subject?.name ?? null,
       teacher: row.teacher ? fullName(row.teacher) : null,
     })),
-    concerns: concerns.map((row) => ({ ...row, child: nameOf.get(row.studentId) ?? "", subject: row.subject?.name ?? null })),
   };
-}
-
-/** Subjects a child is taught this year, for the concern form. */
-export async function subjectsForChild(ctx: TenantContext, studentId: string) {
-  assertRole(ctx.user, "PARENT");
-  const child = await findChild(ctx, studentId);
-  if (!child.placement) return [];
-  const rows = await ctx.db.teacherSubjectAssignment.findMany({
-    where: { sectionId: child.placement.sectionId, academicSession: { isCurrent: true } },
-    distinct: ["subjectId"],
-    select: { subject: { select: { id: true, name: true } } },
-  });
-  return rows.map((row) => ({ value: row.subject.id, label: row.subject.name })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /**
@@ -668,17 +555,14 @@ export async function supportSuggestions(ctx: TenantContext) {
 /** Students and subjects a teacher may choose from when adding support. */
 export async function supportFormOptions(ctx: TenantContext) {
   assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
-  const sections = await accessibleSectionIds(ctx);
-  const sectionFilter = Array.isArray(sections) ? { sectionId: { in: sections } } : {};
+  if (ctx.user.role === "TEACHER") return teacherSupportOptions(ctx);
   const [enrollments, subjects, teachers] = await Promise.all([
     ctx.db.studentEnrollment.findMany({
-      where: { academicSession: { isCurrent: true }, status: "ACTIVE", student: { status: { in: [...CURRENT_STUDENT] } }, ...sectionFilter },
+      where: { academicSession: { isCurrent: true }, status: "ACTIVE", student: { status: { in: [...CURRENT_STUDENT] } } },
       select: { student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true } }, section: { select: SECTION_SELECT } },
     }),
     ctx.db.subject.findMany({ where: { isActive: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
-    ctx.user.role === "SCHOOL_ADMIN"
-      ? ctx.db.teacher.findMany({ where: { status: { in: [...CURRENT_EMPLOYEE] } }, orderBy: [{ firstName: "asc" }], select: { id: true, firstName: true, lastName: true } })
-      : Promise.resolve([]),
+    ctx.db.teacher.findMany({ where: { status: { in: [...CURRENT_EMPLOYEE] } }, orderBy: [{ firstName: "asc" }], select: { id: true, firstName: true, lastName: true } }),
   ]);
   return {
     students: enrollments
@@ -686,6 +570,33 @@ export async function supportFormOptions(ctx: TenantContext) {
       .map((row) => ({ value: row.student.id, label: `${fullName(row.student)} · ${sectionLabel(row.section)} · ${row.student.admissionNumber}` })),
     subjects: subjects.map((subject) => ({ value: subject.id, label: subject.name })),
     teachers: teachers.map((teacher) => ({ value: teacher.id, label: fullName(teacher) })),
+    subjectsByStudent: undefined as Record<string, Array<{ value: string; label: string }>> | undefined,
+    generalStudentIds: undefined as string[] | undefined,
+  };
+}
+
+/**
+ * A teacher's choices: the students they teach, each with only the subjects
+ * they teach them (stream-aware) — plus their
+ * class-teacher students, for support not about one subject.
+ */
+async function teacherSupportOptions(ctx: TenantContext) {
+  const teacher = await requireTeacherSelf(ctx);
+  const [taught, classStudents] = await Promise.all([
+    teacherConcernOptions(ctx),
+    ctx.db.studentEnrollment.findMany({
+      where: { academicSession: { isCurrent: true }, status: "ACTIVE", student: { status: { in: [...CURRENT_STUDENT] } }, section: { classTeacherId: teacher.id } },
+      select: { streamId: true, stream: { select: { name: true } }, student: { select: { id: true, firstName: true, lastName: true } }, section: { select: SECTION_SELECT } },
+    }),
+  ]);
+  const students = new Map(taught.map((row) => [row.value, row.label]));
+  for (const row of classStudents) if (!students.has(row.student.id)) students.set(row.student.id, `${fullName(row.student)} · ${groupLabel(row.section, row.stream)}`);
+  return {
+    students: [...students.entries()].map(([value, label]) => ({ value, label })),
+    subjects: [] as Array<{ value: string; label: string }>,
+    teachers: [] as Array<{ value: string; label: string }>,
+    subjectsByStudent: Object.fromEntries(taught.map((row) => [row.value, row.subjects])) as Record<string, Array<{ value: string; label: string }>>,
+    generalStudentIds: classStudents.map((row) => row.student.id),
   };
 }
 
@@ -747,53 +658,19 @@ export async function linkExtraClass(ctx: TenantContext, supportId: string, meet
 
 const ALERT_DAYS = 7;
 
-/** New concerns routed to this teacher. */
-export async function teacherSupportAlerts(ctx: TenantContext) {
-  const teacher = await requireTeacherSelf(ctx);
-  const rows = await ctx.db.supportConcern.findMany({
-    where: { teacherId: teacher.id, status: "NEW" },
-    orderBy: { createdAt: "desc" },
-    take: 5,
-    select: { createdAt: true, subject: { select: { name: true } }, student: { select: { firstName: true } } },
-  });
-  return rows.map((row) => ({
-    kind: "support-concern",
-    childId: null,
-    title: `A parent has raised a concern about ${row.student.firstName}'s ${row.subject?.name ?? "learning"}`,
-    detail: "Review it and let the parent know what you will do.",
-    at: row.createdAt,
-    href: "/teacher/support",
-    tone: "warning" as const,
-  }));
-}
-
-/** For a parent: concerns just reviewed, and support just arranged. */
+/** For a parent: support just arranged. (Concern replies: `parentConcernAlerts`.) */
 export async function parentSupportAlerts(ctx: TenantContext, children: Array<{ id: string; name: string }>) {
   const ids = children.map((child) => child.id);
   if (!ids.length) return [];
   const since = addDays(today(), -ALERT_DAYS);
   const nameOf = new Map(children.map((child) => [child.id, child.name.split(" ")[0] ?? child.name]));
-  const [reviewed, arranged] = await Promise.all([
-    ctx.db.supportConcern.findMany({
-      where: { studentId: { in: ids }, parent: { userId: ctx.user.id }, status: { not: "NEW" }, reviewedAt: { gte: since } },
-      select: { studentId: true, reviewedAt: true, subject: { select: { name: true } } },
-    }),
+  const [arranged] = await Promise.all([
     ctx.db.studentSupport.findMany({
       where: { studentId: { in: ids }, createdAt: { gte: since }, status: { not: "RESOLVED" } },
       select: { studentId: true, createdAt: true, action: true, subject: { select: { name: true } } },
     }),
   ]);
   return [
-    ...reviewed.map((row) => ({
-      kind: "support" as const,
-      childId: row.studentId,
-      childName: nameOf.get(row.studentId) ?? null,
-      title: `Your concern about ${nameOf.get(row.studentId)}'s ${row.subject?.name ?? "learning"} has been reviewed`,
-      detail: "See the school's reply on the Support page.",
-      at: row.reviewedAt ?? since,
-      href: "/parent/support",
-      tone: "info" as const,
-    })),
     ...arranged.map((row) => ({
       kind: "support" as const,
       childId: row.studentId,

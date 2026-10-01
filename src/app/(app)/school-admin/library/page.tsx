@@ -9,11 +9,11 @@ import { StatCard } from "@/components/shared/stat-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { importBooksAction } from "@/features/operations/actions";
-import { BookForm } from "@/features/operations/forms";
+import { BookForm, LibraryRulesForm } from "@/features/operations/forms";
 import { CsvImportForm } from "@/features/operations/import-form";
 import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
-import { bookCategories, listBooks, listLoans } from "@/server/operations/library";
+import { bookCategories, libraryRules, listBooks, listLoans } from "@/server/operations/library";
 
 export const metadata: Metadata = { title: "Library" };
 
@@ -21,11 +21,12 @@ export default async function LibraryPage(props: PageProps<"/school-admin/librar
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const search = await props.searchParams;
   const filters = { q: param(search.q), category: param(search.category), availableOnly: param(search.available) === "1" };
-  const [books, categories, overdue, fines] = await Promise.all([
+  const [books, categories, overdue, fines, rules] = await Promise.all([
     listBooks(ctx, filters),
     bookCategories(ctx),
     listLoans(ctx, { view: "overdue" }),
     listLoans(ctx, { view: "fines" }),
+    libraryRules(ctx),
   ]);
   const copies = books.reduce((sum, book) => sum + book.quantity, 0);
   const onLoan = books.reduce((sum, book) => sum + book.onLoan, 0);
@@ -108,6 +109,15 @@ export default async function LibraryPage(props: PageProps<"/school-admin/librar
             </CardHeader>
             <CardContent>
               <BookForm />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Library rules</CardTitle>
+              <CardDescription>The default due date, how many books one borrower may hold, and the late fine.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <LibraryRulesForm rules={rules} />
             </CardContent>
           </Card>
           <Card>

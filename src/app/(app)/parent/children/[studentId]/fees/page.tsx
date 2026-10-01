@@ -164,12 +164,13 @@ export default async function ChildFeesPage(
                           {formatDate(payment.paidOn)}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium tabular-nums">
+                          <span className={`block text-sm font-medium tabular-nums ${payment.voidedAt ? "text-muted-foreground line-through" : ""}`}>
                             {rupees(payment.amountMinor)}
                           </span>
                           <span className="text-muted-foreground block text-xs">
                             Receipt {payment.receiptNo} · {humanize(payment.method)}
                             {payment.notes ? ` · ${payment.notes}` : ""}
+                            {payment.voidedAt ? " · Cancelled by the school — not counted" : ""}
                           </span>
                         </span>
                         <ReceiptLinks paymentId={payment.id} receiptNo={payment.receiptNo} />

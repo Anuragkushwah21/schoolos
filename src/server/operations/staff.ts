@@ -10,10 +10,11 @@ import { fullName, humanize } from "@/lib/format";
 import { STAFF_ROLES, type StaffInput } from "@/lib/validation/operations";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
+import { type LoginInvite, sendActivation } from "@/server/auth/account-links";
+import { assertLoginEmailFree, type EmailMove, moveLoginEmail } from "@/server/people/accounts";
 import type { TenantContext } from "@/server/auth/current-user";
 import { createPortalUser } from "@/server/people/accounts";
 import { changeEmployeeStatus } from "@/server/people/lifecycle";
-import type { Credentials } from "@/server/platform/schools";
 import { isUniqueViolation } from "@/server/db/errors";
 import type { ReportTable } from "@/server/reports/exports";
 
@@ -69,13 +70,20 @@ export async function getStaff(ctx: TenantContext, staffId: string) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const row = await ctx.db.staffMember.findFirst({
     where: { id: staffId },
-    select: { ...CARD, user: { select: { id: true, email: true, isActive: true, lastLoginAt: true } } },
+    select: { ...CARD, user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, activatedAt: true } } },
   });
   if (!row) throw new NotFoundError("That staff member was not found.");
   return row;
 }
 
+/** Save a staff member; returns the id. */
 export async function saveStaff(ctx: TenantContext, input: StaffInput): Promise<string> {
+  return (await saveStaffDetails(ctx, input)).id;
+}
+
+/** Save a staff member, and say whether their sign-in email was corrected. */
+export async function saveStaffDetails(ctx: TenantContext, input: StaffInput): Promise<{ id: string; emailMove: EmailMove }> {
+  let emailMove: EmailMove = null;
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const { staffId, permissions, status, ...fields } = input;
   const data = { ...fields, ...(permissions ? { permissions } : {}) };
@@ -84,6 +92,13 @@ export async function saveStaff(ctx: TenantContext, input: StaffInput): Promise<
     if (staffId) {
       const existing = await ctx.db.staffMember.findFirst({ where: { id: staffId }, select: { userId: true, permissions: true, status: true } });
       if (!existing) throw new NotFoundError("That staff member was not found.");
+      await assertLoginEmailFree(existing.userId, fields.email);
+      if (existing.userId && !fields.email) {
+        // No email sent (a partial save, an import): the record keeps the address they sign in with.
+        const login = await ctx.db.user.findFirst({ where: { id: existing.userId }, select: { email: true } });
+        fields.email = login?.email ?? null;
+        data.email = fields.email;
+      }
       await ctx.db.staffMember.updateMany({ where: { id: staffId }, data });
       id = staffId;
       if (existing.userId) {
@@ -92,6 +107,8 @@ export async function saveStaff(ctx: TenantContext, input: StaffInput): Promise<
           where: { id: existing.userId, role: "NON_TEACHING_STAFF" },
           data: { firstName: fields.firstName, lastName: fields.lastName, phone: fields.phone },
         });
+        // A corrected email moves the sign-in address too.
+        emailMove = await moveLoginEmail(ctx, existing.userId, fields.email);
       }
       // A status sent with the details (CSV-era forms, the API) is recorded
       // like any other change: dated today, with its effect on the login.
@@ -119,7 +136,7 @@ export async function saveStaff(ctx: TenantContext, input: StaffInput): Promise<
       actorId: ctx.user.id,
       summary: `${humanize(data.role)} ${data.firstName} ${data.lastName} ${staffId ? "updated" : "added"}.`,
     });
-    return id;
+    return { id, emailMove };
   } catch (error) {
     if (isUniqueViolation(error)) throw new ConflictError("That employee ID is already in use.");
     throw error;
@@ -132,20 +149,20 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 
 /**
  * Give a staff member a login. The role is always NON_TEACHING_STAFF — set
- * here, never taken from the request — and the password is generated and
- * shown once.
+ * here, never taken from the request — and they activate it themselves from
+ * the email; nobody else sees the password.
  */
-export async function grantStaffPortal(ctx: TenantContext, staffId: string, email: string): Promise<Credentials> {
+export async function grantStaffPortal(ctx: TenantContext, staffId: string, email: string): Promise<LoginInvite> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const staff = await ctx.db.staffMember.findFirst({
     where: { id: staffId },
     select: { id: true, firstName: true, lastName: true, phone: true, email: true, status: true, userId: true },
   });
   if (!staff) throw new NotFoundError("That staff member was not found.");
-  if (staff.userId) throw new ConflictError("This staff member already has a login. Reset its password instead.");
+  if (staff.userId) throw new ConflictError("This staff member already has a login. Send a login email instead.");
   if (!employeeMaySignIn(staff.status)) throw new ConflictError("Only current staff can be given a login.");
 
-  const { userId, credentials } = await createPortalUser(ctx, {
+  const { userId } = await createPortalUser(ctx, {
     email,
     role: "NON_TEACHING_STAFF",
     firstName: staff.firstName,
@@ -157,7 +174,7 @@ export async function grantStaffPortal(ctx: TenantContext, staffId: string, emai
   const { count } = await ctx.db.staffMember.updateMany({ where: { id: staff.id, userId: null }, data: { userId, email: staff.email ?? email } });
   if (!count) {
     await ctx.db.user.deleteMany({ where: { id: userId } });
-    throw new ConflictError("This staff member already has a login. Reset its password instead.");
+    throw new ConflictError("This staff member already has a login. Send a login email instead.");
   }
 
   await recordAudit({
@@ -166,9 +183,9 @@ export async function grantStaffPortal(ctx: TenantContext, staffId: string, emai
     entityId: staff.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Staff login ${email} issued.`,
+    summary: `Staff login ${email} created, pending activation.`,
   });
-  return { ...credentials, label: `Sign-in for ${staff.firstName} ${staff.lastName}` };
+  return { ...(await sendActivation(userId, ctx.user.id)), label: `Login for ${staff.firstName} ${staff.lastName}` };
 }
 
 /** Options for pickers (drivers, attendants, borrowers). */

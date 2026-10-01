@@ -5,6 +5,7 @@ import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName, humanize } from "@/lib/format";
 import { LEFT_STUDENT } from "@/lib/validation/lifecycle";
 import { OPEN_SUPPORT } from "@/lib/validation/support";
+import { claimSeatsForGroup } from "@/server/academics/streams";
 import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
@@ -429,15 +430,25 @@ export async function runPromotionBatch(ctx: TenantContext, input: PromotionBatc
         placements.push({ section, students: repeating });
       }
 
+      // Each student keeps their stream; the section's seats and each
+      // stream's share are claimed under lock (see streams.ts).
+      const currentStreams = new Map(
+        (await tx.studentEnrollment.findMany({ where: { id: { in: [...advancing, ...repeating].map((s) => s.enrollmentId) } }, select: { studentId: true, streamId: true } })).map((row) => [
+          row.studentId,
+          row.streamId ?? source.streamId,
+        ]),
+      );
       for (const { section, students } of placements) {
-        if (section.capacity !== null) {
-          const occupied = await tx.studentEnrollment.count({ where: { sectionId: section.id, status: "ACTIVE" } });
-          if (occupied + students.length > section.capacity) {
-            throw new ConflictError(
-              `${sectionLabel(section)} has room for ${Math.max(section.capacity - occupied, 0)} more (capacity ${section.capacity}). Raise its capacity or choose another section.`,
-            );
+        const streams = await claimSeatsForGroup(
+          tx,
+          section.id,
+          students.map((student) => ({ studentId: student.studentId, streamId: currentStreams.get(student.studentId) ?? null })),
+        ).catch((error: unknown) => {
+          if (error instanceof ConflictError && /has room for/.test(error.message)) {
+            throw new ConflictError(`${error.message} Raise its capacity or choose another section.`);
           }
-        }
+          throw error;
+        });
         await tx.studentEnrollment.createMany({
           data: students.map((student) => ({
             schoolId: ctx.schoolId,
@@ -445,7 +456,7 @@ export async function runPromotionBatch(ctx: TenantContext, input: PromotionBatc
             academicSessionId: to.id,
             classId: section.classId,
             sectionId: section.id,
-            streamId: section.streamId,
+            streamId: streams.get(student.studentId) ?? null,
             enrolledOn: today(),
           })),
         });

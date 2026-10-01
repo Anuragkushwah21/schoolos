@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import type { StaffPermission } from "@/generated/prisma/enums";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { employeeMaySignIn } from "@/lib/validation/lifecycle";
+import { effectiveStaffPermissions } from "@/lib/validation/operations";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 
@@ -45,10 +46,11 @@ export async function requireStaffSelf(ctx: TenantContext) {
 /** What the signed-in staff member may open. Inactive staff hold nothing. */
 export async function staffPermissions(ctx: TenantContext): Promise<StaffPermission[]> {
   if (ctx.user.role !== "NON_TEACHING_STAFF") return [];
-  const staff = await ctx.db.staffMember.findFirst({ where: { userId: ctx.user.id }, select: { status: true, permissions: true } });
+  const staff = await ctx.db.staffMember.findFirst({ where: { userId: ctx.user.id }, select: { status: true, role: true, permissions: true } });
   // Only a current staff member holds permissions; suspended or former staff hold none.
   if (!staff || !employeeMaySignIn(staff.status)) return [];
-  return staff.permissions;
+  // A Librarian always runs the library, even if the box was left unticked.
+  return effectiveStaffPermissions(staff);
 }
 
 /**
@@ -56,9 +58,16 @@ export async function staffPermissions(ctx: TenantContext): Promise<StaffPermiss
  * always passes; a staff member passes only with this permission; everyone else
  * is refused.
  */
-export async function assertAdminOrStaffPermission(ctx: TenantContext, permission: StaffPermission): Promise<void> {
+export async function assertAdminOrStaffPermission(
+  ctx: TenantContext,
+  permission: StaffPermission | readonly StaffPermission[],
+): Promise<void> {
   if (ctx.user.role === "SCHOOL_ADMIN") return;
-  if (ctx.user.role === "NON_TEACHING_STAFF" && (await staffPermissions(ctx)).includes(permission)) return;
+  const wanted: readonly StaffPermission[] = typeof permission === "string" ? [permission] : permission;
+  if (ctx.user.role === "NON_TEACHING_STAFF") {
+    const held = await staffPermissions(ctx);
+    if (wanted.some((p) => held.includes(p))) return;
+  }
   throw new ForbiddenError();
 }
 
@@ -67,6 +76,11 @@ export async function assertAdminOrStaffPermission(ctx: TenantContext, permissio
  * sent to their dashboard, as `requireRole` does for a wrong role, so probing
  * `/staff/library` reveals nothing.
  */
-export async function requireStaffModule(ctx: TenantContext, permission: StaffPermission): Promise<void> {
-  if (!(await staffPermissions(ctx)).includes(permission)) redirect("/staff/dashboard");
+export async function requireStaffModule(
+  ctx: TenantContext,
+  permission: StaffPermission | readonly StaffPermission[],
+): Promise<void> {
+  const wanted: readonly StaffPermission[] = typeof permission === "string" ? [permission] : permission;
+  const held = await staffPermissions(ctx);
+  if (!wanted.some((p) => held.includes(p))) redirect("/staff/dashboard");
 }

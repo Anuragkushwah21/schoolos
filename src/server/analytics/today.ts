@@ -26,7 +26,7 @@ export async function schoolToday(ctx: TenantContext, academicSessionId: string 
   const [staff, payments, homework, closure, periods, meetings, expenses, salary, events] = await Promise.all([
     // Current staff only: people who have left do not count today.
     ctx.db.staffMember.count({ where: { status: { in: [...CURRENT_EMPLOYEE] } } }),
-    ctx.db.feePayment.aggregate({ where: { paidOn: date }, _sum: { amountMinor: true }, _count: { _all: true } }),
+    ctx.db.feePayment.aggregate({ where: { paidOn: date, voidedAt: null }, _sum: { amountMinor: true }, _count: { _all: true } }),
     ctx.db.homework.count({ where: { status: "PUBLISHED", createdAt: { gte: startOfSchoolDay() } } }),
     schoolClosureOn(ctx, date),
     academicSessionId ? ctx.db.timetableSlot.count({ where: { academicSessionId, dayOfWeek: dayOfWeek(date) } }) : Promise.resolve(0),

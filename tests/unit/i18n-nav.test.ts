@@ -81,9 +81,41 @@ describe("navigation", () => {
     expect(activeOn("/school-admin/admissions")).toEqual(["nav.students"]);
     expect(activeOn("/school-admin/staff/abc")).toEqual(["nav.teachersStaff"]);
     expect(activeOn("/school-admin/finance")).toEqual(["nav.fees"]);
-    expect(activeOn("/school-admin/finance/expenses")).toEqual(["nav.expenses"]);
-    expect(activeOn("/school-admin/finance/payroll")).toEqual(["nav.expenses"]);
-    expect(activeOn("/school-admin/dashboard")).toEqual(["nav.home"]);
+    // Expenses, salaries and payroll fold under Fees as tabs.
+    expect(activeOn("/school-admin/finance/expenses")).toEqual(["nav.fees"]);
+    expect(activeOn("/school-admin/finance/payroll")).toEqual(["nav.fees"]);
+    expect(activeOn("/school-admin/dashboard")).toEqual(["nav.dashboard"]);
+    // Staff leave and student leave are both under Leave, not under people.
+    expect(activeOn("/school-admin/leave")).toEqual(["nav.leave"]);
+    expect(activeOn("/school-admin/student-leave")).toEqual(["nav.leave"]);
+    expect(activeOn("/school-admin/homework")).toEqual(["nav.academics"]);
+    expect(activeOn("/school-admin/reports")).toEqual(["nav.attendance"]);
+    expect(activeOn("/school-admin/inventory")).toEqual(["nav.library"]);
+  });
+
+  it("gives Events, Calendar, Notices, Meetings and Leave each their own entry, for every role", () => {
+    const own = { SCHOOL_ADMIN: "/school-admin", TEACHER: "/teacher", PARENT: "/parent", STUDENT: "/student", NON_TEACHING_STAFF: "/staff" } as const;
+    for (const [role, base] of Object.entries(own)) {
+      const items = NAV_BY_ROLE[role as keyof typeof own];
+      const keys = items.map((item) => item.labelKey);
+      for (const key of ["nav.events", "nav.calendar", "nav.notices", "nav.meetings"]) expect(keys, `${role} ${key}`).toContain(key);
+      expect(keys.some((key) => key === "nav.leave" || key === "nav.leaveRequests"), `${role} leave`).toBe(true);
+      // None of them owns another's page.
+      const events = items.find((item) => item.labelKey === "nav.events")!;
+      const notices = items.find((item) => item.labelKey === "nav.notices")!;
+      const calendar = items.find((item) => item.labelKey === "nav.calendar")!;
+      expect(isNavActive(notices, `${base}/events`)).toBe(false);
+      expect(isNavActive(notices, `${base}/holidays`)).toBe(false);
+      expect(isNavActive(calendar, `${base}/events`)).toBe(false);
+      expect(isNavActive(events, `${base}/holidays`)).toBe(false);
+    }
+    // No tab group puts the calendar or events behind Notices any more.
+    for (const group of Object.values(AREA_TABS).flat()) {
+      const hrefs = group!.map((tab) => tab.href);
+      if (hrefs.some((href) => href.endsWith("/notices"))) {
+        expect(hrefs.some((href) => href.endsWith("/holidays") || href.endsWith("/events"))).toBe(false);
+      }
+    }
   });
 
   it("picks the most specific tab", () => {
@@ -92,6 +124,9 @@ describe("navigation", () => {
     expect(tabsFor("SCHOOL_ADMIN", "/school-admin/attendance/staff")?.active).toBe("/school-admin/attendance/staff");
     expect(tabsFor("SCHOOL_ADMIN", "/school-admin/finance")?.active).toBe("/school-admin/finance");
     expect(tabsFor("SCHOOL_ADMIN", "/school-admin/meetings")).toBeNull();
+    expect(tabsFor("SCHOOL_ADMIN", "/school-admin/events")).toBeNull();
+    expect(tabsFor("SCHOOL_ADMIN", "/school-admin/leave")?.active).toBe("/school-admin/leave");
+    expect(tabsFor("TEACHER", "/teacher/leave")?.tabs.map((tab) => tab.href)).toEqual(["/teacher/student-leave", "/teacher/leave"]);
   });
 
   it("never shows a student fees, and shows staff only what they were granted", () => {

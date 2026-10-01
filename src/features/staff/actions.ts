@@ -13,12 +13,12 @@ import { applyForLeave, cancelLeave, decideLeave } from "@/server/staff/leave";
 type Result = ActionResult<undefined>;
 
 /** Leave and cover change the teacher's day, the staff register and dashboards. */
-const STAFF_PAGES = ["/school-admin", "/teacher"];
+const STAFF_PAGES = ["/school-admin", "/teacher", "/staff"];
 
 export async function applyLeaveAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("TEACHER");
+      const ctx = await requireTenantForAction("TEACHER", "NON_TEACHING_STAFF");
       await applyForLeave(ctx, parseFormData(leaveRequestSchema, formData));
       return successResult("Leave requested. The school office will review it.");
     },
@@ -29,7 +29,7 @@ export async function applyLeaveAction(_p: Result, formData: FormData): Promise<
 export async function cancelLeaveAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("TEACHER");
+      const ctx = await requireTenantForAction("TEACHER", "NON_TEACHING_STAFF");
       const { leaveId } = parseFormData(z.object({ leaveId: id }), formData);
       await cancelLeave(ctx, leaveId);
       return successResult("Leave cancelled.");

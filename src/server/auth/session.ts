@@ -179,9 +179,16 @@ export async function invalidateSession(token: string): Promise<void> {
   });
 }
 
-/** Sign a user out everywhere — used on password change and deactivation. */
+/**
+ * Sign a user out everywhere — used on password reset and deactivation. API
+ * tokens are credentials too, so they are revoked with the sessions: a token
+ * minted before a reset must not outlive it.
+ */
 export async function invalidateAllSessionsForUser(userId: string): Promise<void> {
-  await prisma.session.deleteMany({ where: { userId } });
+  await prisma.$transaction([
+    prisma.session.deleteMany({ where: { userId } }),
+    prisma.apiToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } }),
+  ]);
 }
 
 /**

@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dateOnly } from "@/lib/dates";
-import { homeworkStatus, leaveStatus, noticeStatus, schoolNow, sessionStatus, spanStatus } from "@/lib/time-status";
+import { countdownLabel, daysUntil, homeworkStatus, leaveStatus, lifecycle, noticeStatus, schoolNow, sessionStatus, spanStatus } from "@/lib/time-status";
 
 const d = (day: number) => dateOnly(2026, 10, day);
 
@@ -51,5 +51,47 @@ describe("time statuses", () => {
     // 18:30 UTC on 9 Oct is midnight in India on 10 Oct.
     expect(schoolNow(new Date(Date.UTC(2026, 9, 9, 18, 30)))).toEqual({ date: d(10), minutes: 0 });
     expect(schoolNow(new Date(Date.UTC(2026, 9, 10, 4, 0))).minutes).toBe(570);
+  });
+});
+
+describe("the event and meeting lifecycle shown to people", () => {
+  const d = (day: number) => new Date(Date.UTC(2026, 9, day));
+  const at = (day: number, minutes = 9 * 60) => ({ date: d(day), minutes });
+  const sportsDay = { date: d(15), startMinute: 9 * 60, endMinute: 13 * 60 };
+
+  it("counts down, then says Tomorrow, Today and Completed — from the date alone", () => {
+    const cases: Array<[number, number, string, string]> = [
+      [1, 9 * 60, "UPCOMING", "14 days left"],
+      [13, 9 * 60, "UPCOMING", "2 days left"],
+      [14, 23 * 60, "UPCOMING", "Tomorrow"],
+      [15, 8 * 60, "TODAY", "Today"],
+      [15, 10 * 60, "TODAY", "Today"], // running now is still "Today"
+      [15, 13 * 60, "COMPLETED", "Completed"], // ended this afternoon
+      [16, 8 * 60, "COMPLETED", "Completed"],
+    ];
+    for (const [day, minutes, status, label] of cases) {
+      const clock = at(day, minutes);
+      const stage = lifecycle(sportsDay, clock);
+      expect(stage, `${day} ${minutes}`).toBe(status);
+      expect(countdownLabel(sportsDay.date, stage, clock), `${day} ${minutes}`).toBe(label);
+    }
+  });
+
+  it("treats an all-day event as Today until the day is over", () => {
+    const allDay = { date: d(15), startMinute: null, endMinute: null };
+    expect(lifecycle(allDay, at(15, 23 * 60 + 59))).toBe("TODAY");
+    expect(lifecycle(allDay, at(16, 0))).toBe("COMPLETED");
+  });
+
+  it("lets Cancelled win over the clock, before and after the date", () => {
+    expect(lifecycle({ ...sportsDay, cancelled: true }, at(1))).toBe("CANCELLED");
+    expect(lifecycle({ ...sportsDay, cancelled: true }, at(20))).toBe("CANCELLED");
+    expect(countdownLabel(sportsDay.date, "CANCELLED", at(1))).toBe("Cancelled");
+  });
+
+  it("counts whole days", () => {
+    expect(daysUntil(d(15), at(1))).toBe(14);
+    expect(daysUntil(d(15), at(15))).toBe(0);
+    expect(daysUntil(d(15), at(17))).toBe(-2);
   });
 });

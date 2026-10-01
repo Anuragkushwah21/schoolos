@@ -82,6 +82,39 @@ export function meetingStatus(
   return time === "TODAY" ? "UPCOMING" : time;
 }
 
+// --- one lifecycle for events and meetings ---------------------------------------
+
+/**
+ * What people see on an event or a meeting: Upcoming → Today → Completed,
+ * with Cancelled as the office's manual override (meetings). "Today" covers
+ * the whole day of it, before and while it runs; once it has ended — or the
+ * day is over — it is Completed. Nobody marks anything completed by hand.
+ */
+export type Lifecycle = "UPCOMING" | "TODAY" | "COMPLETED" | "CANCELLED";
+
+export function lifecycle(
+  item: { date: Date; startMinute: number | null; endMinute: number | null; cancelled?: boolean },
+  clock: { date: Date; minutes: number } = schoolNow(),
+): Lifecycle {
+  if (item.cancelled) return "CANCELLED";
+  const status = sessionStatus(item.date, item.startMinute, item.endMinute, clock);
+  return status === "ONGOING" ? "TODAY" : status;
+}
+
+/** Whole days from the school's today to `date` (negative when past). */
+export function daysUntil(date: Date, clock: { date: Date } = schoolNow()): number {
+  return Math.round((date.getTime() - clock.date.getTime()) / 86_400_000);
+}
+
+/** "14 days left", "Tomorrow", "Today", "Completed" or "Cancelled". */
+export function countdownLabel(date: Date, status: Lifecycle, clock: { date: Date } = schoolNow()): string {
+  if (status === "CANCELLED") return "Cancelled";
+  if (status === "COMPLETED") return "Completed";
+  if (status === "TODAY") return "Today";
+  const days = daysUntil(date, clock);
+  return days <= 1 ? "Tomorrow" : `${days} days left`;
+}
+
 // --- homework ------------------------------------------------------------------------
 
 export type HomeworkTimeStatus = "ASSIGNED" | "DUE_TODAY" | "OVERDUE";

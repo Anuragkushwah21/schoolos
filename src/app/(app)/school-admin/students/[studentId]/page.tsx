@@ -13,15 +13,20 @@ import {
   EditParentForm,
   EnrollmentForm,
   LinkGuardianForm,
+  LoginStatus,
   PortalAccessForm,
   ResetPortalPasswordForm,
 } from "@/features/school/people-forms";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { formatPercent, humanize } from "@/lib/format";
+import { PersonPhoto } from "@/components/shared/person-photo";
 import { requireTenant } from "@/server/auth/current-user";
+import { photoUrlFor } from "@/server/people/photos";
 import { listAcademicSessions, sectionLabel } from "@/server/academics/structure";
 import { orNotFound } from "@/server/page-helpers";
 import { getStudentProfile, searchParents } from "@/server/people/students";
+import { activationEmailStatuses } from "@/server/auth/account-links";
+import { groupLabel, seatOptionsFor } from "@/server/academics/streams";
 
 export const metadata: Metadata = { title: "Student" };
 
@@ -44,6 +49,9 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
     searchParents(ctx),
   ]);
 
+  // Whether each pending login's activation email went, and if not, why.
+  const invites = await activationEmailStatuses(ctx, [student.user?.id, ...student.parents.map((link) => link.parent.user?.id)]);
+
   const sectionsBySession = await ctx.db.section.findMany({
     where: { academicSessionId: { in: sessions.map((s) => s.id) } },
     select: {
@@ -59,11 +67,14 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
     .map((section) => ({ value: section.id, label: sectionLabel(section), sessionId: section.academicSessionId }));
 
   const current = student.enrollments.find((e) => e.academicSession.isCurrent);
+  const seats = await seatOptionsFor(ctx.db, sectionsBySession.map((section) => section.id));
   const counts = Object.fromEntries(attendance.map((row) => [row.status, row._count._all]));
   const marked = attendance.reduce((sum, row) => sum + row._count._all, 0);
   const attended = (counts.PRESENT ?? 0) + (counts.LATE ?? 0);
   const support = await supportForStudent(ctx, student.id);
   const linkedParentIds = new Set(student.parents.map((link) => link.parent.id));
+
+  const photoUrl = await photoUrlFor(ctx, { type: "STUDENT", id: student.id });
 
   return (
     <>
@@ -75,7 +86,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
             <StatusBadge status={student.status} />
             <span>
               {student.admissionNumber}
-              {current ? ` · ${sectionLabel(current.section)}${current.rollNumber ? `, roll ${current.rollNumber}` : ""}` : " · not placed this session"}
+              {current ? ` · ${groupLabel(current.section, current.stream)}${current.rollNumber ? `, roll ${current.rollNumber}` : ""}` : " · not placed this session"}
             </span>
           </span>
         }
@@ -104,6 +115,9 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
           </>
         }
       />
+      <div className="mb-6">
+        <PersonPhoto name={`${student.firstName} ${student.lastName}`} photoUrl={photoUrl} who="The student" />
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.3fr_1fr]">
         <div className="flex flex-col gap-6">
@@ -197,10 +211,11 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
 
                   {link.parent.user ? (
                     <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                      <p className="text-muted-foreground text-xs">
-                        Login {link.parent.user.email} · last sign-in {formatDateTime(link.parent.user.lastLoginAt)}
-                      </p>
-                      <ResetPortalPasswordForm userId={link.parent.user.id} />
+                      <div>
+                        <LoginStatus user={link.parent.user} invite={invites.get(link.parent.user.id)} />
+                        <p className="text-muted-foreground text-xs">Last sign-in {formatDateTime(link.parent.user.lastLoginAt)}</p>
+                      </div>
+                      <ResetPortalPasswordForm userId={link.parent.user.id} pending={!link.parent.user.activatedAt} />
                     </div>
                   ) : (
                     <PortalAccessForm kind="parent" personId={link.parent.id} defaultEmail={link.parent.email} />
@@ -218,6 +233,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
                           email: link.parent.email,
                           occupation: link.parent.occupation,
                           addressLine: link.parent.addressLine,
+                          idProof: { type: link.parent.idProofType, number: link.parent.idProofNumber },
                         }}
                       />
                     </div>
@@ -254,7 +270,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
                     <li key={enrollment.id} className="flex items-center justify-between gap-2">
                       <span>
                         <span className="font-medium">{enrollment.academicSession.name}</span> ·{" "}
-                        {sectionLabel(enrollment.section)}
+                        {groupLabel(enrollment.section, enrollment.stream)}
                         {enrollment.rollNumber ? `, roll ${enrollment.rollNumber}` : ""}
                       </span>
                       <StatusBadge status={enrollment.status} />
@@ -269,8 +285,10 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
                 defaults={{
                   sessionId: current?.academicSession.id ?? sessions.find((s) => s.isCurrent)?.id,
                   sectionId: current?.section.id,
+                  streamId: current?.streamId,
                   rollNumber: current?.rollNumber,
                 }}
+                seats={seats}
               />
             </CardContent>
           </Card>
@@ -283,13 +301,15 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
             <CardContent>
               {student.user ? (
                 <div className="flex flex-col gap-3 text-sm">
-                  <p>
-                    {student.user.email}
-                    {student.user.isActive ? null : <StatusBadge status="INACTIVE" label="Disabled" className="ml-2" />}
-                  </p>
+                  <LoginStatus user={student.user} invite={invites.get(student.user.id)} />
                   <p className="text-muted-foreground text-xs">Last sign-in {formatDateTime(student.user.lastLoginAt)}</p>
-                  <ResetPortalPasswordForm userId={student.user.id} />
+                  <ResetPortalPasswordForm userId={student.user.id} pending={!student.user.activatedAt} />
                 </div>
+              ) : current && current.section.class.level < 6 ? (
+                // Nursery to Class 5: no student account; the parent's login covers them.
+                <p className="text-muted-foreground text-sm">
+                  {current.section.class.name} students do not have their own login. Their parent&apos;s login shows everything.
+                </p>
               ) : student.status === "ACTIVE" ? (
                 <PortalAccessForm kind="student" personId={student.id} />
               ) : (

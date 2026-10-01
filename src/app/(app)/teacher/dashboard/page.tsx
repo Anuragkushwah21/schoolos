@@ -13,10 +13,11 @@ import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { NoticeList } from "@/features/communication/feed";
+import { SchoolLifeCards } from "@/features/dashboard/school-life";
 import { AlertList } from "@/features/parent/today";
 import { getTeacherAlerts } from "@/server/alerts/feeds";
 import {
+  formatSchoolTime,
   DAY_LABEL,
   addDays,
   dayOfWeek,
@@ -34,11 +35,12 @@ import { findTeacherSelf } from "@/server/auth/teacher-access";
 import { getCurrentSession } from "@/server/academics/structure";
 import { attendanceTrend, studentsNeedingAttention } from "@/server/analytics/school";
 import { getMyDayPlan } from "@/server/classwork/activities";
+import { myRegistersToday } from "@/server/attendance/cover";
 import { homeworkDueForMySections, pendingHomeworkCount } from "@/server/classwork/homework";
 import { schoolClosureOn } from "@/server/calendar/holidays";
-import { noticesFor } from "@/server/communication/notices";
 import { getMyClasses } from "@/server/people/teacher-self";
-import { listConcerns, listSupport } from "@/server/support/service";
+import { listConcerns } from "@/server/support/concerns";
+import { listSupport } from "@/server/support/service";
 
 export const metadata: Metadata = { title: "Teacher dashboard" };
 
@@ -57,7 +59,7 @@ export default async function TeacherDashboardPage() {
   if (!self) {
     return (
       <>
-        <PageHeader title={hello} />
+        <PageHeader variant="hero" title={hello} />
         <EmptyState title={t("dashboard.teacher.noRecord")}>{t("dashboard.teacher.noRecordHint")}</EmptyState>
       </>
     );
@@ -70,16 +72,15 @@ export default async function TeacherDashboardPage() {
     return <NoSessionNotice title={hello} />;
   }
 
-  const [plan, classes, notices, pendingHomework, closedToday, supportRows, concerns] = await Promise.all([
+  const [plan, classes, pendingHomework, closedToday, supportRows, concerns] = await Promise.all([
     getMyDayPlan(ctx),
     getMyClasses(ctx),
-    noticesFor(ctx, { take: 4 }),
     pendingHomeworkCount(ctx),
     schoolClosureOn(ctx, today()),
     listSupport(ctx),
     listConcerns(ctx),
   ]);
-  const concernCount = concerns.length;
+  const concernCount = concerns.filter((row) => row.waitingOnMe).length;
 
   const sectionIds = classes.map((cls) => cls.sectionId);
 
@@ -106,13 +107,100 @@ export default async function TeacherDashboardPage() {
   ]);
 
   // No register is owed on a holiday or weekly off.
-  const pendingRegisters = closedToday ? [] : classes.filter((cls) => !cls.attendanceMarkedToday);
+  // Only the class teacher owes a section's daily register.
+  const pendingRegisters = closedToday ? [] : classes.filter((cls) => cls.isClassTeacher && !cls.attendanceMarkedToday);
   const students = classes.reduce((sum, cls) => sum + cls.students, 0);
   const completed = plan.periods.filter((period) => period.recorded).length;
+  const covering = plan.periods.filter((period) => period.coveringFor);
+  const registers = await myRegistersToday(ctx);
 
   return (
     <>
-      <PageHeader title={`${hello} 👋`} description={`${formatDayShort(plan.date, intl)} · ${plan.session.name}`} />
+      <PageHeader variant="hero" title={`${hello} 👋`} description={`${formatDayShort(plan.date, intl)} · ${plan.session.name}`} />
+
+      {/* ---------------- today's register(s): own class and any the office handed over ---------------- */}
+      {registers.length && !closedToday ? (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-lg">{t("dashboard.teacher.todaysAttendance")}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-3">
+              {registers.map((reg) => (
+                <li key={reg.sectionId} className="flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center">
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">{reg.label}</span>
+                    {reg.coveringFor ? (
+                      <span className="text-warning-strong block text-xs">
+                        {t("dashboard.teacher.attendanceCovering", { name: reg.coveringFor })}
+                        {reg.reason ? ` · ${reg.reason}` : ""}
+                      </span>
+                    ) : null}
+                    <span className="text-muted-foreground block text-sm">
+                      {reg.phase === "NOT_TAKEN"
+                        ? reg.opensAt && reg.opensAt > new Date()
+                          ? t("dashboard.teacher.attendanceOpensAt", { time: formatSchoolTime(reg.opensAt) })
+                          : ""
+                        : reg.phase === "DRAFT"
+                          ? reg.finalizeAt
+                            ? t("dashboard.teacher.attendanceDraft", { time: formatSchoolTime(reg.finalizeAt) })
+                            : t("dashboard.teacher.attendanceDraftManual")
+                          : reg.phase === "CORRECTABLE" && reg.deadline
+                            ? t("dashboard.teacher.attendanceSubmitted", { time: formatSchoolTime(reg.deadline) })
+                            : t("dashboard.teacher.attendanceLocked")}
+                    </span>
+                  </span>
+                  {reg.phase === "LOCKED" ? null : (
+                    <Button asChild variant={reg.phase === "CORRECTABLE" ? "outline" : "default"}>
+                      <Link href={`/teacher/attendance?section=${reg.sectionId}`}>
+                        <ClipboardCheckIcon aria-hidden />
+                        {reg.phase === "CORRECTABLE" ? t("dashboard.teacher.attendanceCorrect") : t("dashboard.teacher.attendanceTake")}
+                      </Link>
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* ---------------- cover the office has asked for ---------------- */}
+      {covering.length ? (
+        <Card className="border-warning/40 mb-6">
+          <CardHeader>
+            <CardTitle className="text-lg">{t("dashboard.teacher.substituteClasses")}</CardTitle>
+            <CardDescription>{t("dashboard.teacher.substituteHint")}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-3">
+              {covering.map((period) => (
+                <li key={period.slotId} className="flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center">
+                  <span className="text-primary-strong w-28 shrink-0 text-sm font-semibold tabular-nums">
+                    {formatMinutes(period.startMinute)}–{formatMinutes(period.endMinute)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">
+                      {period.section} · {period.subject}
+                    </span>
+                    <span className="text-muted-foreground block text-sm">{t("dashboard.teacher.coveringFor", { name: period.coveringFor ?? "" })}</span>
+                  </span>
+                  {period.status ? (
+                    <StatusBadge status={period.status} />
+                  ) : (
+                    <Button asChild>
+                      <Link href={`/teacher/activities?slot=${period.slotId}`}>
+                        <BookOpenCheckIcon aria-hidden />
+                        {t("dashboard.teacher.startClass")}
+                      </Link>
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* ---------------- the day's teaching, first ---------------- */}
       <Card className="mb-6">
@@ -126,7 +214,9 @@ export default async function TeacherDashboardPage() {
           {plan.periods.length ? (
             <ul className="flex flex-col gap-3">
               {plan.periods.map((period) => {
-                const marked = classes.find((cls) => cls.sectionId === period.sectionId)?.attendanceMarkedToday ?? false;
+                const own = classes.find((cls) => cls.sectionId === period.sectionId);
+                const marked = own?.attendanceMarkedToday ?? false;
+                const takesRegister = own?.isClassTeacher ?? false;
                 return (
                   <li key={period.slotId} className="flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center">
                     <span className="text-primary-strong w-28 shrink-0 text-sm font-semibold tabular-nums">{formatMinutes(period.startMinute)}</span>
@@ -141,7 +231,7 @@ export default async function TeacherDashboardPage() {
                       </span>
                     </span>
                     <span className="flex flex-wrap items-center gap-2">
-                      {closedToday ? null : marked ? (
+                      {closedToday || !takesRegister ? null : marked ? (
                         <StatusBadge status="PRESENT" label={t("dashboard.admin.marked")} />
                       ) : (
                         <Button asChild variant="outline">
@@ -151,7 +241,10 @@ export default async function TeacherDashboardPage() {
                           </Link>
                         </Button>
                       )}
-                      {period.status ? (
+                      {period.coveredBy ? (
+                        // Someone else is taking this one; the record is theirs.
+                        <StatusBadge status="SUBSTITUTE" tone="info" label={t("dashboard.teacher.coveredBy", { name: period.coveredBy })} />
+                      ) : period.status ? (
                         <StatusBadge status={period.status} />
                       ) : (
                         <Button asChild>
@@ -200,7 +293,7 @@ export default async function TeacherDashboardPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {concernCount ? (
-            <Link href="/teacher/support" className="bg-info-soft text-info-strong rounded-xl px-3 py-2 text-sm font-medium hover:underline">
+            <Link href="/teacher/concerns" className="bg-info-soft text-info-strong rounded-xl px-3 py-2 text-sm font-medium hover:underline">
               {t("support.concernsToReview", { count: concernCount })} →
             </Link>
           ) : null}
@@ -253,6 +346,8 @@ export default async function TeacherDashboardPage() {
         />
         <StatCard tone="purple" icon={NotebookPenIcon} label={t("dashboard.teacher.pendingHomework")} value={pendingHomework} hint={t("dashboard.teacher.notYetDue")} href="/teacher/homework" />
       </div>
+
+      <SchoolLifeCards ctx={ctx} base="/teacher" />
 
       <Card className="mb-6">
         <CardHeader>
@@ -344,7 +439,7 @@ export default async function TeacherDashboardPage() {
                             {cls.isClassTeacher ? " · class teacher" : ""}
                           </p>
                         </div>
-                        {cls.attendanceMarkedToday ? (
+                        {!cls.isClassTeacher ? null : cls.attendanceMarkedToday ? (
                           <span
                             className="inline-flex items-center gap-1 text-sm"
                             style={{ color: "var(--viz-good)" }}
@@ -449,17 +544,6 @@ export default async function TeacherDashboardPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>{t("dashboard.notices")}</CardTitle>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/teacher/notices">All</Link>
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <NoticeList notices={notices} compact />
-            </CardContent>
-          </Card>
         </div>
       </div>
     </>

@@ -164,9 +164,10 @@ export async function classStrengthTable(ctx: TenantContext): Promise<ReportTabl
 }
 
 /** Each teacher's attendance between two dates, by status. */
+/** Teachers and non-teaching staff, with their register totals for the range. */
 export async function staffAttendanceReport(ctx: TenantContext, from: Date, to: Date) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
-  const [teachers, grouped] = await Promise.all([
+  const [teachers, grouped, staff, staffGrouped] = await Promise.all([
     ctx.db.teacher.findMany({
       where: { status: { in: ["ACTIVE", "ON_LEAVE"] } },
       orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
@@ -177,35 +178,57 @@ export async function staffAttendanceReport(ctx: TenantContext, from: Date, to: 
       where: { date: { gte: from, lte: to } },
       _count: { _all: true },
     }),
+    ctx.db.staffMember.findMany({
+      where: { status: { in: ["ACTIVE", "ON_LEAVE"] } },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+      select: { id: true, employeeId: true, firstName: true, lastName: true, role: true, designation: true },
+    }),
+    ctx.db.staffAttendance.groupBy({
+      by: ["staffMemberId", "status"],
+      where: { date: { gte: from, lte: to } },
+      _count: { _all: true },
+    }),
   ]);
 
-  const counts = new Map<string, { PRESENT: number; LATE: number; ABSENT: number; ON_LEAVE: number; total: number }>();
-  for (const row of grouped) {
-    const entry = counts.get(row.teacherId) ?? { PRESENT: 0, LATE: 0, ABSENT: 0, ON_LEAVE: 0, total: 0 };
-    entry[row.status] += row._count._all;
-    entry.total += row._count._all;
-    counts.set(row.teacherId, entry);
-  }
-
-  return teachers.map((teacher) => {
-    const c = counts.get(teacher.id) ?? { PRESENT: 0, LATE: 0, ABSENT: 0, ON_LEAVE: 0, total: 0 };
-    return {
-      id: teacher.id,
-      employeeId: teacher.employeeId,
-      name: fullName(teacher),
-      counts: c,
-      share: c.total ? (c.PRESENT + c.LATE) / c.total : null,
-    };
+  type Counts = { PRESENT: number; LATE: number; ABSENT: number; ON_LEAVE: number; total: number };
+  const empty = (): Counts => ({ PRESENT: 0, LATE: 0, ABSENT: 0, ON_LEAVE: 0, total: 0 });
+  const tally = (rows: Array<{ id: string; status: keyof Omit<Counts, "total">; n: number }>) => {
+    const counts = new Map<string, Counts>();
+    for (const row of rows) {
+      const entry = counts.get(row.id) ?? empty();
+      entry[row.status] += row.n;
+      entry.total += row.n;
+      counts.set(row.id, entry);
+    }
+    return counts;
+  };
+  const teacherCounts = tally(grouped.map((row) => ({ id: row.teacherId, status: row.status, n: row._count._all })));
+  const staffCounts = tally(staffGrouped.map((row) => ({ id: row.staffMemberId, status: row.status, n: row._count._all })));
+  const row = (id: string, person: { employeeId: string; firstName: string; lastName: string }, job: string, c: Counts) => ({
+    id,
+    employeeId: person.employeeId,
+    name: fullName(person),
+    job,
+    counts: c,
+    share: c.total ? (c.PRESENT + c.LATE) / c.total : null,
   });
+
+  return [
+    ...teachers.map((teacher) => row(`t:${teacher.id}`, teacher, "Teacher", teacherCounts.get(teacher.id) ?? empty())),
+    ...staff.map((member) =>
+      row(`s:${member.id}`, member, member.designation ?? member.role.charAt(0) + member.role.slice(1).toLowerCase().replace(/_/g, " "), staffCounts.get(member.id) ?? empty()),
+    ),
+  ];
 }
 
 export async function staffAttendanceTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
   const rows = await staffAttendanceReport(ctx, from, to);
   return {
-    head: ["Employee ID", "Teacher", "Present", "Late", "Absent", "On leave", "Marked", "Attended %"],
+    head: ["Employee ID", "Name", "Role", "Present", "Late", "Absent", "On leave", "Marked", "Attended %"],
     rows: rows.map((row) => [
       row.employeeId,
       row.name,
+      row.job,
       row.counts.PRESENT,
       row.counts.LATE,
       row.counts.ABSENT,
@@ -344,7 +367,7 @@ export async function teacherWorkloadReport(ctx: TenantContext, from: Date, to: 
     sessionId ? ctx.db.teacherSubjectAssignment.findMany({ where: { academicSessionId: sessionId }, select: { teacherId: true, sectionId: true, subjectId: true } }) : Promise.resolve([]),
     ctx.db.classSession.groupBy({ by: ["scheduledTeacherId", "status"], where: { date: { gte: from, lte: to } }, _count: { _all: true } }),
     ctx.db.classSession.groupBy({ by: ["actualTeacherId"], where: { date: { gte: from, lte: to }, status: "SUBSTITUTE", actualTeacherId: { not: null } }, _count: { _all: true } }),
-    ctx.db.leaveRequest.findMany({ where: { status: "APPROVED", startDate: { lte: to }, endDate: { gte: from } }, select: { teacherId: true, startDate: true, endDate: true } }),
+    ctx.db.leaveRequest.findMany({ where: { status: "APPROVED", startDate: { lte: to }, endDate: { gte: from }, teacherId: { not: null } }, select: { teacherId: true, startDate: true, endDate: true } }),
   ]);
 
   const periods = new Map(slots.map((row) => [row.teacherId, row._count._all]));
@@ -381,5 +404,169 @@ export async function teacherWorkloadTable(ctx: TenantContext, from: Date, to: D
   return {
     head: ["Employee ID", "Teacher", "Periods / week", "Sections", "Subjects", "Class teacher", "Classes written up", "Missed / cancelled", "Covered for others", "Leave days"],
     rows: rows.map((row) => [row.employeeId, row.name, row.periodsPerWeek, row.sections, row.subjects, row.classTeacher ? "Yes" : "No", row.completed, row.missed, row.coveredForOthers, row.leaveDays]),
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Money and activity over a date range — read straight from the source rows.
+// -----------------------------------------------------------------------------
+
+const rupeesCell = (minor: number) => (minor / 100).toFixed(2);
+const words = (value: string) => value.charAt(0) + value.slice(1).toLowerCase().replace(/_/g, " ");
+
+/** Fee receipts in a range. Void receipts are listed, marked, and count for nothing. */
+export async function feePaymentsTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const rows = await ctx.db.feePayment.findMany({
+    where: { paidOn: { gte: from, lte: to } },
+    orderBy: [{ paidOn: "asc" }, { receiptNo: "asc" }],
+    select: {
+      paidOn: true,
+      receiptNo: true,
+      amountMinor: true,
+      method: true,
+      referenceNo: true,
+      voidedAt: true,
+      voidReason: true,
+      student: { select: { firstName: true, lastName: true, admissionNumber: true } },
+    },
+  });
+  return {
+    head: ["Date", "Receipt", "Student", "Admission no.", "Method", "Reference", "Amount (₹)", "Status"],
+    rows: rows.map((row) => [
+      formatDate(row.paidOn),
+      row.receiptNo,
+      fullName(row.student),
+      row.student.admissionNumber,
+      words(row.method),
+      row.referenceNo ?? "",
+      rupeesCell(row.amountMinor),
+      row.voidedAt ? `Void${row.voidReason ? `: ${row.voidReason}` : ""}` : "Paid",
+    ]),
+  };
+}
+
+export async function expensesTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const rows = await ctx.db.expense.findMany({
+    where: { spentOn: { gte: from, lte: to } },
+    orderBy: { spentOn: "asc" },
+    select: { spentOn: true, category: true, description: true, amountMinor: true, method: true, reference: true },
+  });
+  return {
+    head: ["Date", "Category", "Description", "Method", "Reference", "Amount (₹)"],
+    rows: rows.map((row) => [formatDate(row.spentOn), words(row.category), row.description, words(row.method), row.reference ?? "", rupeesCell(row.amountMinor)]),
+  };
+}
+
+export async function salaryPaymentsTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const rows = await ctx.db.salaryPayment.findMany({
+    where: { paidOn: { gte: from, lte: to } },
+    orderBy: [{ paidOn: "asc" }],
+    select: { paidOn: true, forMonth: true, amountMinor: true, method: true, reference: true, teacher: { select: { firstName: true, lastName: true, employeeId: true } } },
+  });
+  const month = new Intl.DateTimeFormat("en-IN", { month: "short", year: "numeric", timeZone: "UTC" });
+  return {
+    head: ["Paid on", "For month", "Teacher", "Employee ID", "Method", "Reference", "Amount (₹)"],
+    rows: rows.map((row) => [formatDate(row.paidOn), month.format(row.forMonth), fullName(row.teacher), row.teacher.employeeId, words(row.method), row.reference ?? "", rupeesCell(row.amountMinor)]),
+  };
+}
+
+/** Classes taken by a substitute, and classes missed, in a range — from the class records. */
+export async function substituteClassesTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const rows = await ctx.db.classSession.findMany({
+    // A stand-in who marked the class remote or cancelled still took it over.
+    where: { date: { gte: from, lte: to }, OR: [{ status: { in: ["SUBSTITUTE", "MISSED"] } }, { status: { in: ["REMOTE", "CANCELLED"] }, actualTeacherId: { not: null } }] },
+    orderBy: [{ date: "asc" }],
+    select: {
+      date: true,
+      status: true,
+      scheduledTeacherId: true,
+      actualTeacherId: true,
+      topic: true,
+      scheduledTeacher: { select: { firstName: true, lastName: true } },
+      actualTeacher: { select: { firstName: true, lastName: true } },
+      timetableSlot: { select: { startMinute: true, subject: { select: { name: true } }, section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } } } },
+    },
+  });
+  const time = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+  return {
+    head: ["Date", "Time", "Class", "Subject", "Timetabled teacher", "Taken by", "Status", "Topic"],
+    rows: rows
+      .filter((row) => row.status === "SUBSTITUTE" || row.status === "MISSED" || row.actualTeacherId !== row.scheduledTeacherId)
+      .map((row) => [
+        formatDate(row.date),
+        time(row.timetableSlot.startMinute),
+        sectionLabel(row.timetableSlot.section),
+        row.timetableSlot.subject.name,
+        fullName(row.scheduledTeacher),
+        row.actualTeacher && row.actualTeacherId !== row.scheduledTeacherId ? fullName(row.actualTeacher) : row.status === "MISSED" ? "—" : fullName(row.scheduledTeacher),
+        words(row.status),
+        row.topic ?? "",
+      ]),
+  };
+}
+
+/** Homework set in a range, by section and subject. */
+export async function homeworkTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const rows = await ctx.db.homework.findMany({
+    where: { assignedOn: { gte: from, lte: to } },
+    orderBy: [{ assignedOn: "asc" }],
+    select: {
+      assignedOn: true,
+      dueOn: true,
+      title: true,
+      status: true,
+      subject: { select: { name: true } },
+      teacher: { select: { firstName: true, lastName: true } },
+      section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } },
+    },
+  });
+  return {
+    head: ["Set on", "Due", "Class", "Subject", "Teacher", "Title", "Status"],
+    rows: rows.map((row) => [formatDate(row.assignedOn), formatDate(row.dueOn), sectionLabel(row.section), row.subject.name, fullName(row.teacher), row.title, words(row.status)]),
+  };
+}
+
+/** Support records this session — staff-only detail, never shown to families. */
+export async function supportTable(ctx: TenantContext): Promise<ReportTable> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const sessionId = await currentSessionId(ctx);
+  const rows = sessionId
+    ? await ctx.db.studentSupport.findMany({
+        where: { academicSessionId: sessionId },
+        orderBy: [{ createdAt: "asc" }],
+        select: {
+          createdAt: true,
+          status: true,
+          reason: true,
+          action: true,
+          priority: true,
+          resolvedAt: true,
+          student: { select: { firstName: true, lastName: true, admissionNumber: true } },
+          section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } },
+          subject: { select: { name: true } },
+          teacher: { select: { firstName: true, lastName: true } },
+        },
+      })
+    : [];
+  return {
+    head: ["Opened", "Student", "Admission no.", "Class", "Subject", "Teacher", "Reason", "Action", "Priority", "Status", "Resolved"],
+    rows: rows.map((row) => [
+      formatDate(row.createdAt),
+      fullName(row.student),
+      row.student.admissionNumber,
+      sectionLabel(row.section),
+      row.subject?.name ?? "",
+      row.teacher ? fullName(row.teacher) : "",
+      words(row.reason),
+      words(row.action),
+      words(row.priority),
+      words(row.status),
+      row.resolvedAt ? formatDate(row.resolvedAt) : "",
+    ]),
   };
 }

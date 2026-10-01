@@ -24,7 +24,7 @@ import {
   createFeeHead,
   recordPayment,
   removeCharge,
-  removePayment,
+  voidPayment,
   setFeeHeadActive,
 } from "@/server/finance/fees";
 import { recordExpense, removeExpense } from "@/server/finance/expenses";
@@ -143,22 +143,21 @@ export async function removeChargeAction(_p: Result, formData: FormData): Promis
  * reopens on the same student with the new receipt ready to view or print.
  */
 export async function recordPaymentAction(
-  _p: ActionResult<{ paymentId: string; studentId: string } | undefined>,
+  _p: ActionResult<{ paymentId: string; studentId: string; desk: string } | undefined>,
   formData: FormData,
-): Promise<ActionResult<{ paymentId: string; studentId: string } | undefined>> {
+): Promise<ActionResult<{ paymentId: string; studentId: string; desk: string } | undefined>> {
   return performAction(
     async () => {
-      const ctx = await admin();
+      // The fee desk: the School Admin, or staff holding "Collect fees" (checked in the service).
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF");
       const input = parseFormData(paymentSchema, formData);
       const { id } = await recordPayment(ctx, input);
-      return successResult(`Fee payment recorded. Receipt ${input.receiptNo} is ready to print.`, { paymentId: id, studentId: input.studentId });
+      const desk = ctx.user.role === "SCHOOL_ADMIN" ? "/school-admin/finance/payments" : "/staff/fees";
+      return successResult(`Fee payment recorded. Receipt ${input.receiptNo} is ready to print.`, { paymentId: id, studentId: input.studentId, desk });
     },
     {
-      revalidate: FINANCE_PAGES,
-      redirectTo: (data) =>
-        data
-          ? (`/school-admin/finance/payments?student=${data.studentId}&receipt=${data.paymentId}` as Route)
-          : null,
+      revalidate: [...FINANCE_PAGES, "/staff"],
+      redirectTo: (data) => (data ? (`${data.desk}?student=${data.studentId}&receipt=${data.paymentId}` as Route) : null),
     },
   );
 }
@@ -179,8 +178,8 @@ export async function removePaymentAction(_p: Result, formData: FormData): Promi
     async () => {
       const ctx = await admin();
       const { paymentId } = parseFormData(z.object({ paymentId: id }), formData);
-      await removePayment(ctx, paymentId);
-      return successResult("Payment removed.");
+      await voidPayment(ctx, paymentId, "Entered by mistake");
+      return successResult("Receipt voided. It stays on record, marked void.");
     },
     { revalidate: FINANCE_PAGES },
   );

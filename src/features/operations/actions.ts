@@ -11,6 +11,8 @@ import {
   assignTransportSchema,
   bookSchema,
   issueBookSchema,
+  libraryRulesSchema,
+  renewLoanSchema,
   returnBookSchema,
   routeSchema,
   staffSchema,
@@ -20,9 +22,10 @@ import {
 import { portalAccessSchema } from "@/lib/validation/school";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import { bulkAssetStatus, importAssets, saveAsset } from "@/server/operations/inventory";
-import { importBooks, issueBook, markFinePaid, returnBook, saveBook } from "@/server/operations/library";
-import { grantStaffPortal, importStaff, saveStaff } from "@/server/operations/staff";
-import type { Credentials } from "@/server/platform/schools";
+import { importBooks, issueBook, markFinePaid, renewLoan, returnBook, saveBook, saveLibraryRules } from "@/server/operations/library";
+import { grantStaffPortal, importStaff, saveStaffDetails } from "@/server/operations/staff";
+import { inviteMessage } from "@/server/auth/account-links";
+import { emailMoveMessage } from "@/server/people/accounts";
 import {
   addStop,
   assignTransport,
@@ -37,6 +40,8 @@ import { performAction } from "@/server/perform-action";
 type Result = ActionResult<undefined>;
 const PAGES = ["/school-admin", "/parent", "/student"];
 const admin = () => requireTenantForAction("SCHOOL_ADMIN");
+/** The library desk: the School Admin, or staff holding "Run the library" (checked in the service). */
+const librarian = () => requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF");
 
 export type ImportResult = ActionResult<undefined>;
 type ImportError = { line: number; message: string };
@@ -63,22 +68,22 @@ export async function saveStaffAction(_p: ActionResult<{ id: string; created: bo
   return performAction(
     async () => {
       const input = parseFormData(staffSchema, formData);
-      const id = await saveStaff(await admin(), input);
-      return successResult(input.staffId ? "Staff member saved." : "Staff member added. Give them a login below if they need one.", { id, created: !input.staffId });
+      const { id, emailMove } = await saveStaffDetails(await admin(), input);
+      return successResult(input.staffId ? `Staff member saved.${emailMoveMessage(emailMove)}` : "Staff member added. Give them a login below if they need one.", { id, created: !input.staffId });
     },
     // A new record opens on its own page, where the login is issued.
     { revalidate: [...PAGES, "/staff"], redirectTo: (data) => (data?.created ? (`/school-admin/staff/${data.id}` as Route) : ("/school-admin/staff" as Route)) },
   );
 }
 
-type CredentialsResult = ActionResult<{ credentials?: Credentials } | undefined>;
+type CredentialsResult = ActionResult<undefined>;
 
 export async function grantStaffPortalAction(_p: CredentialsResult, formData: FormData): Promise<CredentialsResult> {
   return performAction(
     async () => {
       const { personId, email } = parseFormData(portalAccessSchema, formData);
-      const credentials = await grantStaffPortal(await admin(), personId, email);
-      return successResult("Staff login created. Share the sign-in below — the password is not shown again.", { credentials });
+      const invite = await grantStaffPortal(await admin(), personId, email);
+      return successResult(`Staff login created. ${inviteMessage(invite)}`);
     },
     { revalidate: PAGES },
   );
@@ -154,31 +159,46 @@ export async function importTransportAction(_p: ImportResult, formData: FormData
 
 export async function saveBookAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    await saveBook(await admin(), parseFormData(bookSchema, formData));
+    await saveBook(await librarian(), parseFormData(bookSchema, formData));
     return successResult("Book saved.");
-  }, { revalidate: PAGES });
+  }, { revalidate: [...PAGES, "/staff"] });
 }
 
 export async function issueBookAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    await issueBook(await admin(), parseFormData(issueBookSchema, formData));
-    return successResult("Book issued.");
-  }, { revalidate: PAGES });
+    const { copyCode } = await issueBook(await librarian(), parseFormData(issueBookSchema, formData));
+    return successResult(`Book Issued Successfully (copy ${copyCode}).`);
+  }, { revalidate: [...PAGES, "/staff"] });
 }
 
 export async function returnBookAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    const { fineMinor } = await returnBook(await admin(), parseFormData(returnBookSchema, formData));
+    const { fineMinor } = await returnBook(await librarian(), parseFormData(returnBookSchema, formData));
     return successResult(fineMinor ? `Returned late — fine ₹${(fineMinor / 100).toFixed(0)}.` : "Returned.");
-  }, { revalidate: PAGES });
+  }, { revalidate: [...PAGES, "/staff"] });
+}
+
+export async function renewLoanAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(async () => {
+    await renewLoan(await librarian(), parseFormData(renewLoanSchema, formData));
+    return successResult("Loan renewed.");
+  }, { revalidate: [...PAGES, "/staff"] });
+}
+
+/** School Admin: loan period, borrowing limit and fine rate. */
+export async function saveLibraryRulesAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(async () => {
+    await saveLibraryRules(await requireTenantForAction("SCHOOL_ADMIN"), parseFormData(libraryRulesSchema, formData));
+    return successResult("Library rules saved.");
+  }, { revalidate: [...PAGES, "/staff"] });
 }
 
 export async function markFinePaidAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
     const { issueId } = parseFormData(z.object({ issueId: id }), formData);
-    await markFinePaid(await admin(), issueId);
+    await markFinePaid(await librarian(), issueId);
     return successResult("Fine marked as paid.");
-  }, { revalidate: PAGES });
+  }, { revalidate: [...PAGES, "/staff"] });
 }
 
 export async function importBooksAction(_p: ImportResult, formData: FormData): Promise<ImportResult> {

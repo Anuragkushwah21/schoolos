@@ -4,7 +4,8 @@ import type { Prisma } from "@/generated/prisma/client";
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
 import type { TenantContext } from "@/server/auth/current-user";
-import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
+import { addDays, today } from "@/lib/dates";
+import { assertAdminOrStaffPermission, requireStaffSelf } from "@/server/auth/staff-access";
 
 /**
  * Read-only views for non-teaching staff who have been granted a module.
@@ -73,4 +74,19 @@ export async function staffStudentDirectory(ctx: TenantContext, filters: { q?: s
     page,
     pageCount: Math.max(1, Math.ceil(total / DIRECTORY_PAGE_SIZE)),
   };
+}
+
+/** The signed-in staff member's own register marks for the last 30 days. */
+export async function myStaffAttendance(ctx: TenantContext) {
+  const staff = await requireStaffSelf(ctx);
+  const to = today();
+  const from = addDays(to, -30);
+  const rows = await ctx.db.staffAttendance.findMany({
+    where: { staffMemberId: staff.id, date: { gte: from, lte: to } },
+    orderBy: { date: "desc" },
+    select: { date: true, status: true, remarks: true },
+  });
+  const counts = { PRESENT: 0, LATE: 0, ABSENT: 0, ON_LEAVE: 0 };
+  for (const row of rows) counts[row.status] += 1;
+  return { from, to, rows, counts };
 }

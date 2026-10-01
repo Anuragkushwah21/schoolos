@@ -212,7 +212,7 @@ export async function schoolTracker(actor: SessionUser, filters: { q?: string | 
         },
       },
     }),
-    prisma.feePayment.groupBy({ by: ["schoolId"], _sum: { amountMinor: true } }),
+    prisma.feePayment.groupBy({ by: ["schoolId"], where: { voidedAt: null }, _sum: { amountMinor: true } }),
   ]);
 
   const revenueBySchool = new Map(revenue.map((row) => [row.schoolId, row._sum.amountMinor ?? 0]));

@@ -58,6 +58,31 @@ export const sectionSchema = z.object({
   classTeacherId: optionalId,
 });
 
+/**
+ * A section's seats shared among streams — sent as one JSON list so the rows
+ * stay together: `[{ streamId, capacity }]`. The total is checked against
+ * the section's capacity on the server.
+ */
+const allocationRow = z.object({
+  streamId: id,
+  capacity: z.coerce.number({ error: "Enter the number of seats" }).int("Seats must be a whole number").min(0, "Seats cannot be negative").max(500, "At most 500 seats"),
+});
+export const streamAllocationSchema = z.object({
+  sectionId: id,
+  allocations: z
+    .string()
+    .max(10_000)
+    .transform((value, ctx) => {
+      try {
+        return JSON.parse(value || "[]") as unknown;
+      } catch {
+        ctx.addIssue({ code: "custom", message: "The stream seats could not be read. Reload the page and try again." });
+        return z.NEVER;
+      }
+    })
+    .pipe(z.array(allocationRow).max(20, "At most 20 streams in one section")),
+});
+
 export const updateSectionSchema = z.object({
   sectionId: id,
   name: requiredText("a section name", 20),
@@ -130,6 +155,8 @@ export const createStudentSchema = z
   .object({
     ...studentFields,
     sectionId: id,
+    /** Required only where the section's seats are shared among streams; checked on the server. */
+    streamId: optionalId,
     rollNumber: optionalText(10),
     /**
      * A student cannot be admitted without somebody responsible for them, so
@@ -142,11 +169,25 @@ export const createStudentSchema = z
     parentLastName: optionalText(60),
     parentPhone: optionalPhone,
     parentEmail: optionalEmail,
+    parentAddress: optionalText(200),
     relationship: optionalEnum(RELATIONSHIPS),
+    /** Ticked after the office has seen the "a parent with this mobile exists" warning. */
+    confirmNewParent: checkbox,
+    /** Classes 6–12 only; the server refuses them for Nursery–5. */
+    studentEmail: optionalEmail,
+    studentPhone: optionalPhone,
+    studentLogin: checkbox,
   })
   .superRefine((data, ctx) => {
     if (data.guardianMode === "existing" && !data.existingParentId) {
       ctx.addIssue({ code: "custom", path: ["existingParentId"], message: "Choose a guardian" });
+    }
+    if (data.studentLogin && !data.studentEmail) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["studentEmail"],
+        message: "Student login requires a student email for email activation. Add the student's email, or turn off student login — the admission works either way.",
+      });
     }
     if (data.guardianMode === "new") {
       if (!data.parentFirstName) {
@@ -166,6 +207,8 @@ export type CreateStudentInput = z.infer<typeof createStudentSchema>;
 export const updateStudentSchema = z.object({
   studentId: id,
   ...studentFields,
+  /** Class 6–12 only: the student's email, which is also their sign-in address when they have a login. Absent = unchanged. */
+  email: optionalEmail.optional(),
   admissionNumber: requiredText("an admission number", 30),
   /** Optional: status normally changes through "Change status", which records a date and reason. */
   status: z.enum(STUDENT_STATUSES).optional(),
@@ -177,6 +220,8 @@ export const enrollmentSchema = z.object({
   studentId: id,
   academicSessionId: id,
   sectionId: id,
+  /** Where the section shares seats among streams. Blank keeps the student's stream. */
+  streamId: optionalId.transform((value) => value ?? undefined),
   rollNumber: optionalText(10),
 });
 
@@ -218,6 +263,10 @@ export const updateParentSchema = z.object({
   email: optionalEmail,
   occupation: optionalText(80),
   addressLine: optionalText(200),
+  /** Sent only by the form that shows the ID-proof fields; otherwise they are left alone. */
+  withIdProof: checkbox,
+  idProofType: optionalText(40),
+  idProofNumber: optionalText(40),
 });
 
 export const portalAccessSchema = z.object({
@@ -266,6 +315,8 @@ export const assignmentSchema = z.object({
   teacherId: id,
   subjectId: id,
   sectionId: id,
+  /** One stream / group of the section; blank for the whole section. */
+  streamId: optionalId,
 });
 
 

@@ -7,7 +7,7 @@ export const POST = apiRoute<{ parentId: string }>(
   { roles: ["SCHOOL_ADMIN"] },
   async ({ request, ctx, params }) => {
     const { email } = await readJson(request, portalAccessSchema, { personId: params.parentId });
-    const credentials = await grantParentPortal(ctx, params.parentId, email);
-    return apiSuccess(credentials, { status: 201 });
+    const invite = await grantParentPortal(ctx, params.parentId, email);
+    return apiSuccess(invite, { status: 201 });
   },
 );

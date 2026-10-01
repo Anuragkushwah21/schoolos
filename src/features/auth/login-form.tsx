@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 
 import { useT } from "@/components/i18n/i18n-provider";
@@ -64,6 +65,9 @@ export function LoginForm() {
           aria-describedby={fieldErrors?.password ? "password-error" : undefined}
         />
         <FieldError id="password-error" messages={fieldErrors?.password} />
+        <Link href="/forgot-password" className="text-primary w-fit text-sm hover:underline">
+          Forgot password?
+        </Link>
       </div>
 
       <Button

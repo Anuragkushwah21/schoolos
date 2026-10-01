@@ -24,6 +24,9 @@ export default async function AdminAttendancePage(props: PageProps<"/school-admi
         description="Mark or correct any section's register."
         actions={
           <>
+            <Button asChild>
+              <Link href="/school-admin/attendance/cover">Who covers today</Link>
+            </Button>
             <Button asChild variant="outline">
               <Link href="/school-admin/attendance/staff">Staff attendance</Link>
             </Button>

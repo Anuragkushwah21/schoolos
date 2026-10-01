@@ -22,6 +22,8 @@ export default async function NewTeacherSupportPage(props: PageProps<"/teacher/s
       <SupportForm
         students={options.students}
         subjects={options.subjects}
+        subjectsByStudent={options.subjectsByStudent}
+        generalStudentIds={options.generalStudentIds}
         defaults={{
           // Hints only: the server re-checks the student, subject and concern.
           studentId: param(search.student),

@@ -11,9 +11,9 @@ import type { MessageKey } from "@/lib/i18n/translate";
 import { formatDate, formatDateTime, formatMinutes } from "@/lib/dates";
 import { telHref } from "@/server/attendance/absentees";
 import { getIntlLocale, getT } from "@/server/i18n";
-import type { SupportRow, getSupport, listConcerns } from "@/server/support/service";
+import type { SupportRow, getSupport } from "@/server/support/service";
 
-import { ConcernReviewForm, FollowUpForm } from "./forms";
+import { FollowUpForm } from "./forms";
 
 const k = (key: string) => key as MessageKey;
 
@@ -95,8 +95,11 @@ export async function SupportTable({ rows, basePath, showTeacher = false }: { ro
 export async function SupportDetailView({
   support,
   extraClassHref,
+  concernBasePath = "/school-admin/concerns",
 }: {
   support: Awaited<ReturnType<typeof getSupport>>;
+  /** Where the linked concern's conversation lives for this viewer. */
+  concernBasePath?: "/school-admin/concerns" | "/teacher/concerns";
   /** School Admin: where "Schedule extra class" goes, when one is recommended. */
   extraClassHref?: Route | null;
 }) {
@@ -163,21 +166,29 @@ export async function SupportDetailView({
         {support.concern ? (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="flex flex-wrap items-center gap-2">
                 <MessageCircleHeartIcon className="text-info size-5" aria-hidden />
-                {t("support.parentConcerns")}
+                {support.concern.ref}
+                <StatusBadge status={support.concern.status} />
               </CardTitle>
-              <CardDescription>{t("support.concernFrom", { parent: support.concern.parent })}</CardDescription>
+              {support.concern.parent ? <CardDescription>{t("support.concernFrom", { parent: support.concern.parent })}</CardDescription> : null}
             </CardHeader>
             <CardContent className="flex flex-col gap-2 text-sm">
-              <p className="font-medium">{t(k(`support.reason.${support.concern.reason}`))}</p>
-              {support.concern.message ? <p className="bg-muted rounded-lg px-3 py-2">{support.concern.message}</p> : null}
-              <Button asChild variant="outline" size="sm" className="w-fit">
-                <a href={telHref(support.concern.parentPhone)}>
-                  <PhoneIcon aria-hidden />
-                  {support.concern.parentPhone}
-                </a>
-              </Button>
+              <p className="font-medium">{t(k(`concerns.types.${support.concern.type}`))}</p>
+              {support.concern.message ? <p className="bg-muted rounded-lg px-3 py-2 whitespace-pre-wrap">{support.concern.message}</p> : null}
+              <div className="flex flex-wrap gap-2">
+                <Button asChild variant="outline" size="sm">
+                  <Link href={`${concernBasePath}/${support.concern.id}` as Route}>{t("concerns.conversation")} →</Link>
+                </Button>
+                {support.concern.parentPhone ? (
+                  <Button asChild variant="outline" size="sm">
+                    <a href={telHref(support.concern.parentPhone)}>
+                      <PhoneIcon aria-hidden />
+                      {support.concern.parentPhone}
+                    </a>
+                  </Button>
+                ) : null}
+              </div>
             </CardContent>
           </Card>
         ) : null}
@@ -225,61 +236,5 @@ export async function SupportDetailView({
         </Card>
       </div>
     </div>
-  );
-}
-
-/** Parent concerns awaiting review, with the reply form and "add support for this". */
-export async function ConcernList({
-  concerns,
-  addHref,
-}: {
-  concerns: Awaited<ReturnType<typeof listConcerns>>;
-  addHref: (concern: { id: string; studentId: string }) => Route;
-}) {
-  const [t, intl] = await Promise.all([getT(), getIntlLocale()]);
-  if (!concerns.length) return null;
-  return (
-    <section aria-labelledby="concerns" className="mb-8">
-      <h2 id="concerns" className="mb-3 flex items-center gap-2 text-base font-semibold">
-        <MessageCircleHeartIcon className="text-info size-5" aria-hidden />
-        {t("support.parentConcerns")}
-        <span className="bg-info-soft text-info-strong rounded-full px-2 text-xs tabular-nums">{concerns.length}</span>
-      </h2>
-      <ul className="grid gap-4 lg:grid-cols-2">
-        {concerns.map((concern) => (
-          <li key={concern.id} className="bg-card flex flex-col gap-3 rounded-2xl border p-4 shadow-[0_1px_3px_rgb(15_23_42/0.06)]">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <p className="font-semibold">
-                  {concern.student} · {concern.subject ?? t("support.general")}
-                </p>
-                <p className="text-muted-foreground text-xs">
-                  {concern.section ? `${concern.section} · ` : ""}
-                  {t("support.concernFrom", { parent: concern.parent })} · {formatDate(concern.createdAt, intl)}
-                  {concern.teacher ? ` · ${concern.teacher}` : ""}
-                </p>
-              </div>
-              <StatusBadge status={concern.status} />
-            </div>
-            <p className="text-sm font-medium">{t(k(`support.reason.${concern.reason}`))}</p>
-            {concern.message ? <p className="bg-muted rounded-lg px-3 py-2 text-sm">{concern.message}</p> : null}
-            <div className="flex flex-wrap gap-2">
-              {concern.supportId ? null : (
-                <Button asChild size="sm">
-                  <Link href={addHref(concern)}>{t("support.addFromConcern")}</Link>
-                </Button>
-              )}
-              <Button asChild variant="outline" size="sm">
-                <a href={telHref(concern.parentPhone)}>
-                  <PhoneIcon aria-hidden />
-                  {t("absentees.call")}
-                </a>
-              </Button>
-            </div>
-            <ConcernReviewForm concernId={concern.id} status={concern.status} />
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }

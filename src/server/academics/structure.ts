@@ -3,6 +3,7 @@ import "server-only";
 import { today } from "@/lib/dates";
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
+import { checkSectionChange } from "@/server/academics/streams";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -456,6 +457,7 @@ export async function getSection(ctx: TenantContext, sectionId: string) {
         select: {
           id: true,
           rollNumber: true,
+          stream: { select: { name: true } },
           student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true, gender: true } },
         },
       },
@@ -463,6 +465,7 @@ export async function getSection(ctx: TenantContext, sectionId: string) {
         select: {
           id: true,
           subject: { select: { name: true } },
+          stream: { select: { name: true } },
           teacher: { select: { id: true, firstName: true, lastName: true } },
         },
       },
@@ -533,7 +536,7 @@ export async function updateSection(
   ctx: TenantContext,
   sectionId: string,
   input: { name: string; streamId: string | null; capacity: number | null; classTeacherId: string | null },
-): Promise<void> {
+): Promise<{ warning: string | null }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   await assertStreamAndTeacher(ctx, input);
 
@@ -542,6 +545,8 @@ export async function updateSection(
     select: { id: true, classTeacherId: true, academicSessionId: true },
   });
   if (!existing) throw new NotFoundError();
+  // Stream shares must still fit; students over a lowered capacity stay put.
+  const warning = await checkSectionChange(ctx.db, sectionId, input);
 
   try {
     const { count } = await ctx.db.section.updateMany({
@@ -574,6 +579,7 @@ export async function updateSection(
     actorId: ctx.user.id,
     summary: `Section ${input.name.toUpperCase()} updated.`,
   });
+  return { warning };
 }
 
 /**
@@ -716,7 +722,12 @@ export async function classTeacherHistory(ctx: TenantContext, sectionId: string)
 export async function deleteSection(ctx: TenantContext, sectionId: string): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   try {
-    const { count } = await ctx.db.section.deleteMany({ where: { id: sectionId } });
+    // Its stream shares are configuration, not history: they go with it. Anything
+    // else attached (students, records) still blocks the delete and rolls this back.
+    const count = await ctx.db.$transaction(async (tx) => {
+      await tx.sectionStream.deleteMany({ where: { sectionId } });
+      return (await tx.section.deleteMany({ where: { id: sectionId } })).count;
+    });
     if (!count) throw new NotFoundError();
   } catch (error) {
     if (isForeignKeyViolation(error)) {

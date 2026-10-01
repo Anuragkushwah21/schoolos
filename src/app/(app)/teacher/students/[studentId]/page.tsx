@@ -7,6 +7,7 @@ import { ActionButton } from "@/components/forms/action-button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { NoSessionNotice } from "@/components/shared/no-session-notice";
 import { PageHeader } from "@/components/shared/page-header";
+import { PersonAvatar } from "@/components/shared/person-avatar";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,8 @@ import { EditRemarkForm, RemarkForm } from "@/features/classwork/forms";
 import { formatDate, formatDateTime } from "@/lib/dates";
 import { formatPercent, humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
+import { photoUrlsFor } from "@/server/people/photos";
+import { canMarkAttendance } from "@/server/auth/teacher-access";
 import { getCurrentSession } from "@/server/academics/structure";
 import { remarksForStudent } from "@/server/classwork/remarks";
 import { orHidden } from "@/server/page-helpers";
@@ -58,6 +61,7 @@ export default async function TeacherStudentPage(
     .map((subject) => ({ value: subject.id, label: subject.name }));
 
   const { student, counts } = detail;
+  const [takesRegister, photos] = await Promise.all([canMarkAttendance(ctx, detail.section.id), photoUrlsFor(ctx, "STUDENT", [student.id])]);
 
   return (
     <>
@@ -66,16 +70,20 @@ export default async function TeacherStudentPage(
         title={student.name}
         description={
           <span className="flex flex-wrap items-center gap-2">
+            <PersonAvatar name={student.name} photoUrl={photos.get(student.id)} className="size-12" />
             <StatusBadge status={student.status} />
             {student.rollNumber ? `Roll ${student.rollNumber} · ` : ""}
             {student.admissionNumber}
+            {student.gender ? ` · ${humanize(student.gender)}` : ""}
           </span>
         }
         actions={
           <>
-            <Button asChild variant="outline">
-              <Link href={`/teacher/attendance?section=${detail.section.id}`}>Register</Link>
-            </Button>
+            {takesRegister ? (
+              <Button asChild variant="outline">
+                <Link href={`/teacher/attendance?section=${detail.section.id}`}>Register</Link>
+              </Button>
+            ) : null}
             <Button asChild>
               <Link href={`/teacher/support/new?student=${student.id}` as Route}>+ Needs attention</Link>
             </Button>

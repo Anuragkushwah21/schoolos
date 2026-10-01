@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { deleteExamAction, publishExamsAction, unpublishExamAction } from "@/features/exams/actions";
 import { EditExamForm } from "@/features/exams/forms";
 import { formatDate, toDateInput } from "@/lib/dates";
+import { EXAM_STAGE_LABEL, EXAM_STAGE_TONE } from "@/lib/exam-stage";
 import { OUTCOME_LABEL, passMarkFor } from "@/lib/grades";
 import { requireTenant } from "@/server/auth/current-user";
 import { getExamDetail } from "@/server/exams/service";
@@ -23,9 +24,10 @@ const OUTCOME_TONE = { PASS: "positive", FAIL: "negative", INCOMPLETE: "neutral"
 export default async function ExamDetailPage(props: PageProps<"/school-admin/exams/[examId]">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { examId } = await props.params;
-  const { exam, papers, students } = await orNotFound(getExamDetail(ctx, examId));
+  const { exam, papers, students, stage, blocker } = await orNotFound(getExamDetail(ctx, examId));
   const published = exam.status === "PUBLISHED";
-  const missing = papers.reduce((sum, paper) => sum + (paper.expected - paper.entered), 0);
+  // The first paper still short of marks: where "View missing marks" goes.
+  const firstShort = papers.find((paper) => paper.held && paper.entered < paper.expected);
 
   return (
     <>
@@ -36,7 +38,7 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
           <span className="flex flex-wrap items-center gap-2">
             {exam.academicSession.name} · {formatDate(exam.startDate)} – {formatDate(exam.endDate)}
             <TimeStatusBadge status={exam.timeStatus} />
-            <StatusBadge status={exam.status} label={exam.status === "PUBLISHED" ? "Results out" : "Results draft"} />
+            <StatusBadge status={stage} label={EXAM_STAGE_LABEL[stage]} tone={EXAM_STAGE_TONE[stage]} />
           </span>
         }
         actions={
@@ -67,30 +69,51 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
               >
                 Delete
               </ActionButton>
-              <ActionButton
-                action={publishExamsAction}
-                fields={{ examIds: exam.id }}
-                confirm={{
-                  title: "Publish these results?",
-                  description: "Students and parents will see the marks and report cards.",
-                  confirmLabel: "Publish",
-                }}
-              >
-                Publish results
-              </ActionButton>
+              {blocker ? (
+                // Not ready: the button stays visible so the next step is clear,
+                // and the panel below says what is missing.
+                <Button disabled title={`${blocker.headline} ${blocker.detail}`}>
+                  Publish results
+                </Button>
+              ) : (
+                <ActionButton
+                  action={publishExamsAction}
+                  fields={{ examIds: exam.id }}
+                  confirm={{
+                    title: "Publish these results?",
+                    description: "Students and parents will see the marks and report cards.",
+                    confirmLabel: "Publish results",
+                  }}
+                >
+                  Publish results
+                </ActionButton>
+              )}
             </>
           )
         }
       />
 
-      {!published && missing > 0 ? (
-        <p className="mb-6 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning-strong">
-          {missing} marks still to enter. Results can be published once every paper is complete.
+      {!published && blocker ? (
+        <div role="status" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-soft px-4 py-3 text-sm text-warning-strong">
+          <p>
+            <span className="font-medium">{blocker.headline}</span> {blocker.detail}
+          </p>
+          <Button asChild size="sm" variant="outline">
+            {blocker.action === "marks" && firstShort ? (
+              <Link href={`/school-admin/exams/papers/${firstShort.id}` as Route}>View missing marks</Link>
+            ) : (
+              <Link href={"#papers" as Route}>View pending papers</Link>
+            )}
+          </Button>
+        </div>
+      ) : !published ? (
+        <p role="status" className="border-success/30 bg-success-soft text-success-strong mb-6 rounded-lg border px-4 py-3 text-sm">
+          Every paper is held and every mark is in. Results are ready to publish.
         </p>
       ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
-        <Card>
+        <Card id="papers">
           <CardHeader>
             <CardTitle>Papers</CardTitle>
             <CardDescription>Teachers enter marks for their own subjects; you can enter or correct any.</CardDescription>

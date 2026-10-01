@@ -97,3 +97,52 @@ export function schoolRejectedEmail(input: {
     ].join("\n"),
   };
 }
+
+/**
+ * "Activate your SchoolOS account" — a one-time link to choose a password.
+ * No password is ever sent.
+ */
+export function activationEmail(input: { to: string; name: string; role: string; schoolName: string; link: string; days: number }): Mail {
+  return {
+    to: input.to,
+    subject: "Activate your SchoolOS account",
+    text: [
+      `Hello ${input.name},`,
+      "",
+      `Your ${input.role} account has been created for ${input.schoolName}.`,
+      "",
+      "Open the link below to activate your account and create your password:",
+      "",
+      `    ${input.link}`,
+      "",
+      `This activation link is secure, works once, and expires in ${input.days} days.`,
+      "If it has expired, ask your school office to send a new one.",
+      "",
+      "If you did not expect this account, please contact your school administrator.",
+      "SchoolOS never asks for your password by email.",
+      "",
+      "Regards,",
+      input.schoolName,
+      "SchoolOS",
+    ].join("\n"),
+  };
+}
+
+/** A forgotten password: a one-time link to choose a new one. */
+export function passwordResetEmail(input: { to: string; name: string; link: string; minutes: number }): Mail {
+  return {
+    to: input.to,
+    subject: "Reset your SchoolOS password",
+    text: [
+      `Hello ${input.name},`,
+      "",
+      "Someone asked to reset the password for this SchoolOS account.",
+      "Open this link to choose a new password:",
+      "",
+      `    ${input.link}`,
+      "",
+      `The link works once and expires in ${input.minutes} minutes.`,
+      "If you did not ask for this, ignore this email — your password stays as it is.",
+    ].join("\n"),
+  };
+}

@@ -94,7 +94,7 @@ export async function financeOverview(ctx: TenantContext, range: FinanceRange) {
   );
 
   const fees = (from: Date, to: Date) =>
-    db.feePayment.aggregate({ where: { paidOn: between(from, to) }, _sum: { amountMinor: true } });
+    db.feePayment.aggregate({ where: { paidOn: between(from, to), voidedAt: null }, _sum: { amountMinor: true } });
   const expenses = (from: Date, to: Date) =>
     db.expense.aggregate({ where: { spentOn: between(from, to) }, _sum: { amountMinor: true } });
   const salary = (from: Date, to: Date) =>
@@ -128,7 +128,7 @@ export async function financeOverview(ctx: TenantContext, range: FinanceRange) {
     salary(range.from, range.to),
     listFeePositions(ctx),
     db.feePayment.findMany({
-      where: { paidOn: between(trendStart, now) },
+      where: { paidOn: between(trendStart, now), voidedAt: null },
       select: { paidOn: true, amountMinor: true },
     }),
     db.expense.findMany({
@@ -145,7 +145,7 @@ export async function financeOverview(ctx: TenantContext, range: FinanceRange) {
       _sum: { amountMinor: true },
     }),
     db.feePayment.findMany({
-      where: { paidOn: between(range.from, range.to) },
+      where: { paidOn: between(range.from, range.to), voidedAt: null },
       select: { studentId: true, academicSessionId: true, amountMinor: true },
     }),
   ]);

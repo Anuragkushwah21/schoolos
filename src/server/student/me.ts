@@ -7,7 +7,6 @@ import { monthlyAttendance } from "@/server/analytics/student";
 import { homeworkStatus, schoolNow } from "@/lib/time-status";
 import { schoolClosureOn } from "@/server/calendar/holidays";
 import { VISIBLE_PAPER } from "@/server/exams/service";
-import { readStudentFees } from "@/server/finance/fees";
 import { RESOURCE_SELECT } from "@/server/classwork/homework";
 import { type AttendanceCounts, attendedShare, emptyCounts } from "@/server/attendance/service";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -739,23 +738,6 @@ export async function getMyRemarks(ctx: TenantContext) {
       subject: row.subject?.name ?? null,
     })),
   };
-}
-
-/**
- * The student's own fee position.
- *
- * Starts from their own record like everything else here, so there is no id to
- * change. Read-only, and the same rows the office and their parents see.
- * Null when the school has not turned on fees for students.
- */
-export async function getMyFees(ctx: TenantContext) {
-  const me = await requireStudentSelf(ctx);
-  // Parents always see fees; students only when their school has chosen to
-  // show them. Checked here, not just by hiding the page.
-  const school = await ctx.db.school.findFirst({ select: { showFeesToStudents: true } });
-  if (!school?.showFeesToStudents) return null;
-  const account = await readStudentFees(ctx, me.student.id, me.placement.sessionId);
-  return { me, ...account };
 }
 
 /** The subjects this student is actually taught, for the filters. */

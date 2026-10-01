@@ -17,7 +17,7 @@ export default async function TeacherSupportDetailPage(props: PageProps<"/teache
   return (
     <>
       <PageHeader icon={HeartHandshakeIcon} tone="green" back={{ href: "/teacher/support", label: t("support.title") }} title={t("support.additionalSupport")} />
-      <SupportDetailView support={support} />
+      <SupportDetailView support={support} concernBasePath="/teacher/concerns" />
     </>
   );
 }

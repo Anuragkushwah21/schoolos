@@ -9,6 +9,7 @@ import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { SetupNotice } from "@/components/shared/setup-notice";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { EXAM_STAGE_LABEL, EXAM_STAGE_TONE, EXAM_STAGES } from "@/lib/exam-stage";
 import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { Button } from "@/components/ui/button";
 import { publishExamsAction } from "@/features/exams/actions";
@@ -27,11 +28,14 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams">)
 
   const search = await props.searchParams;
   const sectionId = param(search.section);
-  const status = enumParam(search.status, ["DRAFT", "PUBLISHED"] as const);
-  const [exams, sections] = await Promise.all([
-    listExams(ctx, { academicSessionId: session.id, sectionId, status }),
+  // The stage is worked out from marks, so it is filtered here rather than in the query.
+  const stage = enumParam(search.status, EXAM_STAGES);
+  const [all, sections] = await Promise.all([
+    listExams(ctx, { academicSessionId: session.id, sectionId }),
     sectionOptions(ctx, session.id),
   ]);
+  const exams = stage ? all.filter((exam) => exam.stage === stage) : all;
+  const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length;
 
   return (
     <>
@@ -51,12 +55,9 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams">)
           {
             name: "status",
             label: "Status",
-            defaultValue: status,
+            defaultValue: stage,
             allLabel: "Any status",
-            options: [
-              { value: "DRAFT", label: "Draft" },
-              { value: "PUBLISHED", label: "Published" },
-            ],
+            options: EXAM_STAGES.map((value) => ({ value, label: EXAM_STAGE_LABEL[value] })),
           },
         ]}
       />
@@ -81,7 +82,7 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams">)
                 {exams.map((exam) => (
                   <tr key={exam.id} className="border-t">
                     <td className="px-3 py-2">
-                      {exam.status === "DRAFT" ? (
+                      {exam.stage === "READY_TO_PUBLISH" ? (
                         <input
                           type="checkbox"
                           name="examIds"
@@ -107,7 +108,7 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams">)
                     <td className="px-3 py-2">
                       <span className="flex flex-wrap gap-1">
                         <TimeStatusBadge status={exam.timeStatus} />
-                        <StatusBadge status={exam.status} label={exam.status === "PUBLISHED" ? "Results out" : "Results draft"} />
+                        <StatusBadge status={exam.stage} label={EXAM_STAGE_LABEL[exam.stage]} tone={EXAM_STAGE_TONE[exam.stage]} />
                       </span>
                     </td>
                   </tr>
@@ -116,8 +117,12 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams">)
             </table>
           </div>
           <div className="flex items-center gap-3">
-            <SubmitButton pendingLabel="Publishing…">Publish selected results</SubmitButton>
-            <p className="text-muted-foreground text-xs">Only exams with every mark entered are published.</p>
+            {ready ? <SubmitButton pendingLabel="Publishing…">Publish selected results</SubmitButton> : null}
+            <p className="text-muted-foreground text-xs">
+              {ready
+                ? `${ready} exam${ready === 1 ? " is" : "s are"} ready to publish — tick the ones to release.`
+                : "Nothing is ready to publish yet. An exam is ready once every paper is held and every mark is in."}
+            </p>
           </div>
         </ActionForm>
       ) : (

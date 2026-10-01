@@ -6,9 +6,9 @@ import { ActionForm } from "@/components/forms/action-form";
 import { FieldRow, SelectField, SubmitButton, TextareaField, TextField } from "@/components/forms/fields";
 import { useT, useTranslateDynamic } from "@/components/i18n/i18n-provider";
 import { humanize } from "@/lib/format";
-import { CONCERN_REASONS, SUPPORT_ACTIONS, SUPPORT_PRIORITIES, SUPPORT_REASONS, SUPPORT_STATUSES } from "@/lib/validation/support";
+import { SUPPORT_ACTIONS, SUPPORT_PRIORITIES, SUPPORT_REASONS, SUPPORT_STATUSES } from "@/lib/validation/support";
 
-import { createSupportAction, followUpSupportAction, raiseConcernAction, reviewConcernAction } from "./actions";
+import { createSupportAction, followUpSupportAction } from "./actions";
 
 type Option = { value: string; label: string };
 
@@ -29,24 +29,49 @@ export function SupportForm({
   students,
   subjects,
   teachers,
+  subjectsByStudent,
+  generalStudentIds,
   defaults = {},
 }: {
   students: Option[];
   subjects: Option[];
   /** Only for the School Admin, who may name the teacher. */
   teachers?: Option[];
+  /** For a teacher: only the subjects they teach each student. */
+  subjectsByStudent?: Record<string, Option[]>;
+  /** For a teacher: students they are class teacher of (support not about one subject). */
+  generalStudentIds?: string[];
   defaults?: { studentId?: string; subjectId?: string | null; concernId?: string; reason?: string };
 }) {
   const t = useT();
   const label = useLabels();
   const [reason, setReason] = useState(defaults.reason ?? "NEEDS_PRACTICE");
+  const [studentId, setStudentId] = useState(defaults.studentId ?? "");
+  const subjectOptions = subjectsByStudent ? (subjectsByStudent[studentId] ?? []) : subjects;
+  const generalAllowed = !generalStudentIds || generalStudentIds.includes(studentId);
 
   return (
     <ActionForm action={createSupportAction} className="max-w-2xl">
       {defaults.concernId ? <input type="hidden" name="concernId" value={defaults.concernId} /> : null}
-      <SelectField name="studentId" label={t("support.student")} options={students} defaultValue={defaults.studentId} placeholder="—" required />
+      <SelectField
+        name="studentId"
+        label={t("support.student")}
+        options={students}
+        value={studentId}
+        onChange={(event) => setStudentId(event.target.value)}
+        placeholder="—"
+        required
+      />
       <FieldRow>
-        <SelectField name="subjectId" label={t("support.subject")} options={subjects} defaultValue={defaults.subjectId ?? ""} placeholder={t("support.general")} />
+        <SelectField
+          key={studentId}
+          name="subjectId"
+          label={t("support.subject")}
+          options={subjectOptions}
+          defaultValue={defaults.subjectId ?? (!generalAllowed && subjectOptions.length === 1 ? subjectOptions[0]!.value : "")}
+          placeholder={generalAllowed ? t("support.general") : "—"}
+          required={!generalAllowed}
+        />
         <TextField name="topic" label={t("support.topic")} placeholder={t("support.topicPlaceholder")} />
       </FieldRow>
       <FieldRow>
@@ -102,60 +127,6 @@ export function FollowUpForm({ supportId, current }: { supportId: string; curren
       />
       <div>
         <SubmitButton pendingLabel={t("support.saving")}>{t("support.saveFollowUp")}</SubmitButton>
-      </div>
-    </ActionForm>
-  );
-}
-
-/**
- * "Raise a concern": child → subject → what you noticed → optional message →
- * send. A concern asks the school to look; it labels nobody.
- */
-export function ConcernForm({ childOptions, subjectsByChild }: { childOptions: Option[]; subjectsByChild: Record<string, Option[]> }) {
-  const t = useT();
-  const label = useLabels();
-  const [child, setChild] = useState(childOptions[0]?.value ?? "");
-  const subjects = subjectsByChild[child] ?? [];
-  return (
-    <ActionForm action={raiseConcernAction} resetOnSuccess className="gap-4">
-      <SelectField name="studentId" label={t("support.child")} options={childOptions} value={child} onChange={(event) => setChild(event.target.value)} required />
-      <SelectField key={child} name="subjectId" label={t("support.subject")} options={subjects} placeholder={t("support.general")} />
-      <SelectField
-        name="reason"
-        label={t("support.reasonLabel")}
-        options={CONCERN_REASONS.map((value) => ({ value, label: label.reason(value) }))}
-        defaultValue="DIFFICULTY_UNDERSTANDING"
-        required
-      />
-      <TextareaField name="message" label={t("support.message")} placeholder={t("support.messagePlaceholder")} rows={3} />
-      <div>
-        <SubmitButton size="lg" pendingLabel={t("support.saving")}>
-          {t("support.raiseConcern")}
-        </SubmitButton>
-      </div>
-    </ActionForm>
-  );
-}
-
-/** Reply to a parent's concern and say where it stands. */
-export function ConcernReviewForm({ concernId, status }: { concernId: string; status: string }) {
-  const t = useT();
-  return (
-    <ActionForm action={reviewConcernAction} className="gap-3">
-      <input type="hidden" name="concernId" value={concernId} />
-      <TextareaField name="response" label={t("support.reply")} placeholder={t("support.replyPlaceholder")} rows={2} />
-      <div className="flex flex-wrap gap-2">
-        {status === "NEW" ? (
-          <SubmitButton variant="outline" name="status" value="REVIEWING" pendingLabel={t("support.saving")}>
-            {t("support.markReviewing")}
-          </SubmitButton>
-        ) : null}
-        <SubmitButton variant="outline" name="status" value="ACTION_TAKEN" pendingLabel={t("support.saving")}>
-          {t("support.markActionTaken")}
-        </SubmitButton>
-        <SubmitButton variant="outline" name="status" value="RESOLVED" pendingLabel={t("support.saving")}>
-          {t("support.markResolved")}
-        </SubmitButton>
       </div>
     </ActionForm>
   );

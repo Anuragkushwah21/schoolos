@@ -1,56 +1,82 @@
 import type { Metadata } from "next";
+
+import { effectiveStaffPermissions } from "@/lib/validation/operations";
 import Link from "next/link";
-import { ChevronRightIcon, HandshakeIcon, MegaphoneIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 
 import { NAV_ICONS } from "@/components/shared/nav-icons";
 import { PageHeader } from "@/components/shared/page-header";
-import { StatCard } from "@/components/shared/stat-card";
-import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { LibraryTodayPanel } from "@/features/operations/library-desk";
+import { SchoolLifeCards } from "@/features/dashboard/school-life";
 import { AlertList } from "@/features/parent/today";
-import { formatDate } from "@/lib/dates";
 import { humanize } from "@/lib/format";
 import { STAFF_PERMISSION_NAV } from "@/lib/nav";
 import { getStaffAlerts } from "@/server/alerts/feeds";
 import { requireTenant } from "@/server/auth/current-user";
 import { requireStaffSelf } from "@/server/auth/staff-access";
-import { myMeetings } from "@/server/communication/meetings";
-import { noticesFor } from "@/server/communication/notices";
-import { getIntlLocale, getT } from "@/server/i18n";
+import { getT } from "@/server/i18n";
+import { libraryToday } from "@/server/operations/library";
+import { myWorkCoversToday } from "@/server/attendance/cover";
 import { orNotFound } from "@/server/page-helpers";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
 /**
  * A staff member's day: their work (the modules the office granted them),
- * meetings coming up and notices. Nothing of the School Admin's screens.
+ * then events, leave, notices and meetings as compact cards. Nothing of the
+ * School Admin's screens.
  */
 export default async function StaffDashboardPage() {
   const ctx = await requireTenant("NON_TEACHING_STAFF");
   const staff = await orNotFound(requireStaffSelf(ctx));
-  const [t, intl, meetings, notices, alerts] = await Promise.all([
-    getT(),
-    getIntlLocale(),
-    myMeetings(ctx, { pastLimit: 0 }),
-    noticesFor(ctx, { take: 5 }),
-    getStaffAlerts(ctx),
-  ]);
-  const next = meetings.upcoming.filter((meeting) => meeting.timeStatus !== "CANCELLED");
+  const [t, alerts] = await Promise.all([getT(), getStaffAlerts(ctx)]);
+  // Work the office handed over for today, on top of their own.
+  const covers = await myWorkCoversToday(ctx);
+  // The librarian's day starts with the desk, not with meetings.
+  const permissions = effectiveStaffPermissions(staff);
+  const runsLibrary = permissions.includes("MANAGE_LIBRARY");
+  const library = runsLibrary ? await libraryToday(ctx) : null;
 
   return (
     <>
-      <PageHeader
+      <PageHeader variant="hero"
         title={`${t("dashboard.staff.hello", { name: staff.firstName })} 👋`}
         description={`${humanize(staff.role)}${staff.department ? ` · ${staff.department}` : ""} · ${ctx.schoolName}`}
       />
+
+      {library ? <LibraryTodayPanel today={library} basePath="/staff/library" canManage addBookHref="/staff/library#add-book" /> : null}
+
+      {covers.length ? (
+        <Card className="border-warning/40 mb-6">
+          <CardHeader>
+            <CardTitle>Today you are also covering</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y text-sm">
+              {covers.map((cover) => (
+                <li key={cover.id} className="py-2.5">
+                  <span className="font-medium">
+                    {cover.for} · {cover.job}
+                  </span>
+                  <span className="text-muted-foreground block">{cover.duties}</span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <section aria-labelledby="my-work" className="mb-8">
         <h2 id="my-work" className="mb-3 text-base font-semibold">
           {t("dashboard.staff.modules")}
         </h2>
-        {staff.permissions.length ? (
+        {permissions.length ? (
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {staff.permissions.map((permission) => {
+            {permissions
+              // "View library" and "Run the library" open the same page: one tile.
+              .filter((permission, index, all) => all.findIndex((other) => STAFF_PERMISSION_NAV[other].href === STAFF_PERMISSION_NAV[permission].href) === index)
+              .map((permission) => {
               const item = STAFF_PERMISSION_NAV[permission];
               const Icon = NAV_ICONS[item.icon];
               return (
@@ -74,46 +100,16 @@ export default async function StaffDashboardPage() {
         )}
       </section>
 
-      <div className="mb-6 grid grid-cols-2 gap-4">
-        <StatCard tone="cyan" icon={HandshakeIcon} label={t("dashboard.staff.upcomingMeetings")} value={next.length} href="/staff/meetings" />
-        <StatCard tone="amber" icon={MegaphoneIcon} label={t("dashboard.staff.notices")} value={notices.length} href="/staff/notices" />
-      </div>
+      <SchoolLifeCards ctx={ctx} base="/staff" />
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("dashboard.forYou")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <AlertList alerts={alerts} emptyText={t("dashboard.nothingNew")} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("dashboard.staff.nextMeetings")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {next.length ? (
-              <ul className="divide-y text-sm">
-                {next.slice(0, 5).map((meeting) => (
-                  <li key={meeting.id} className="flex flex-wrap items-center gap-2 py-2">
-                    <span className="min-w-0 flex-1">
-                      <span className="font-medium">{meeting.title}</span>
-                      <span className="text-muted-foreground block text-xs">
-                        {formatDate(meeting.date, intl)} · {meeting.time}
-                        {meeting.location ? ` · ${meeting.location}` : ""}
-                      </span>
-                    </span>
-                    <TimeStatusBadge status={meeting.timeStatus} />
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-muted-foreground text-sm">{t("dashboard.staff.noMeetings")}</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("dashboard.forYou")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <AlertList alerts={alerts} emptyText={t("dashboard.nothingNew")} />
+        </CardContent>
+      </Card>
     </>
   );
 }

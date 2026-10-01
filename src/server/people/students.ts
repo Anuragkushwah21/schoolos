@@ -6,16 +6,20 @@ import { today } from "@/lib/dates";
 
 import type { Prisma } from "@/generated/prisma/client";
 import type { Gender, ParentRelationship, StudentStatus } from "@/generated/prisma/enums";
-import { ConflictError, NotFoundError } from "@/lib/errors";
+import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import type { CreateStudentInput, UpdateStudentInput } from "@/lib/validation/school";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
+import { type LoginInvite, provisionAccount, sendActivation, unusablePasswordHash } from "@/server/auth/account-links";
+import { assertLoginEmailFree, type EmailMove, moveLoginEmail } from "@/server/people/accounts";
+import { claimSeats } from "@/server/academics/streams";
+import { allocateAdmissionNumber, admissionYear, ensureAdmissionCounter, normaliseImportedAdmissionNumber } from "@/server/people/admission-number";
+import { prisma } from "@/server/db/prisma";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireCurrentSession } from "@/server/academics/structure";
 import { isUniqueViolation } from "@/server/db/errors";
 import type { TenantDb } from "@/server/tenancy/scope";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
-import type { Credentials } from "@/server/platform/schools";
 import { createPortalUser } from "@/server/people/accounts";
 import { changeStudentStatus } from "@/server/people/lifecycle";
 
@@ -175,7 +179,7 @@ export async function getStudentProfile(ctx: TenantContext, studentId: string) {
   const student = await ctx.db.student.findFirst({
     where: { id: studentId },
     include: {
-      user: { select: { id: true, email: true, isActive: true, lastLoginAt: true } },
+      user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, activatedAt: true } },
       enrollments: {
         orderBy: { academicSession: { startDate: "desc" } },
         select: {
@@ -183,9 +187,11 @@ export async function getStudentProfile(ctx: TenantContext, studentId: string) {
           rollNumber: true,
           status: true,
           enrolledOn: true,
+          streamId: true,
+          stream: { select: { name: true } },
           academicSession: { select: { id: true, name: true, isCurrent: true } },
           section: {
-            select: { id: true, name: true, class: { select: { name: true } }, stream: { select: { name: true } } },
+            select: { id: true, name: true, class: { select: { name: true, level: true } }, stream: { select: { name: true } } },
           },
         },
       },
@@ -204,7 +210,10 @@ export async function getStudentProfile(ctx: TenantContext, studentId: string) {
               email: true,
               occupation: true,
               addressLine: true,
-              user: { select: { id: true, email: true, isActive: true, lastLoginAt: true } },
+              // getStudentProfile is School Admin only, so the ID proof may be read here.
+              idProofType: true,
+              idProofNumber: true,
+              user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, activatedAt: true } },
             },
           },
         },
@@ -223,19 +232,6 @@ export async function getStudentProfile(ctx: TenantContext, studentId: string) {
     : [];
 
   return { student, attendance };
-}
-
-/** The next free "ADM0001"-style number, used when the admin leaves it blank. */
-async function nextAdmissionNumber(db: TenantDb | TenantTx): Promise<string> {
-  const rows = await db.student.findMany({
-    where: { admissionNumber: { startsWith: "ADM" } },
-    select: { admissionNumber: true },
-  });
-  const highest = rows.reduce((max, row) => {
-    const n = Number.parseInt(row.admissionNumber.slice(3), 10);
-    return Number.isFinite(n) && n > max ? n : max;
-  }, 0);
-  return `ADM${String(highest + 1).padStart(4, "0")}`;
 }
 
 /** Resolve a section to the class and stream an enrollment must also carry. */
@@ -266,27 +262,117 @@ async function createGuardian(
   });
 }
 
-export async function createStudent(ctx: TenantContext, input: CreateStudentInput): Promise<string> {
+/** Last ten digits of a phone number — how two ways of writing one number are matched. */
+const phoneKey = (phone: string) => phone.replace(/\D/g, "").slice(-10);
+
+export type AdmissionResult = {
+  studentId: string;
+  admissionNumber: string;
+  /** Activation emails sent for logins created with this admission. */
+  invites: LoginInvite[];
+  /** Plain notes for the office, e.g. why no parent login was made. */
+  notes: string[];
+};
+
+/**
+ * Admit a student: one transaction for the student, their placement, the
+ * parent (new or linked) and any logins, then the activation emails.
+ *
+ *   * Every student has at least one parent or guardian.
+ *   * Nursery–Class 5: no student email, mobile or login — refused if sent.
+ *   * Class 6–12: student email, mobile and login are optional; a login needs
+ *     an email, because activation is by email.
+ *   * A parent is provisioned a login when they have an email and none yet;
+ *     a parent who already signs in (a sibling's) gets no second email.
+ *   * A new parent whose mobile or email matches one already at the school
+ *     is refused until the office links them or confirms it is someone else.
+ *   * The admission number is allocated in the transaction (see
+ *     `admission-number.ts`); a number typed in — for a migration — is kept
+ *     if it is free.
+ */
+export async function createStudent(ctx: TenantContext, input: CreateStudentInput): Promise<AdmissionResult> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   await assertWithinPlanLimit(ctx, "students");
   const session = await requireCurrentSession(ctx);
+  const notes: string[] = [];
+
+  const section = await ctx.db.section.findFirst({
+    where: { id: input.sectionId, academicSessionId: session.id },
+    select: { id: true, class: { select: { level: true, name: true } } },
+  });
+  if (!section) throw new NotFoundError("That section is not part of this academic session.");
+  const senior = section.class.level >= STUDENT_LOGIN_MIN_LEVEL;
+  if (!senior && (input.studentEmail || input.studentPhone || input.studentLogin)) {
+    throw new ValidationError("Please correct the highlighted fields.", {
+      studentEmail: [`Student email, mobile and login are only for Classes 6 to 12. ${section.class.name} is reached through the parent.`],
+    });
+  }
+
+  // The parent: an existing one of this school, or a new one that is not
+  // already here under the same mobile or email.
+  let existingParent: { id: string; userId: string | null; email: string | null; firstName: string } | null = null;
+  if (input.guardianMode === "existing") {
+    existingParent = await ctx.db.parent.findFirst({
+      where: { id: input.existingParentId ?? "" },
+      select: { id: true, userId: true, email: true, firstName: true },
+    });
+    if (!existingParent) throw new NotFoundError("That parent was not found at this school.");
+  } else if (!input.confirmNewParent) {
+    const email = input.parentEmail?.toLowerCase() ?? null;
+    // Phones are stored as typed ("97777 00001", "+91-97777-00001"), so they are
+    // compared by their digits, not by text. Only this school's parents.
+    const candidates = await ctx.db.parent.findMany({ select: { firstName: true, lastName: true, phone: true, email: true } });
+    const match = candidates.find((row) => phoneKey(row.phone) === phoneKey(input.parentPhone ?? "") || (email && row.email?.toLowerCase() === email));
+    if (match) {
+      throw new ValidationError("Please correct the highlighted fields.", {
+        parentPhone: [
+          `${match.firstName} ${match.lastName} (${match.phone}) is already a parent at this school. Choose "Existing parent" to link them, or tick "This is a different person".`,
+        ],
+      });
+    }
+  }
+
+  // Logins: checked before the transaction, so a taken email never undoes the admission.
+  const studentEmail = senior ? (input.studentEmail?.toLowerCase() ?? null) : null;
+  if (input.studentLogin && studentEmail && (await prisma.user.count({ where: { email: studentEmail } }))) {
+    throw new ValidationError("Please correct the highlighted fields.", { studentEmail: [`${studentEmail} already has a SchoolOS login. Use another email.`] });
+  }
+  const parentEmail = (existingParent ? existingParent.email : input.parentEmail)?.toLowerCase() ?? null;
+  let parentLogin = false;
+  if (existingParent?.userId) {
+    notes.push(`${existingParent.firstName} already has a login and will see this child too.`);
+  } else if (!parentEmail) {
+    notes.push("No parent login was made because the parent has no email. Add one on the student's page to send an activation link.");
+  } else if (await prisma.user.count({ where: { email: parentEmail } })) {
+    notes.push(`No parent login was made: ${parentEmail} is already used by another SchoolOS account.`);
+  } else {
+    parentLogin = true;
+  }
+
+  const customNumber = input.admissionNumber ? normaliseImportedAdmissionNumber(input.admissionNumber) : null;
+  if (input.admissionNumber && !customNumber) {
+    throw new ValidationError("Please correct the highlighted fields.", { admissionNumber: ["Use letters, numbers, - / or _ only (up to 30)."] });
+  }
+  const year = admissionYear(input.admissionDate);
+  if (!customNumber) await ensureAdmissionCounter(ctx.schoolId, year);
+  const unusableHash = input.studentLogin || parentLogin ? await unusablePasswordHash() : undefined;
 
   try {
-    const studentId = await ctx.db.$transaction(async (tx) => {
-      const section = await sectionPlacement(tx, input.sectionId, session.id);
-      if (section.capacity !== null && section._count.enrollments >= section.capacity) {
-        throw new ConflictError(`That section is full (capacity ${section.capacity}).`);
-      }
+    const created = await ctx.db.$transaction(async (tx) => {
+      const placement = await sectionPlacement(tx, input.sectionId, session.id);
+      // The section's seats — and the stream's share, where it has shares — under lock.
+      const streamId = await claimSeats(tx, placement.id, input.streamId);
+      const admissionNumber = customNumber ?? (await allocateAdmissionNumber(tx, year));
 
       const student = await tx.student.create({
         data: {
           schoolId: ctx.schoolId,
-          admissionNumber: input.admissionNumber ?? (await nextAdmissionNumber(tx)),
+          admissionNumber,
           firstName: input.firstName,
           lastName: input.lastName,
           gender: input.gender,
           dateOfBirth: input.dateOfBirth,
-          admissionDate: input.admissionDate,
+          admissionDate: input.admissionDate ?? today(),
           bloodGroup: input.bloodGroup,
           addressLine: input.addressLine,
           city: input.city,
@@ -294,6 +380,8 @@ export async function createStudent(ctx: TenantContext, input: CreateStudentInpu
           postalCode: input.postalCode,
           emergencyContactName: input.emergencyContactName,
           emergencyContactPhone: input.emergencyContactPhone,
+          email: studentEmail,
+          phone: senior ? input.studentPhone : null,
         },
         select: { id: true },
       });
@@ -303,54 +391,61 @@ export async function createStudent(ctx: TenantContext, input: CreateStudentInpu
           schoolId: ctx.schoolId,
           studentId: student.id,
           academicSessionId: session.id,
-          sectionId: section.id,
-          classId: section.classId,
-          streamId: section.streamId,
+          sectionId: placement.id,
+          classId: placement.classId,
+          streamId,
           rollNumber: input.rollNumber,
         },
       });
 
-      let parentId: string | null = null;
-      if (input.guardianMode === "existing" && input.existingParentId) {
-        const parent = await tx.parent.findFirst({ where: { id: input.existingParentId }, select: { id: true } });
-        if (!parent) throw new NotFoundError("That guardian was not found.");
-        parentId = parent.id;
-      } else if (input.guardianMode === "new") {
-        parentId = (
-          await createGuardian(tx, ctx.schoolId, {
-            firstName: input.parentFirstName!,
-            lastName: input.parentLastName!,
-            phone: input.parentPhone!,
-            email: input.parentEmail,
+      const parentId =
+        existingParent?.id ??
+        (
+          await tx.parent.create({
+            data: {
+              schoolId: ctx.schoolId,
+              firstName: input.parentFirstName!,
+              lastName: input.parentLastName!,
+              phone: input.parentPhone!,
+              email: parentEmail,
+              addressLine: input.parentAddress,
+            },
+            select: { id: true },
           })
         ).id;
-      }
+      await tx.parentStudent.create({
+        data: { schoolId: ctx.schoolId, parentId, studentId: student.id, relationship: (input.relationship ?? "GUARDIAN") as ParentRelationship, isPrimary: true },
+      });
 
-      if (parentId) {
-        await tx.parentStudent.create({
-          data: {
-            schoolId: ctx.schoolId,
-            parentId,
-            studentId: student.id,
-            relationship: (input.relationship ?? "GUARDIAN") as ParentRelationship,
-            isPrimary: true,
-          },
-        });
+      // Logins, waiting for activation — in the same transaction as the people they belong to.
+      const accounts: Array<{ userId: string; label: string }> = [];
+      if (input.studentLogin && studentEmail) {
+        const userId = await provisionAccount(tx, { schoolId: ctx.schoolId, email: studentEmail, role: "STUDENT", firstName: input.firstName, lastName: input.lastName, phone: input.studentPhone }, unusableHash);
+        await tx.student.updateMany({ where: { id: student.id }, data: { userId } });
+        accounts.push({ userId, label: `Student login for ${input.firstName}` });
       }
-
-      return student.id;
+      if (parentLogin && parentEmail) {
+        const parent = await tx.parent.findFirstOrThrow({ where: { id: parentId }, select: { firstName: true, lastName: true, phone: true } });
+        const userId = await provisionAccount(tx, { schoolId: ctx.schoolId, email: parentEmail, role: "PARENT", firstName: parent.firstName, lastName: parent.lastName, phone: parent.phone }, unusableHash);
+        await tx.parent.updateMany({ where: { id: parentId, userId: null }, data: { userId, email: parentEmail } });
+        accounts.push({ userId, label: `Parent login for ${parent.firstName} ${parent.lastName}` });
+      }
+      return { studentId: student.id, admissionNumber, accounts };
     });
 
     await recordAudit({
       action: "STUDENT_CREATED",
       entityType: "Student",
-      entityId: studentId,
+      entityId: created.studentId,
       schoolId: ctx.schoolId,
       actorId: ctx.user.id,
-      summary: `Student ${input.firstName} ${input.lastName} admitted.`,
+      summary: `Student ${input.firstName} ${input.lastName} admitted as ${created.admissionNumber}.`,
     });
 
-    return studentId;
+    // After the commit: an email that fails never undoes the admission.
+    const invites: LoginInvite[] = [];
+    for (const account of created.accounts) invites.push({ ...(await sendActivation(account.userId, ctx.user.id)), label: account.label });
+    return { studentId: created.studentId, admissionNumber: created.admissionNumber, invites, notes };
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new ConflictError("That admission number or roll number is already in use.");
@@ -359,15 +454,30 @@ export async function createStudent(ctx: TenantContext, input: CreateStudentInpu
   }
 }
 
-export async function updateStudent(ctx: TenantContext, input: UpdateStudentInput): Promise<void> {
+export async function updateStudent(ctx: TenantContext, input: UpdateStudentInput): Promise<EmailMove> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
-  const { studentId, status, ...data } = input;
+  const { studentId, status, email, ...fields } = input;
 
   const existing = await ctx.db.student.findFirst({
     where: { id: studentId },
-    select: { id: true, status: true, userId: true },
+    select: {
+      id: true,
+      status: true,
+      userId: true,
+      enrollments: { where: { academicSession: { isCurrent: true } }, take: 1, select: { section: { select: { class: { select: { level: true, name: true } } } } } },
+    },
   });
   if (!existing) throw new NotFoundError();
+  // Student email is for Class 6–12 only (their login address, when they have one).
+  const level = existing.enrollments[0]?.section.class.level;
+  if (email && level !== undefined && level < STUDENT_LOGIN_MIN_LEVEL) {
+    throw new ValidationError("Please correct the highlighted fields.", { email: [`${existing.enrollments[0]!.section.class.name} students have no email; they are reached through their parent.`] });
+  }
+  if (existing.userId && email !== undefined && !email) {
+    throw new ValidationError("Please correct the highlighted fields.", { email: ["This student signs in with their email, so it cannot be left empty."] });
+  }
+  await assertLoginEmailFree(existing.userId, email);
+  const data = email === undefined ? fields : { ...fields, email: email ? email.toLowerCase() : null };
 
   try {
     await ctx.db.student.updateMany({ where: { id: studentId }, data });
@@ -388,8 +498,10 @@ export async function updateStudent(ctx: TenantContext, input: UpdateStudentInpu
     entityId: studentId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Student ${data.firstName} ${data.lastName} updated.`,
+    summary: `Student ${fields.firstName} ${fields.lastName} updated.`,
   });
+  if (existing.userId) await ctx.db.user.updateMany({ where: { id: existing.userId }, data: { firstName: fields.firstName, lastName: fields.lastName } });
+  return moveLoginEmail(ctx, existing.userId, email);
 }
 
 /**
@@ -399,7 +511,7 @@ export async function updateStudent(ctx: TenantContext, input: UpdateStudentInpu
  */
 export async function enrollStudent(
   ctx: TenantContext,
-  input: { studentId: string; academicSessionId: string; sectionId: string; rollNumber: string | null },
+  input: { studentId: string; academicSessionId: string; sectionId: string; streamId?: string | null; rollNumber: string | null },
 ): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
@@ -412,30 +524,20 @@ export async function enrollStudent(
   const section = await sectionPlacement(ctx.db, input.sectionId, input.academicSessionId);
 
   try {
-    await ctx.db.studentEnrollment.upsert({
-      where: {
-        schoolId_studentId_academicSessionId: {
-          schoolId: ctx.schoolId,
-          studentId: student.id,
-          academicSessionId: input.academicSessionId,
-        },
-      },
-      create: {
-        schoolId: ctx.schoolId,
-        studentId: student.id,
-        academicSessionId: input.academicSessionId,
-        sectionId: section.id,
-        classId: section.classId,
-        streamId: section.streamId,
-        rollNumber: input.rollNumber,
-      },
-      update: {
-        sectionId: section.id,
-        classId: section.classId,
-        streamId: section.streamId,
-        rollNumber: input.rollNumber,
-        status: "ACTIVE",
-      },
+    await ctx.db.$transaction(async (tx) => {
+      const current = await tx.studentEnrollment.findFirst({
+        where: { studentId: student.id, academicSessionId: input.academicSessionId },
+        select: { id: true, sectionId: true, streamId: true, status: true },
+      });
+      // Staying in the same seat (a roll-number change) takes no new one.
+      const sameSeat = current?.status === "ACTIVE" && current.sectionId === section.id && (input.streamId === undefined || input.streamId === current.streamId);
+      const streamId = sameSeat ? current!.streamId : await claimSeats(tx, section.id, input.streamId ?? current?.streamId);
+      const placement = { sectionId: section.id, classId: section.classId, streamId, rollNumber: input.rollNumber };
+      if (current) {
+        await tx.studentEnrollment.updateMany({ where: { id: current.id }, data: { ...placement, status: "ACTIVE" } });
+      } else {
+        await tx.studentEnrollment.create({ data: { schoolId: ctx.schoolId, studentId: student.id, academicSessionId: input.academicSessionId, ...placement } });
+      }
     });
   } catch (error) {
     if (isUniqueViolation(error)) throw new ConflictError("That roll number is already taken in the section.");
@@ -461,11 +563,16 @@ export async function enrollStudent(
  * and a child admitted by mistake has both within a second of being added.
  */
 async function studentDeletionBlockers(ctx: TenantContext, studentId: string) {
-  const [attendance, remarks, results, application] = await Promise.all([
+  const [attendance, remarks, results, application, charges, payments, support, promoted] = await Promise.all([
     ctx.db.studentAttendance.count({ where: { studentId } }),
     ctx.db.studentRemark.count({ where: { studentId } }),
     ctx.db.assessmentResult.count({ where: { studentId } }),
     ctx.db.admissionApplication.count({ where: { createdStudentId: studentId } }),
+    ctx.db.feeCharge.count({ where: { studentId } }),
+    ctx.db.feePayment.count({ where: { studentId } }),
+    ctx.db.studentSupport.count({ where: { studentId } }),
+    // More than one year's placement means they have already moved up once.
+    ctx.db.studentEnrollment.count({ where: { studentId } }),
   ]);
 
   const history: string[] = [];
@@ -473,6 +580,9 @@ async function studentDeletionBlockers(ctx: TenantContext, studentId: string) {
   if (remarks) history.push(`${remarks} ${remarks === 1 ? "remark" : "remarks"}`);
   if (results) history.push(`${results} assessment ${results === 1 ? "result" : "results"}`);
   if (application) history.push("an admission application on file");
+  if (charges || payments) history.push("fee records");
+  if (support) history.push("student support records");
+  if (promoted > 1) history.push("placements in more than one year");
 
   return history;
 }
@@ -534,12 +644,13 @@ export async function searchParents(ctx: TenantContext, q?: string) {
             { firstName: { contains: q, mode: "insensitive" } },
             { lastName: { contains: q, mode: "insensitive" } },
             { phone: { contains: q } },
+            { email: { contains: q, mode: "insensitive" } },
           ],
         }
       : {},
     orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
     take: 200,
-    select: { id: true, firstName: true, lastName: true, phone: true },
+    select: { id: true, firstName: true, lastName: true, phone: true, email: true },
   });
 }
 
@@ -631,38 +742,66 @@ export async function updateParent(
     email: string | null;
     occupation: string | null;
     addressLine: string | null;
+    withIdProof?: boolean;
+    idProofType?: string | null;
+    idProofNumber?: string | null;
   },
-): Promise<void> {
+): Promise<EmailMove> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
-  const { parentId, ...data } = input;
-  const { count } = await ctx.db.parent.updateMany({ where: { id: parentId }, data });
-  if (!count) throw new NotFoundError();
+  // ID proof is sensitive: School Admin only, and changed only when its fields were on the form.
+  const { parentId, withIdProof, idProofType, idProofNumber, ...rest } = input;
+  const data = withIdProof ? { ...rest, idProofType: idProofType ?? null, idProofNumber: idProofNumber ?? null } : rest;
+  const existing = await ctx.db.parent.findFirst({ where: { id: parentId }, select: { userId: true } });
+  if (!existing) throw new NotFoundError();
+  // A parent who signs in keeps record and login in step: a corrected email moves both.
+  await assertLoginEmailFree(existing.userId, data.email);
+  if (existing.userId && !data.email) {
+    throw new ValidationError("Please correct the highlighted fields.", { email: ["This parent signs in with their email, so it cannot be left empty."] });
+  }
+  await ctx.db.parent.updateMany({ where: { id: parentId }, data });
+  if (existing.userId) await ctx.db.user.updateMany({ where: { id: existing.userId }, data: { firstName: data.firstName, lastName: data.lastName, phone: data.phone } });
+  return moveLoginEmail(ctx, existing.userId, data.email);
 }
 
 // -----------------------------------------------------------------------------
 // Portal access
 // -----------------------------------------------------------------------------
 
+/** Student logins exist from Class 6 up; Nursery to Class 5 are reached through their parents. */
+export const STUDENT_LOGIN_MIN_LEVEL = 6;
+
 export async function grantStudentPortal(
   ctx: TenantContext,
   studentId: string,
   email: string,
-): Promise<Credentials> {
+): Promise<LoginInvite> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
   const student = await ctx.db.student.findFirst({
     where: { id: studentId },
-    select: { id: true, firstName: true, lastName: true, userId: true, status: true },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      userId: true,
+      status: true,
+      enrollments: { where: { academicSession: { isCurrent: true } }, take: 1, select: { class: { select: { level: true, name: true } } } },
+    },
   });
   if (!student) throw new NotFoundError();
-  if (student.userId) throw new ConflictError("This student already has a login. Reset its password instead.");
+  if (student.userId) throw new ConflictError("This student already has a login. Send a login email instead.");
   if (student.status !== "ACTIVE") throw new ConflictError("Only active students can be given a login.");
+  const klass = student.enrollments[0]?.class;
+  if (!klass || klass.level < STUDENT_LOGIN_MIN_LEVEL) {
+    throw new ConflictError(`Student logins are for Class 6 to 12. ${klass ? klass.name : "This student"} is reached through the parent's login.`);
+  }
 
-  const { userId, credentials } = await createPortalUser(ctx, {
+  const { userId } = await createPortalUser(ctx, {
     email,
     role: "STUDENT",
     firstName: student.firstName,
     lastName: student.lastName,
   });
-  await ctx.db.student.updateMany({ where: { id: student.id }, data: { userId } });
+  await ctx.db.student.updateMany({ where: { id: student.id }, data: { userId, email } });
 
   await recordAudit({
     action: "PORTAL_ACCESS_GRANTED",
@@ -670,17 +809,17 @@ export async function grantStudentPortal(
     entityId: student.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Student login ${email} issued.`,
+    summary: `Student login ${email} created; activation email sent.`,
   });
 
-  return { ...credentials, label: `Sign-in for ${student.firstName}` };
+  return { ...(await sendActivation(userId, ctx.user.id)), label: `Login for ${student.firstName}` };
 }
 
 export async function grantParentPortal(
   ctx: TenantContext,
   parentId: string,
   email: string,
-): Promise<Credentials> {
+): Promise<LoginInvite> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
   const parent = await ctx.db.parent.findFirst({
@@ -688,9 +827,9 @@ export async function grantParentPortal(
     select: { id: true, firstName: true, lastName: true, phone: true, userId: true },
   });
   if (!parent) throw new NotFoundError();
-  if (parent.userId) throw new ConflictError("This parent already has a login. Reset its password instead.");
+  if (parent.userId) throw new ConflictError("This parent already has a login. Send a login email instead.");
 
-  const { userId, credentials } = await createPortalUser(ctx, {
+  const { userId } = await createPortalUser(ctx, {
     email,
     role: "PARENT",
     firstName: parent.firstName,
@@ -705,8 +844,8 @@ export async function grantParentPortal(
     entityId: parent.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Parent login ${email} issued.`,
+    summary: `Parent login ${email} created; activation email sent.`,
   });
 
-  return { ...credentials, label: `Sign-in for ${parent.firstName} ${parent.lastName}` };
+  return { ...(await sendActivation(userId, ctx.user.id)), label: `Login for ${parent.firstName} ${parent.lastName}` };
 }

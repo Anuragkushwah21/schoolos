@@ -10,8 +10,10 @@ import { requireTeacherSelf } from "@/server/auth/teacher-access";
 import { upcomingHolidays } from "@/server/calendar/holidays";
 import { meetingAlerts } from "@/server/communication/meetings";
 import { visibleNoticeWhere } from "@/server/communication/notices";
-import { studentSupportAlerts, teacherSupportAlerts } from "@/server/support/service";
-import { VISIBLE_PAPER } from "@/server/exams/service";
+import { adminConcernCounts, teacherConcernAlerts } from "@/server/support/concerns";
+import { studentSupportAlerts } from "@/server/support/service";
+import { familyLeaveAlerts, pendingLeaveCount, teacherLeaveAlerts } from "@/server/attendance/student-leave";
+import { listExams, VISIBLE_PAPER } from "@/server/exams/service";
 import { findStudentSelf } from "@/server/student/access";
 
 /**
@@ -28,6 +30,12 @@ export type FeedAlert = {
   at: Date;
   href: string | null;
   tone: "critical" | "warning" | "info";
+  /**
+   * Set for "N things waiting" alerts, whose moment is always now: read state
+   * then follows the key (which carries the count), so a new count shows as
+   * new. Other alerts are keyed from their own row and time.
+   */
+  key?: string;
 };
 
 const WINDOW_DAYS = 7;
@@ -121,7 +129,7 @@ export async function getStudentAlerts(ctx: TenantContext): Promise<FeedAlert[]>
     sharedAlerts(ctx, "/student/notices", "/student/holidays", "/student/meetings"),
   ]);
 
-  const alerts: FeedAlert[] = [...shared, ...(await studentSupportAlerts(ctx, self.student.id))];
+  const alerts: FeedAlert[] = [...shared, ...(await studentSupportAlerts(ctx, self.student.id)), ...(await familyLeaveAlerts(ctx, [self.student.id], "/student/leave"))];
   if (absent) {
     alerts.push({ kind: "absent-today", childId: null, title: "You were marked absent today", detail: "If this is wrong, tell your class teacher.", at: now, href: "/student/attendance", tone: "critical" });
   }
@@ -165,7 +173,101 @@ export async function getStudentAlerts(ctx: TenantContext): Promise<FeedAlert[]>
 /** What a non-teaching staff member would want to be told: meetings and notices for staff. */
 export async function getStaffAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
   assertRole(ctx.user, "NON_TEACHING_STAFF");
-  return sortAlerts(await sharedAlerts(ctx, "/staff/notices", null, "/staff/meetings"));
+  const now = today();
+  const staff = await ctx.db.staffMember.findFirst({ where: { userId: ctx.user.id }, select: { id: true } });
+  const [shared, leave] = await Promise.all([
+    sharedAlerts(ctx, "/staff/notices", null, "/staff/meetings"),
+    staff
+      ? ctx.db.leaveRequest.findMany({
+          where: { staffMemberId: staff.id, status: { in: ["APPROVED", "REJECTED"] }, reviewedAt: { gte: addDays(now, -WINDOW_DAYS) } },
+          select: { status: true, type: true, startDate: true, endDate: true, reviewNote: true, reviewedAt: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  const covers = staff
+    ? await ctx.db.workCover.findMany({
+        where: { coverStaffMemberId: staff.id, date: { gte: now, lte: addDays(now, WINDOW_DAYS) } },
+        select: { date: true, createdAt: true, duties: true, absentStaff: { select: { firstName: true, lastName: true } } },
+      })
+    : [];
+  return sortAlerts([
+    ...shared,
+    ...leave.map((row) => leaveDecisionAlert(row, "/staff/leave", now)),
+    ...covers.map((cover) => ({
+      kind: "work-cover",
+      childId: null,
+      title: `Covering for ${fullName(cover.absentStaff)}`,
+      detail: `${formatDayShort(cover.date)} — ${cover.duties}`,
+      at: cover.createdAt,
+      href: "/staff/dashboard",
+      tone: (cover.date.getTime() === now.getTime() ? "warning" : "info") as FeedAlert["tone"],
+    })),
+  ]);
+}
+
+function leaveDecisionAlert(
+  row: { status: string; type: string; startDate: Date; endDate: Date; reviewNote: string | null; reviewedAt: Date | null },
+  href: string,
+  now: Date,
+): FeedAlert {
+  return {
+    kind: "leave-decision",
+    childId: null,
+    title: `${humanize(row.type)} leave ${row.status === "APPROVED" ? "approved" : "not approved"}`,
+    detail: `${formatSpan(row.startDate, row.endDate)}${row.reviewNote ? ` — ${row.reviewNote}` : ""}`,
+    at: row.reviewedAt ?? now,
+    href,
+    tone: row.status === "APPROVED" ? "info" : "warning",
+  };
+}
+
+/**
+ * The School Admin's notifications: what is waiting for them to act on. Each
+ * is a count with the one page to act on it, like the dashboard's "Needs
+ * attention", plus results ready to release and parent concerns.
+ */
+export async function getAdminAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const now = today();
+  const moment = new Date();
+  const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
+  const [absent, missed, leave, admissions, complaints, concerns, studentLeave, exams] = await Promise.all([
+    ctx.db.studentAttendance.count({ where: { date: now, status: "ABSENT" } }),
+    ctx.db.classSession.count({ where: { date: now, status: "MISSED" } }),
+    ctx.db.leaveRequest.count({ where: { status: "PENDING" } }),
+    ctx.db.admissionApplication.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
+    ctx.db.complaint.count({ where: { status: { in: ["OPEN", "IN_PROGRESS"] } } }),
+    adminConcernCounts(ctx),
+    pendingLeaveCount(ctx),
+    session ? listExams(ctx, { academicSessionId: session.id }) : Promise.resolve([]),
+  ]);
+  const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length;
+  const pending = exams.filter((exam) => exam.stage === "MARKS_PENDING").length;
+  const day = now.toISOString().slice(0, 10);
+
+  const counts: Array<{ kind: string; count: number; title: string; href: string; tone: FeedAlert["tone"] }> = [
+    { kind: "absent", count: absent, title: `${absent} student${absent === 1 ? " is" : "s are"} absent today`, href: "/school-admin/attendance/absent", tone: "warning" },
+    { kind: "missed", count: missed, title: `${missed} class${missed === 1 ? " was" : "es were"} missed today`, href: "/school-admin/substitutes", tone: "critical" },
+    { kind: "leave", count: leave, title: `${leave} leave request${leave === 1 ? "" : "s"} waiting for your decision`, href: "/school-admin/leave", tone: "warning" },
+    {
+      kind: "concerns-office",
+      count: concerns.unassigned,
+      title: `${concerns.unassigned} concern${concerns.unassigned === 1 ? "" : "s"} waiting for the school office (no subject teacher assigned)`,
+      href: "/school-admin/concerns?assigned=NONE",
+      tone: "warning",
+    },
+    { kind: "student-leave", count: studentLeave, title: `${studentLeave} student leave request${studentLeave === 1 ? "" : "s"} pending`, href: "/school-admin/student-leave?status=PENDING", tone: "info" },
+    { kind: "concerns", count: concerns.open, title: `${concerns.open} new parent–teacher concern${concerns.open === 1 ? "" : "s"}`, href: "/school-admin/concerns", tone: "info" },
+    { kind: "results-ready", count: ready, title: `${ready} exam result${ready === 1 ? " is" : "s are"} ready to publish`, href: "/school-admin/exams?status=READY_TO_PUBLISH", tone: "info" },
+    { kind: "marks-pending", count: pending, title: `${pending} exam${pending === 1 ? " has" : "s have"} marks still missing`, href: "/school-admin/exams?status=MARKS_PENDING", tone: "info" },
+    { kind: "admissions", count: admissions, title: `${admissions} admission application${admissions === 1 ? "" : "s"} to review`, href: "/school-admin/admissions", tone: "info" },
+    { kind: "complaints", count: complaints, title: `${complaints} complaint${complaints === 1 ? "" : "s"} still open`, href: "/school-admin/complaints", tone: "warning" },
+  ];
+  return sortAlerts(
+    counts
+      .filter((row) => row.count > 0)
+      .map((row) => ({ kind: row.kind, childId: null, title: row.title, detail: "", at: moment, href: row.href, tone: row.tone, key: `${row.kind}:${row.count}:${day}` })),
+  );
 }
 
 /** What a teacher would want to be told: cover duties, leave decisions, marks to enter. */
@@ -202,7 +304,7 @@ export async function getTeacherAlerts(ctx: TenantContext): Promise<FeedAlert[]>
     sharedAlerts(ctx, "/teacher/notices", "/teacher/holidays", "/teacher/meetings"),
   ]);
 
-  const alerts: FeedAlert[] = [...shared, ...(await teacherSupportAlerts(ctx))];
+  const alerts: FeedAlert[] = [...shared, ...(await teacherConcernAlerts(ctx)), ...(await teacherLeaveAlerts(ctx))];
   for (const cover of covers) {
     alerts.push({
       kind: "cover",
@@ -214,15 +316,22 @@ export async function getTeacherAlerts(ctx: TenantContext): Promise<FeedAlert[]>
       tone: cover.date.getTime() === now.getTime() ? "warning" : "info",
     });
   }
-  for (const row of leave) {
+  for (const row of leave) alerts.push(leaveDecisionAlert(row, "/teacher/leave", now));
+
+  // A class register the office handed over for today or the days ahead.
+  const registerCovers = await ctx.db.registerCover.findMany({
+    where: { teacherId: teacher.id, date: { gte: now, lte: addDays(now, WINDOW_DAYS) } },
+    select: { date: true, createdAt: true, reason: true, section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } } },
+  });
+  for (const cover of registerCovers) {
     alerts.push({
-      kind: "leave-decision",
+      kind: "register-cover",
       childId: null,
-      title: `${humanize(row.type)} leave ${row.status === "APPROVED" ? "approved" : "not approved"}`,
-      detail: `${formatSpan(row.startDate, row.endDate)}${row.reviewNote ? ` — ${row.reviewNote}` : ""}`,
-      at: row.reviewedAt ?? now,
-      href: "/teacher/leave",
-      tone: row.status === "APPROVED" ? "info" : "warning",
+      title: `Take attendance for ${sectionLabel(cover.section)}`,
+      detail: `${formatDayShort(cover.date)}${cover.reason ? ` — ${cover.reason}` : ""}`,
+      at: cover.createdAt,
+      href: "/teacher/attendance",
+      tone: cover.date.getTime() === now.getTime() ? "warning" : "info",
     });
   }
 

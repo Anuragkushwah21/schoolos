@@ -29,6 +29,8 @@ const markBody = z.object({
       }),
     )
     .min(1, "Mark at least one student"),
+  /** Required from a teacher when correcting a submitted register. */
+  reason: z.string().trim().max(300).optional(),
 });
 
 /**
@@ -37,14 +39,15 @@ const markBody = z.object({
  */
 export const POST = apiRoute({ roles: ["SCHOOL_ADMIN", "TEACHER"] }, async ({ request, ctx }) => {
   const input = await readJson(request, markBody);
-  const { saved } = await markAttendance(ctx, {
+  const { saved, kind, deadline } = await markAttendance(ctx, {
     sectionId: input.sectionId,
     date: input.date,
+    reason: input.reason ?? null,
     entries: input.entries.map((entry) => ({
       studentId: entry.studentId,
       status: entry.status as (typeof ATTENDANCE_STATUSES)[number],
       remarks: entry.remarks,
     })),
   });
-  return apiSuccess(await getRegister(ctx, input.sectionId, input.date), { meta: { saved } });
+  return apiSuccess(await getRegister(ctx, input.sectionId, input.date), { meta: { saved, kind, correctionDeadline: deadline } });
 });

@@ -222,17 +222,19 @@ export async function verifyCode(
   });
   if (!verification) throw generic;
 
-  if (verification.attempts >= MAX_ATTEMPTS) {
-    throw new RateLimitedError("Too many attempts on this code. Ask for a new one.");
-  }
   if (verification.expiresAt.getTime() <= Date.now()) throw generic;
 
-  if (!codesMatch(hashCode(code), verification.codeHash)) {
-    await prisma.emailVerification.update({
-      where: { id: verification.id },
-      data: { attempts: { increment: 1 } },
-    });
+  // Claim an attempt before comparing, in one conditional write: parallel
+  // guesses cannot all slip under the limit by reading the same count.
+  const claimed = await prisma.emailVerification.updateMany({
+    where: { id: verification.id, attempts: { lt: MAX_ATTEMPTS } },
+    data: { attempts: { increment: 1 } },
+  });
+  if (!claimed.count) {
+    throw new RateLimitedError("Too many attempts on this code. Ask for a new one.");
+  }
 
+  if (!codesMatch(hashCode(code), verification.codeHash)) {
     // The last allowed attempt is also the code's last moment of life.
     if (verification.attempts + 1 >= MAX_ATTEMPTS) {
       await prisma.emailVerification.update({

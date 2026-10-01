@@ -11,6 +11,7 @@ import { deleteTeacherAction, unassignSubjectAction } from "@/features/school/pe
 import {
   AssignSubjectForm,
   EditTeacherForm,
+  LoginStatus,
   ResetPortalPasswordForm,
 } from "@/features/school/people-forms";
 import { removeSalaryAction } from "@/features/finance/actions";
@@ -18,11 +19,15 @@ import { SalaryForm } from "@/features/finance/forms";
 import { rupees, toRupeeInput } from "@/features/finance/money";
 import { formatDate, formatDateTime, toDateInput, today } from "@/lib/dates";
 import { humanize, pluralize } from "@/lib/format";
+import { PersonPhoto } from "@/components/shared/person-photo";
 import { requireTenant } from "@/server/auth/current-user";
-import { classSectionOptions, listSubjects, sectionLabel } from "@/server/academics/structure";
+import { photoUrlFor } from "@/server/people/photos";
+import { type AdmissionSeatOptions, admissionSeatOptions, groupLabel } from "@/server/academics/streams";
+import { classSectionOptions, listSubjects } from "@/server/academics/structure";
 import { orNotFound } from "@/server/page-helpers";
 import { getTeacherSalary } from "@/server/finance/salary";
 import { getTeacherProfile } from "@/server/people/teachers";
+import { activationEmailStatuses } from "@/server/auth/account-links";
 
 export const metadata: Metadata = { title: "Teacher" };
 
@@ -31,15 +36,23 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
   const { teacherId } = await props.params;
 
   const { teacher, session, periodsPerWeek } = await orNotFound(getTeacherProfile(ctx, teacherId));
-  const [subjects, sections, salary] = await Promise.all([
+  const [subjects, sections, salary, seats] = await Promise.all([
     listSubjects(ctx, { activeOnly: true }),
     session ? classSectionOptions(ctx, session.id) : Promise.resolve([]),
     getTeacherSalary(ctx, teacherId),
+    session ? admissionSeatOptions(ctx, session.id) : Promise.resolve({} as AdmissionSeatOptions),
   ]);
+  // The streams each section shares its seats with, for "whole section or one stream".
+  const streamsBySection = Object.fromEntries(Object.entries(seats).map(([sectionId, plan]) => [sectionId, plan.streams.map((stream) => ({ value: stream.value, label: stream.name }))]));
 
   const assignments = [...teacher.assignments].sort(
     (a, b) => a.section.class.level - b.section.class.level || a.subject.name.localeCompare(b.subject.name),
   );
+
+  const [photoUrl, invites] = await Promise.all([
+    photoUrlFor(ctx, { type: "TEACHER", id: teacher.id }),
+    activationEmailStatuses(ctx, [teacher.user.id]),
+  ]);
 
   return (
     <>
@@ -79,6 +92,9 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
           </>
         }
       />
+      <div className="mb-6">
+        <PersonPhoto name={`${teacher.firstName} ${teacher.lastName}`} photoUrl={photoUrl} who="The teacher" />
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
         <div className="flex flex-col gap-6">
@@ -98,7 +114,7 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
                       <span>
                         <span className="font-medium">{assignment.subject.name}</span> ·{" "}
                         <Link href={`/school-admin/academics/sections/${assignment.section.id}`} className="hover:underline">
-                          {sectionLabel(assignment.section)}
+                          {groupLabel(assignment.section, assignment.stream)}
                         </Link>
                       </span>
                       <ActionButton
@@ -141,6 +157,7 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
                   teacherId={teacher.id}
                   subjects={subjects.map((s) => ({ value: s.id, label: s.name }))}
                   sections={sections}
+                  streamsBySection={streamsBySection}
                 />
               ) : (
                 <p className="text-muted-foreground text-sm">Add a class under Academics, or set a current session, to assign subjects.</p>
@@ -153,12 +170,9 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
               <CardTitle>Sign-in</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3 text-sm">
-              <p>
-                {teacher.user.email}
-                {teacher.user.isActive ? null : <StatusBadge status="INACTIVE" label="Disabled" className="ml-2" />}
-              </p>
+              <LoginStatus user={teacher.user} invite={invites.get(teacher.user.id)} />
               <p className="text-muted-foreground text-xs">Last sign-in {formatDateTime(teacher.user.lastLoginAt)}</p>
-              <ResetPortalPasswordForm userId={teacher.user.id} />
+              <ResetPortalPasswordForm userId={teacher.user.id} pending={!teacher.user.activatedAt} />
             </CardContent>
           </Card>
         </div>

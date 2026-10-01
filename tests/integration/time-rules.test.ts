@@ -47,7 +47,7 @@ describe("exams", () => {
     await expect(
       saveMarks(teacherOf(schoolA), paper.id, [{ studentId: schoolA.studentIds[0]!, marks: 10, absent: false, remark: null }]),
     ).rejects.toThrow(/Marks can be entered from that day/);
-    await expect(publishExams(adminOf(schoolA), ids)).rejects.toThrow(/still to be held/);
+    await expect(publishExams(adminOf(schoolA), ids)).rejects.toThrow(/still pending/);
   });
 });
 

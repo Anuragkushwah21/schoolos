@@ -2,15 +2,12 @@ import { apiRoute, apiSuccess, readJson } from "@/server/api/handler";
 import { portalAccessSchema } from "@/lib/validation/school";
 import { grantStudentPortal } from "@/server/people/students";
 
-/**
- * Issue the student's login. The password is returned once, here, and is
- * stored only as a bcrypt hash.
- */
+/** Create the student's login; they activate it from the email it sends. No password is returned. */
 export const POST = apiRoute<{ studentId: string }>(
   { roles: ["SCHOOL_ADMIN"] },
   async ({ request, ctx, params }) => {
     const { email } = await readJson(request, portalAccessSchema, { personId: params.studentId });
-    const credentials = await grantStudentPortal(ctx, params.studentId, email);
-    return apiSuccess(credentials, { status: 201 });
+    const invite = await grantStudentPortal(ctx, params.studentId, email);
+    return apiSuccess(invite, { status: 201 });
   },
 );

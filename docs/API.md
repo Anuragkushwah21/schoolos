@@ -102,7 +102,9 @@ When an id appears in both the path and the body, **the path wins**.
 | `GET` | `/me/children/{studentId}/results` | parent — every assessment the class sat, with this child's mark. A null mark means they did not sit it, not zero |
 | `GET` | `/me/children/{studentId}/remarks` | parent — structured teacher observations |
 | `GET` | `/me/children/{studentId}/report` | parent — a summary assembled from source rows. `?period=day\|week\|month` |
-| `GET` | `/me/alerts` | parent, student, teacher, non-teaching staff — derived on each read from real rows; there is no notification table |
+| `GET` | `/me/alerts` | every school role — derived on each read from real rows; there is no notification table. Each alert carries `key` and `read` |
+| `POST` | `/me/alerts` | every school role — `{ keys: [...] }` or `{ all: true }` marks alerts read for the caller only |
+| `GET` | `/search?q=` | admin (students, teachers, parents, staff, classes), teacher (students and sections they teach), staff with "View students" (students) — at least 2 characters |
 | `GET` | `/me/focus` | parent — what to help with at home. `?child=<studentId>` required |
 
 Every `/me/children/{studentId}` route resolves the child through the
@@ -128,13 +130,13 @@ school; there is no school id to pass, and no way to name another one.
 | `GET` `PUT` `DELETE` | `/students/{id}`. `DELETE` erases a student admitted by mistake and answers 409 once they have a register, a remark or a result — set `status` instead |
 | `POST` | `/students/{id}/enrollments` | Place or promote; a later session keeps this year's record |
 | `POST` `DELETE` | `/students/{id}/guardians`, `/students/{id}/guardians/{linkId}` | |
-| `POST` | `/students/{id}/portal-access` | Issues a login; password returned once |
+| `POST` | `/students/{id}/portal-access` | Creates the login (Class 6–12 only) and emails an activation link; no password is returned |
 | `GET` | `/guardians` | `?q=` |
 | `PUT` | `/guardians/{id}` | |
 | `POST` | `/guardians/{id}/portal-access` | |
 | `GET` `POST` | `/teachers` | Creating also creates their login |
 | `GET` `PUT` `DELETE` | `/teachers/{id}` | `PUT` carries `email` and moves the sign-in address with it; `status: "INACTIVE"` also disables their login. `DELETE` erases the staff record and its login together and answers 409 once they have any record in the school — deactivate those instead |
-| `POST` `DELETE` | `/teachers/{id}/assignments`, `/teachers/{id}/assignments/{assignmentId}` | An assignment is what lets a teacher mark that section's register |
+| `POST` `DELETE` | `/teachers/{id}/assignments`, `/teachers/{id}/assignments/{assignmentId}` | An assignment is what lets a teacher mark that section's register. `POST { subjectId, sectionId, streamId? }` — `streamId` narrows it to one stream / group the section shares its seats with (e.g. 9-A Science: Physics); leave it out for the whole section. It also decides whom a parent's concern about that subject reaches |
 
 ### Academics
 
@@ -147,15 +149,27 @@ school; there is no school id to pass, and no way to name another one.
 | `GET` `POST` | `/classes`, `/streams`, `/subjects` | |
 | `PATCH` | `/classes/{id}`, `/streams/{id}`, `/subjects/{id}` | `{ "isActive": false }` |
 | `GET` `POST` | `/sections` | `?session=` — defaults to the current one |
-| `GET` `PUT` `DELETE` | `/sections/{id}` | Only an empty section can be deleted |
+| `GET` `PUT` `DELETE` | `/sections/{id}` | Only an empty section can be deleted. A section's capacity cannot drop below what its streams share |
+
+A section's seats can be shared among streams / groups ("Science 15, Commerce
+10, Arts 10, Agriculture 5") on its page in the app; each section is set up on
+its own and the shares never exceed its capacity. Where a section has shares,
+`POST /students`, `/students/{id}/enrollments` and application acceptance take
+`streamId`; a full stream answers 409 and a stream the section does not offer
+answers 422. Bulk moves keep each student's stream, and the CSV import has an
+optional **Stream** column for such sections.
 
 ### Timetable and attendance
 
 | Method | Path | Who | Notes |
 | --- | --- | --- | --- |
-| `GET` | `/timetable?section=` or `?teacher=` | admin, teacher | Teachers may only ask for their own sections |
-| `POST` | `/timetable` | admin | Clashes for the section or the teacher are refused |
+| `GET` | `/timetable?section=`, `?teacher=` or `?room={roomId}` | admin, teacher | Teachers may only ask for their own sections; by teacher or room is admin only |
+| `POST` | `/timetable` | admin | `{ sectionId, subjectId, teacherId, dayOfWeek, startMinute, endMinute, roomId? }`. Clashes for the section, the teacher or the room are refused (409 says who is in the room) |
+| `PATCH` | `/timetable/{slotId}` | admin | Same fields minus `sectionId`; `roomId: null` for no room. Once lessons are recorded for the period, only `roomId` may change |
 | `DELETE` | `/timetable/{slotId}` | admin | |
+| `GET` `POST` | `/rooms?q=&type=&status=active\|inactive\|all` | admin | List or add rooms `{ name, type, capacity?, building?, floor?, description? }`. Names are unique per school ignoring capitals and spaces |
+| `GET` `PUT` `DELETE` | `/rooms/{roomId}` | admin | `PUT` replaces the details (a rename carries onto its periods). `DELETE` only for a room no period has ever used — otherwise 409 |
+| `PATCH` | `/rooms/{roomId}` | admin | `{ isActive }` — an inactive room takes no new periods; periods already in it keep it |
 | `GET` `POST` | `/attendance?section=&date=` | admin, teacher | Today unless a date is given |
 | `GET` `POST` | `/attendance/staff?date=` | admin | |
 | `GET` | `/reports/attendance?section=&from=&to=` | admin, teacher | Without `section`, the whole school (admin only) |
@@ -163,7 +177,7 @@ school; there is no school id to pass, and no way to name another one.
 | `POST` | `/holidays` | admin | `title`, `startDate`, optional `endDate` (defaults to `startDate`), `description`, `clearAttendance` |
 | `GET` | `/holidays/{id}` | everyone in the school | |
 | `PUT` `DELETE` | `/holidays/{id}` | admin | |
-| `GET` | `/fee-payments/{id}/receipt` | admin, parent, student | Printable receipt data; parents only for linked children, students only their own and only when the school shows fees to students. Same receipt number on every call |
+| `GET` | `/fee-payments/{id}/receipt` | admin, parent, fee-desk staff | Printable receipt data; parents only for linked children, staff only with Collect fees. Students never see fees. Same receipt number on every call |
 | `GET` | `/weekly-offs` | everyone in the school | `{ "weeklyOffDays": ["SUNDAY"] }` |
 | `PUT` | `/weekly-offs` | admin | At least one day of the week must stay a working day |
 
@@ -238,9 +252,9 @@ as React elements and never as HTML, so markup in them is shown, not executed.
 
 | Method | Path | Who | Notes |
 | --- | --- | --- | --- |
-| `GET` `POST` | `/leave` | teacher (own), admin (all) | `POST { type, startDate, endDate, reason }` — up to 30 days back, 180 ahead, 60 days long, no overlap |
+| `GET` `POST` | `/leave` | teacher and non-teaching staff (own), admin (all; `?status=&teacherId=&staffMemberId=`) | `POST { type, startDate, endDate, reason }` — up to 30 days back, 180 ahead, 60 days long, no overlap |
 | `GET` | `/leave/{id}` | admin | With the periods it affects |
-| `POST` | `/leave/{id}/cancel` | teacher | Pending, or approved and not started |
+| `POST` | `/leave/{id}/cancel` | teacher, non-teaching staff | Their own; pending, or approved and not started |
 | `POST` | `/leave/decide` | admin | `{ leaveIds, decision, note? }` — a note is required to reject; approval fills the staff register |
 | `GET` `POST` | `/cover?date=` | admin | Absent teachers' periods and who is free; `POST { timetableSlotId, date, teacherId }` refuses clashes |
 | `DELETE` | `/cover/{classSessionId}` | admin | |
@@ -262,11 +276,17 @@ as React elements and never as HTML, so markup in them is shown, not executed.
 | `GET` `POST` | `/notices` | admin | Notices now take `scope` (`SCHOOL`, `CLASS`, `SECTION`, `STUDENTS`) with `classId`, `sectionId` or `studentAdmissionNumbers` |
 | `GET` | `/me/alerts` | parent, student, teacher, non-teaching staff | Derived alerts: absence, homework, results, fees, holidays, meetings, leave, cover, marks due |
 | `GET` `POST` | `/meetings` | admin | `?q=&status=UPCOMING\|ONGOING\|COMPLETED\|CANCELLED&type=PTM\|GENERAL&page=`. `POST { title, date, startMinute: "HH:MM", endMinute?, type?, description?, location?, meetingLink?, audiences, scope?, sectionIds?, teacherIds?, staffIds?, studentAdmissionNumbers? }` |
-| `GET` `PUT` `DELETE` | `/meetings/{id}` | admin | `PUT` only while the meeting is upcoming; `DELETE` only once it is cancelled |
+| `GET` `PUT` `DELETE` | `/meetings/{id}` | admin | `PUT` while the meeting is upcoming, or on a cancelled one to reschedule it (it becomes scheduled again); `DELETE` any meeting (the audit log keeps it; a support record using it as an extra class is unlinked) |
 | `POST` | `/meetings/{id}/cancel` | admin | `{ reason? }` — upcoming or ongoing meetings only |
 | `GET` `POST` | `/complaints` | all school roles | Admin all; teacher assigned; parent/student own. `POST` by parent/student |
 | `GET` `PATCH` | `/complaints/{id}` | admin, assigned teacher | `PATCH { status, assignedToId?, response? }` — only the admin reassigns |
 | `GET` | `/audit` | admin | This school's audit trail; `?area=&q=&from=&to=&page=` |
+| `GET` `POST` | `/concerns` | admin, teacher, parent | Subject-wise parent–teacher concerns. Admin sees the school; a teacher those routed to them; a parent their own children's. `?status=OPEN\|IN_PROGRESS\|RESOLVED\|OPEN_ALL\|ALL&q=&studentId=&classId=&sectionId=&streamId=&subjectId=&teacherId=&raisedBy=&priority=`. `POST` parent `{ studentId, subjectId, message }` — routed by the school to the teacher of that subject for the child's class, section and stream (else the School Admin); any `teacherId` sent is ignored. `POST` teacher `{ studentId, subjectId, message }` — only a subject they teach that student's group (403 otherwise). Returns `{ id, number, ref: "CON-12", teacher }` |
+| `GET` | `/concerns/{id}` | admin, teacher, parent | The concern and its status history (families never see staff-only notes) |
+| `POST` | `/concerns/{id}` | admin, the concern's teacher | `{ status: OPEN\|IN_PROGRESS\|RESOLVED, message? }` — parents see the status but cannot change it |
+| `POST` | `/concerns/{id}/request-update` | admin | "Request Action": `{ note? }` — the assigned teacher is notified; the note is staff-only |
+| `POST` | `/concerns/{id}/assign` | admin | `{ teacherId }` — hand a concern (e.g. one waiting with the office) to a teacher |
+| `GET` `PATCH` | `/support/concerns` | admin, teacher | Older alias: open concerns, and `PATCH { concernId, message?, status?, priority? }` |
 
 ### Staff, transport, library, inventory
 
@@ -288,10 +308,20 @@ user, and another school's ids answer 404.
 
 | Method | Path | Who |
 | --- | --- | --- |
-| `GET` `POST` | `/tokens` | School Admin, Super Admin |
+| `GET` `POST` | `/tokens` | School Admin, Super Admin — `POST` only from a signed-in session, never with another token. Changing or resetting a password revokes the user's tokens |
 | `DELETE` | `/tokens/{id}` | School Admin, Super Admin |
 
 ---
+
+### Accounts and activation
+
+Logins for teachers, staff, parents and students (Class 6–12 only) are created by the School Admin **without a password**: the person receives a one-time activation link by email (`/activate?token=…`, 7 days) and chooses their own. Forgotten passwords use `/forgot-password` → a one-time link (`/reset-password?token=…`, 30 minutes). No endpoint ever returns a password.
+
+- Activation and reset emails go through the same mailer (Resend). When the provider refuses, the account is kept, the failure and its reason are recorded, and `delivered: false` comes back with an `error` explaining it (e.g. Resend's test mode, which only delivers to the account owner until a domain is verified). The School Admin sees the latest activation email's status on the person's page and can resend; a resend supersedes the previous link.
+- `POST /teachers` returns `{ teacherId, activationEmail: { email, delivered, error? } }`.
+- `POST /students/{id}/portal-access` and `POST /guardians/{id}/portal-access` return `{ email, delivered }`.
+- `POST /students` returns the student with `meta.activationEmails` and `meta.notes`. The admission number is generated server-side as `ADM-{YEAR}-{00001}` (per school, per year); a number sent in the body is kept only for migrations and must be free.
+- `GET /photos/{id}` serves a profile photo to those allowed to see it.
 
 ## 5. Platform (Super Admin)
 

@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { MoreActions } from "@/components/shared/more-actions";
 import { PageHeader } from "@/components/shared/page-header";
+import { PersonAvatar } from "@/components/shared/person-avatar";
 import { Pager } from "@/components/shared/pager";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import { GENDERS, STUDENT_STATUSES } from "@/lib/validation/school";
 import { formatDate } from "@/lib/dates";
 import { humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
+import { photoUrlsFor } from "@/server/people/photos";
 import { leavingDates } from "@/server/people/lifecycle";
 import { getCurrentSession, sectionLabel, sectionOptions } from "@/server/academics/structure";
 import { ParentDetailsDialog } from "@/features/school/parent-dialog";
@@ -49,7 +51,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
     ctx.db.class.findMany({ where: { isActive: true }, orderBy: { level: "asc" }, select: { id: true, name: true } }),
   ]);
 
-  const leftOn = await leavingDates(ctx, "STUDENT", rows);
+  const [leftOn, photos] = await Promise.all([leavingDates(ctx, "STUDENT", rows), photoUrlsFor(ctx, "STUDENT", rows.map((row) => row.id))]);
 
   return (
     <>
@@ -122,7 +124,8 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
             return (
               <li key={student.id} className="bg-card rounded-2xl border p-4 shadow-[0_1px_3px_rgb(15_23_42/0.06)]">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                  <PersonAvatar name={`${student.firstName} ${student.lastName}`} photoUrl={photos.get(student.id)} className="size-10" />
+                  <div className="min-w-0 flex-1">
                     <p className="truncate font-semibold">
                       {student.firstName} {student.lastName}
                     </p>
@@ -151,6 +154,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
+                <TableHead className="hidden sm:table-cell">Gender</TableHead>
                 <TableHead>Class</TableHead>
                 <TableHead>Section</TableHead>
                 <TableHead className="hidden sm:table-cell">Roll No.</TableHead>
@@ -166,11 +170,21 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
                 return (
                   <TableRow key={student.id}>
                     <TableCell>
-                      <Link href={`/school-admin/students/${student.id}`} className="font-medium hover:underline">
-                        {student.firstName} {student.lastName}
-                      </Link>
-                      <p className="text-muted-foreground text-xs">{student.admissionNumber}</p>
+                      <div className="flex items-center gap-3">
+                        <PersonAvatar name={`${student.firstName} ${student.lastName}`} photoUrl={photos.get(student.id)} />
+                        <div className="min-w-0">
+                          <Link href={`/school-admin/students/${student.id}`} className="font-medium hover:underline">
+                            {student.firstName} {student.lastName}
+                          </Link>
+                          <p className="text-muted-foreground text-xs">
+                            {student.admissionNumber}
+                            {/* The column is hidden on a phone, so it rides here instead. */}
+                            {student.gender ? <span className="sm:hidden"> · {humanize(student.gender)}</span> : null}
+                          </p>
+                        </div>
+                      </div>
                     </TableCell>
+                    <TableCell className="text-muted-foreground hidden sm:table-cell">{student.gender ? humanize(student.gender) : "—"}</TableCell>
                     <TableCell>{enrollment ? enrollment.section.class.name : <span className="text-muted-foreground">Not placed</span>}</TableCell>
                     <TableCell>
                       {enrollment ? `${enrollment.section.name}${enrollment.section.stream ? ` (${enrollment.section.stream.name})` : ""}` : "—"}

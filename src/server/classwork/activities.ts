@@ -1,7 +1,7 @@
 import "server-only";
 
 import { addDays, dayOfWeek, today } from "@/lib/dates";
-import { AppError, ForbiddenError, NotFoundError } from "@/lib/errors";
+import { AppError, ConflictError, ForbiddenError, NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -85,7 +85,21 @@ async function requireOwnSlot(ctx: TenantContext, timetableSlotId: string, date:
   });
   if (!slot) throw new ForbiddenError("That period is not one of yours.");
 
-  if (slot.teacherId === teacher.id) return { teacher, slot, standingIn: false };
+  if (slot.teacherId === teacher.id) {
+    // Once the office has put a substitute in this period, the record is the
+    // substitute's: the scheduled teacher writing it up would overwrite who
+    // actually took the class.
+    const covered = await ctx.db.classSession.findFirst({
+      where: { timetableSlotId: slot.id, date, actualTeacherId: { not: null, notIn: [teacher.id] } },
+      select: { actualTeacher: { select: { firstName: true, lastName: true } } },
+    });
+    if (covered?.actualTeacher) {
+      throw new ConflictError(
+        `${fullName(covered.actualTeacher)} was assigned to take this class, so they record it. Ask the school office if this is wrong.`,
+      );
+    }
+    return { teacher, slot, standingIn: false };
+  }
 
   // Not their period on the timetable — but the office may have put them in it
   // for this one date. A substitute writes up the class they actually took,

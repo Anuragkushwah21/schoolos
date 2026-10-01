@@ -21,7 +21,7 @@ import { orNotFound } from "@/server/page-helpers";
  */
 
 const loadReceipt = cache(async (paymentId: string) => {
-  const ctx = await requireTenant("SCHOOL_ADMIN", "PARENT", "STUDENT");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PARENT", "STUDENT", "NON_TEACHING_STAFF");
   return { ctx, receipt: await orNotFound(getReceipt(ctx, paymentId)) };
 });
 

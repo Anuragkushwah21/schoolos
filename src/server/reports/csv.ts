@@ -7,7 +7,9 @@ import type { ReportTable } from "@/server/reports/exports";
 /** Neutralise spreadsheet formula injection and quote every cell. */
 export function csvCell(value: string | number): string {
   let text = String(value);
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  // Leading spaces are skipped by some spreadsheets before a formula, so they
+  // do not hide one.
+  if (/^[\t\r]|^\s*[=+\-@]/.test(text)) text = `'${text}`;
   return `"${text.replace(/"/g, '""')}"`;
 }
 

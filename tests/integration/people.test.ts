@@ -27,6 +27,7 @@ import {
   updateTeacher,
 } from "@/server/people/teachers";
 
+import { activate } from "../helpers/mail";
 import { adminOf, teacherOf } from "../helpers/context";
 import {
   type SeededSchool,
@@ -71,7 +72,7 @@ afterAll(async () => {
 describe("students", () => {
   it("admits a student with an enrollment, a new guardian and an automatic admission number", async () => {
     const ctx = adminOf(schoolA);
-    const id = await createStudent(
+    const { studentId: id } = await createStudent(
       ctx,
       studentInput({
         sectionId: schoolA.sectionId,
@@ -88,7 +89,7 @@ describe("students", () => {
       include: { enrollments: true, parents: { include: { parent: true } } },
     });
     expect(student.schoolId).toBe(schoolA.schoolId);
-    expect(student.admissionNumber).toMatch(/^ADM\d{4}$/);
+    expect(student.admissionNumber).toMatch(/^ADM-\d{4}-\d{5}$/);
     expect(student.enrollments).toHaveLength(1);
     expect(student.enrollments[0]?.classId).toBe(schoolA.classId);
     expect(student.parents[0]?.parent.firstName).toBe("Meena");
@@ -188,7 +189,10 @@ describe("students", () => {
     const parent = await prisma.parent.create({
       data: { schoolId: schoolB.schoolId, firstName: "Login", lastName: "Parent", phone: "+91 90000 22222" },
     });
-    const credentials = await grantParentPortal(ctx, parent.id, "guardian@people-test.test");
+    const invite = await grantParentPortal(ctx, parent.id, "guardian@people-test.test");
+    // No password comes back: the parent activates the login from the email.
+    expect(invite).toMatchObject({ email: "guardian@people-test.test", delivered: true });
+    const credentials = { email: invite.email, password: await activate(invite.email) };
     expect((await authenticate(credentials.email, credentials.password)).ok).toBe(true);
 
     const user = await prisma.user.findUniqueOrThrow({ where: { email: "guardian@people-test.test" } });
@@ -203,7 +207,7 @@ describe("students", () => {
 
 describe("teachers", () => {
   it("creates the staff record and a TEACHER login together", async () => {
-    const { teacherId, credentials } = await createTeacher(adminOf(schoolB), {
+    const { teacherId, invite } = await createTeacher(adminOf(schoolB), {
       firstName: "Nita",
       lastName: "Das",
       email: "nita@people-test.test",
@@ -219,6 +223,7 @@ describe("teachers", () => {
       postalCode: null,
       joiningDate: null,
     });
+    const credentials = { email: invite.email, password: await activate(invite.email) };
 
     const teacher = await prisma.teacher.findUniqueOrThrow({ where: { id: teacherId }, include: { user: true } });
     expect(teacher.user.role).toBe("TEACHER");
@@ -263,7 +268,7 @@ describe("teachers", () => {
   });
 
   it("disables the login of a teacher who leaves", async () => {
-    const { teacherId, credentials } = await createTeacher(adminOf(schoolA), {
+    const { teacherId, invite } = await createTeacher(adminOf(schoolA), {
       firstName: "Leaving",
       lastName: "Soon",
       email: "leaving@people-test.test",
@@ -279,6 +284,7 @@ describe("teachers", () => {
       postalCode: null,
       joiningDate: null,
     });
+    const credentials = { email: invite.email, password: await activate(invite.email) };
 
     const teacher = await prisma.teacher.findUniqueOrThrow({ where: { id: teacherId } });
     await updateTeacher(adminOf(schoolA), {
@@ -304,7 +310,7 @@ describe("teachers", () => {
   });
 
   it("moves the sign-in address when the admin corrects it", async () => {
-    const { teacherId, credentials } = await createTeacher(adminOf(schoolA), {
+    const { teacherId, invite } = await createTeacher(adminOf(schoolA), {
       firstName: "Typo",
       lastName: "Address",
       email: "tpyo@people-test.test",
@@ -320,6 +326,7 @@ describe("teachers", () => {
       postalCode: null,
       joiningDate: null,
     });
+    const credentials = { email: invite.email, password: await activate(invite.email) };
 
     const teacher = await prisma.teacher.findUniqueOrThrow({ where: { id: teacherId } });
     await updateTeacher(adminOf(schoolA), {
@@ -396,10 +403,11 @@ describe("teachers", () => {
 
 describe("deleting a student", () => {
   async function freshStudent(suffix: string) {
-    return createStudent(
+    const { studentId } = await createStudent(
       adminOf(schoolA),
       studentInput({ firstName: "Typed", lastName: `ByMistake${suffix}`, sectionId: schoolA.sectionId }),
     );
+    return studentId;
   }
 
   it("erases the student, their placement, their parent links and their login", async () => {
@@ -481,7 +489,8 @@ describe("deleting a teacher", () => {
   }
 
   it("erases the staff record, the login and the subject assignments together", async () => {
-    const { teacherId, credentials } = await freshTeacher("clean");
+    const { teacherId, invite } = await freshTeacher("clean");
+    const credentials = { email: invite.email, password: await activate(invite.email) };
     const user = await prisma.teacher.findUniqueOrThrow({
       where: { id: teacherId },
       select: { userId: true },

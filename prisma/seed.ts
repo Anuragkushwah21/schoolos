@@ -171,6 +171,7 @@ async function seedPlans() {
 async function seedPlatform(passwordHash: string) {
   const superAdmin = await prisma.user.create({
     data: {
+      activatedAt: new Date(),
       email: "superadmin@schoolos.test",
       passwordHash,
       role: UserRole.SUPER_ADMIN,
@@ -269,6 +270,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string, planId: string
 
   const adminUser = await prisma.user.create({
     data: {
+      activatedAt: new Date(),
       email: spec.adminEmail,
       passwordHash,
       role: UserRole.SCHOOL_ADMIN,
@@ -329,6 +331,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string, planId: string
   for (const [index, t] of spec.teachers.entries()) {
     const user = await prisma.user.create({
       data: {
+        activatedAt: new Date(),
         email: `${t.first}.${t.last}.${spec.slug}@schoolos.test`.toLowerCase(),
         passwordHash,
         role: UserRole.TEACHER,
@@ -414,6 +417,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string, planId: string
   for (const family of spec.families) {
     const parentUser = await prisma.user.create({
       data: {
+        activatedAt: new Date(),
         email: `${family.parentFirst}.${family.surname}.${spec.slug}@schoolos.test`.toLowerCase(),
         passwordHash,
         role: UserRole.PARENT,
@@ -444,6 +448,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string, planId: string
 
       const studentUser = await prisma.user.create({
         data: {
+          activatedAt: new Date(),
           email: `${child.first}.${family.surname}.${admissionCounter}.${spec.slug}@schoolos.test`.toLowerCase(),
           passwordHash,
           role: UserRole.STUDENT,
@@ -509,7 +514,14 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string, planId: string
   ];
 
   for (const [sectionIndex, sectionId] of [...sections.values()].entries()) {
-    for (const [dayIndex, day] of weekdays.entries()) {
+    // Each section has its own room, picked per period like the app does.
+    const roomName = `R${sectionIndex + 1}01`;
+    const room = await prisma.room.upsert({
+      where: { schoolId_nameKey: { schoolId: school.id, nameKey: roomName.toLowerCase() } },
+      update: {},
+      create: { schoolId: school.id, name: roomName, nameKey: roomName.toLowerCase(), capacity: 40 },
+    });
+    for (const day of weekdays) {
       for (const [periodIndex, start] of periodStarts.entries()) {
         // Rotate teachers so no teacher is double-booked at the same
         // day/time across sections — the schema forbids it outright.
@@ -530,7 +542,8 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string, planId: string
             dayOfWeek: day,
             startMinute: start,
             endMinute: start + 55,
-            room: `R${sectionIndex + 1}0${dayIndex + 1}`,
+            roomId: room.id,
+            room: room.name,
           },
         });
       }

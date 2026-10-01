@@ -17,6 +17,8 @@ import { nativeSelectClass } from "@/components/forms/styles";
 import { Label } from "@/components/ui/label";
 import { today, toDateInput } from "@/lib/dates";
 
+import { type SectionSeats, StreamSeatPicker } from "./stream-seat-picker";
+
 import {
   assignSubjectAction,
   createStudentAction,
@@ -76,7 +78,7 @@ type StudentDefaults = {
   status?: string;
 };
 
-function StudentPersonalFields({ d, requireAdmission }: { d: StudentDefaults; requireAdmission?: boolean }) {
+function StudentPersonalFields({ d, requireAdmission, autoNumber }: { d: StudentDefaults; requireAdmission?: boolean; autoNumber?: boolean }) {
   return (
     <>
       <FieldRow>
@@ -88,14 +90,22 @@ function StudentPersonalFields({ d, requireAdmission }: { d: StudentDefaults; re
         <TextField name="dateOfBirth" label="Date of birth" type="date" defaultValue={d.dateOfBirth} max={toDateInput(today())} />
       </FieldRow>
       <FieldRow>
-        <TextField
-          name="admissionNumber"
-          label="Admission number"
-          defaultValue={d.admissionNumber}
-          required={requireAdmission}
-          hint={requireAdmission ? undefined : "Leave blank to number automatically."}
-        />
-        <TextField name="admissionDate" label="Admission date" type="date" defaultValue={d.admissionDate} />
+        {autoNumber ? (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium">Admission number</span>
+            <span className="bg-muted/50 rounded-md border px-3 py-2 text-sm">Auto-generated</span>
+            <span className="text-muted-foreground text-xs">Given when you save — ADM-{new Date().getFullYear()}-00001 style, never reused.</span>
+          </div>
+        ) : (
+          <TextField
+            name="admissionNumber"
+            label="Admission number"
+            defaultValue={d.admissionNumber}
+            required={requireAdmission}
+            hint={requireAdmission ? undefined : "Leave blank to number automatically."}
+          />
+        )}
+        <TextField name="admissionDate" label="Admission date" type="date" defaultValue={d.admissionDate ?? toDateInput(today())} />
       </FieldRow>
       <FieldRow>
         <TextField name="bloodGroup" label="Blood group" placeholder="B+" defaultValue={d.bloodGroup ?? ""} />
@@ -136,9 +146,12 @@ function StudentContactFields({ d }: { d: StudentDefaults }) {
 function GuardianModeFields({
   parents,
   modes,
+  admission = false,
 }: {
   parents: SelectOption[];
   modes: Array<"existing" | "new">;
+  /** On the admission form: address, and the "different person" confirmation. */
+  admission?: boolean;
 }) {
   // Default to the existing parent when there is one to pick: a sibling already
   // at the school is the case that creates duplicates when it is missed.
@@ -187,8 +200,23 @@ function GuardianModeFields({
           </FieldRow>
           <FieldRow>
             <TextField name="parentPhone" label="Mobile" type="tel" required />
-            <TextField name="parentEmail" label="Email" type="email" />
+            <TextField
+              name="parentEmail"
+              label="Email"
+              type="email"
+              hint={admission ? "With an email, the parent gets an activation link to choose their own password." : undefined}
+            />
           </FieldRow>
+          {admission ? (
+            <>
+              <TextField name="parentAddress" label="Address" autoComplete="street-address" />
+              <CheckboxField
+                name="confirmNewParent"
+                label="This is a different person"
+                hint="Tick only if we warn that this mobile or email already belongs to a parent here, and it really is someone else."
+              />
+            </>
+          ) : null}
         </>
       ) : null}
 
@@ -208,46 +236,91 @@ function GuardianModeFields({
  * their parent is, and (optionally) address and emergency contact. One form
  * and one save underneath — the steps only decide what is on screen.
  */
+/** The student's own login: Class 6 to 12 only. */
+function StudentAccountFields() {
+  const [login, setLogin] = useState(false);
+  return (
+    <>
+      <FieldRow>
+        <TextField name="studentEmail" label="Student email" type="email" hint="Optional." />
+        <TextField name="studentPhone" label="Student mobile" type="tel" hint="Optional." />
+      </FieldRow>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" name="studentLogin" checked={login} onChange={(event) => setLogin(event.target.checked)} className="accent-primary mt-0.5 size-4" />
+        <span>
+          Give the student their own login
+          <span className="text-muted-foreground block text-xs">
+            An activation link goes to the student&apos;s email, so an email is needed. Without a login the student is still fully admitted.
+          </span>
+        </span>
+      </label>
+    </>
+  );
+}
+
+/**
+ * Adding a student, one step at a time: who they are, where they sit, who
+ * their parent is, (Class 6–12 only) the student's own account, and address.
+ * One form and one save underneath — the steps only decide what is on screen.
+ * The server applies the same class rules whatever is sent.
+ */
 export function CreateStudentForm({
   sections,
   parents,
   sessionName,
+  seats = {},
 }: {
-  sections: SelectOption[];
+  sections: Array<SelectOption & { level: number }>;
   parents: SelectOption[];
   sessionName: string;
+  /** Each section's stream shares and free seats. */
+  seats?: Record<string, SectionSeats>;
 }) {
   const t = useT();
+  const [sectionId, setSectionId] = useState("");
+  const level = sections.find((section) => section.value === sectionId)?.level ?? null;
+  const senior = level !== null && level >= 6;
   return (
     <ActionForm action={createStudentAction} className="max-w-3xl">
       <FormSteps
         steps={[
-          { title: t("studentForm.stepStudent"), content: <StudentPersonalFields d={{}} /> },
+          { title: t("studentForm.stepStudent"), content: <StudentPersonalFields d={{}} autoNumber /> },
           {
             title: t("studentForm.stepClass"),
             description: sessionName,
             content: (
-              <FieldRow>
-                <SelectField name="sectionId" label="Class and section" options={sections} placeholder="Select…" required />
-                <TextField name="rollNumber" label="Roll number" />
-              </FieldRow>
+              <>
+                <FieldRow>
+                  <SelectField
+                    name="sectionId"
+                    label="Class and section"
+                    options={sections}
+                    placeholder="Select…"
+                    value={sectionId}
+                    onChange={(event) => setSectionId(event.target.value)}
+                    required
+                  />
+                  <TextField name="rollNumber" label="Roll number" />
+                </FieldRow>
+                <StreamSeatPicker key={sectionId} seats={seats[sectionId]} />
+              </>
             ),
           },
-          { title: t("studentForm.stepParent"), content: <GuardianModeFields parents={parents} modes={["existing", "new"]} /> },
+          { title: t("studentForm.stepParent"), content: <GuardianModeFields parents={parents} modes={["existing", "new"]} admission /> },
+          // Nursery to Class 5 have no student account: the step is not there at all.
+          ...(senior
+            ? [
+                {
+                  title: "Student account",
+                  description: `${t("common.optional")} · Class 6–12`,
+                  content: <StudentAccountFields />,
+                },
+              ]
+            : []),
           {
             title: t("studentForm.stepContact"),
             description: t("common.optional"),
             content: <StudentContactFields d={{}} />,
-          },
-          {
-            title: t("studentForm.stepLogin"),
-            description: t("studentForm.stepLoginHint"),
-            content: (
-              <>
-                <CheckboxField name="parentLogin" label={t("studentForm.parentLogin")} hint={t("studentForm.parentLoginHint")} />
-                <TextField name="studentLoginEmail" label={t("studentForm.studentLogin")} type="email" hint={t("studentForm.studentLoginHint")} />
-              </>
-            ),
           },
         ]}
         submit={
@@ -260,12 +333,29 @@ export function CreateStudentForm({
   );
 }
 
-export function EditStudentForm({ student }: { student: StudentDefaults & { studentId: string } }) {
+export function EditStudentForm({
+  student,
+  email,
+}: {
+  student: StudentDefaults & { studentId: string };
+  /** Class 6–12 only: the student's email (their sign-in address when they have a login). */
+  email?: { value: string | null; hasLogin: boolean } | null;
+}) {
   return (
     <ActionForm action={updateStudentAction} className="max-w-3xl">
       <input type="hidden" name="studentId" value={student.studentId} />
       <Section title="Student">
         <StudentPersonalFields d={student} requireAdmission />
+        {email ? (
+          <TextField
+            name="email"
+            label={email.hasLogin ? "Student email (sign-in)" : "Student email"}
+            type="email"
+            defaultValue={email.value ?? ""}
+            required={email.hasLogin}
+            hint={email.hasLogin ? "Correcting it moves the student's sign-in to the new address. Links sent to the old one stop working." : "Optional."}
+          />
+        ) : null}
         {/* Status is changed from the profile's "Change status", which records the date and reason. */}
       </Section>
       <Section title="Address and emergency contact">
@@ -283,14 +373,18 @@ export function EnrollmentForm({
   sessions,
   sections,
   defaults,
+  seats = {},
 }: {
   studentId: string;
   sessions: SelectOption[];
   sections: Array<SelectOption & { sessionId: string }>;
-  defaults: { sessionId?: string; sectionId?: string; rollNumber?: string | null };
+  defaults: { sessionId?: string; sectionId?: string; streamId?: string | null; rollNumber?: string | null };
+  /** Each section's stream shares and free seats. */
+  seats?: Record<string, SectionSeats>;
 }) {
   const [sessionId, setSessionId] = useState(defaults.sessionId ?? sessions[0]?.value ?? "");
   const options = sections.filter((section) => section.sessionId === sessionId);
+  const [sectionId, setSectionId] = useState(defaults.sectionId ?? "");
 
   return (
     <ActionForm action={enrollStudentAction} className="gap-4">
@@ -319,10 +413,12 @@ export function EnrollmentForm({
           options={options}
           placeholder={options.length ? "Select…" : "No sections in this session"}
           defaultValue={sessionId === defaults.sessionId ? defaults.sectionId : ""}
+          onChange={(event) => setSectionId(event.target.value)}
           required
         />
         <TextField name="rollNumber" label="Roll number" defaultValue={defaults.rollNumber ?? ""} />
       </FieldRow>
+      <StreamSeatPicker key={`${sessionId}|${sectionId}`} seats={seats[sectionId]} defaultValue={defaults.streamId} />
       <p className="text-muted-foreground text-xs">
         Choosing a different session promotes the student and keeps this
         year&apos;s record as history.
@@ -350,7 +446,17 @@ export function LinkGuardianForm({ studentId, parents }: { studentId: string; pa
 export function EditParentForm({
   parent,
 }: {
-  parent: { id: string; firstName: string; lastName: string; phone: string; email: string | null; occupation: string | null; addressLine: string | null };
+  parent: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    email: string | null;
+    occupation: string | null;
+    addressLine: string | null;
+    /** Given only where the School Admin should see and edit it. */
+    idProof?: { type: string | null; number: string | null };
+  };
 }) {
   return (
     <ActionForm action={updateParentAction} className="gap-4">
@@ -367,6 +473,15 @@ export function EditParentForm({
         <TextField name="occupation" label="Occupation" defaultValue={parent.occupation ?? ""} />
         <TextField name="addressLine" label="Address" defaultValue={parent.addressLine ?? ""} />
       </FieldRow>
+      {parent.idProof ? (
+        <>
+          <input type="hidden" name="withIdProof" value="on" />
+          <FieldRow>
+            <TextField name="idProofType" label="ID proof type" placeholder="Aadhaar, PAN, Passport…" defaultValue={parent.idProof.type ?? ""} />
+            <TextField name="idProofNumber" label="ID proof number" defaultValue={parent.idProof.number ?? ""} hint="Seen only by the School Admin." />
+          </FieldRow>
+        </>
+      ) : null}
       <div>
         <SubmitButton variant="outline" size="sm">Save guardian</SubmitButton>
       </div>
@@ -403,16 +518,73 @@ export function PortalAccessForm({
   );
 }
 
-export function ResetPortalPasswordForm({ userId }: { userId: string }) {
+/**
+ * "Send login email": a new activation link while the account waits to be
+ * activated, a password-reset link once it is active. The office never sees
+ * or sets a password.
+ */
+export function ResetPortalPasswordForm({ userId, pending = false }: { userId: string; pending?: boolean }) {
   return (
     <ActionForm action={resetPortalPasswordAction} className="gap-2">
       <input type="hidden" name="userId" value={userId} />
       <div>
-        <SubmitButton variant="outline" size="sm" pendingLabel="Issuing…">
-          Reset password
+        <SubmitButton variant="outline" size="sm" pendingLabel="Sending…">
+          {pending ? "Resend activation" : "Send password reset email"}
         </SubmitButton>
       </div>
     </ActionForm>
+  );
+}
+
+/** The latest activation email for a pending login (see `activationEmailStatuses`). */
+export type ActivationEmail = { at: Date | string; status: "SENT" | "FAILED" | null; error: string | null; expired: boolean } | null | undefined;
+
+/** Where a login stands, in words: activation pending, active, or switched off — and, while pending, whether the email went. */
+export function LoginStatus({
+  user,
+  invite,
+}: {
+  user: { email: string; isActive: boolean; activatedAt: Date | string | null; lastLoginAt: Date | string | null };
+  invite?: ActivationEmail;
+}) {
+  const state = !user.isActive ? "off" : user.activatedAt ? "active" : "pending";
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="break-all">{user.email}</span>
+        <span
+          className={
+            state === "active"
+              ? "bg-success-soft text-success-strong rounded-full px-2 py-0.5 text-xs"
+              : state === "pending"
+                ? "bg-warning-soft text-warning-strong rounded-full px-2 py-0.5 text-xs"
+                : "bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs"
+          }
+        >
+          {state === "active" ? "Active" : state === "pending" ? "Pending activation" : "Login off"}
+        </span>
+      </p>
+      {state === "pending" ? <ActivationEmailNote invite={invite} /> : null}
+    </div>
+  );
+}
+
+/** "Activation email: Sent ✓ 30 Sep" — or failed, and why, so the office knows to resend. */
+export function ActivationEmailNote({ invite }: { invite?: ActivationEmail }) {
+  if (!invite) return <p className="text-muted-foreground text-xs">Activation email: not sent yet.</p>;
+  const when = new Date(invite.at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  if (invite.status === "FAILED") {
+    return (
+      <p className="bg-danger-soft text-danger-strong rounded-lg px-2.5 py-1.5 text-xs" role="status">
+        <span className="font-semibold">Activation email: failed</span> ({when}){invite.error ? ` — ${invite.error}` : ""}
+      </p>
+    );
+  }
+  return (
+    <p className="text-muted-foreground text-xs">
+      Activation email: {invite.status === "SENT" ? <span className="text-success-strong font-medium">sent ✓</span> : "queued"} ({when})
+      {invite.expired ? " — the link has expired; resend it." : ""}
+    </p>
   );
 }
 
@@ -559,18 +731,41 @@ export function AssignSubjectForm({
   teacherId,
   subjects,
   sections,
+  streamsBySection = {},
 }: {
   teacherId: string;
   subjects: SelectOption[];
   sections: SelectOption[];
+  /** Streams / groups each section shares its seats with. */
+  streamsBySection?: Record<string, SelectOption[]>;
 }) {
+  const [sectionId, setSectionId] = useState("");
+  const streams = streamsBySection[sectionId] ?? [];
   return (
     <ActionForm action={assignSubjectAction} className="gap-3">
       <input type="hidden" name="teacherId" value={teacherId} />
       <FieldRow>
         <SelectField name="subjectId" label="Subject" options={subjects} placeholder="Select…" required />
-        <SelectField name="sectionId" label="Class / section" options={sections} placeholder="Select…" required />
+        <SelectField
+          name="sectionId"
+          label="Class / section"
+          options={sections}
+          placeholder="Select…"
+          value={sectionId}
+          onChange={(event) => setSectionId(event.target.value)}
+          required
+        />
       </FieldRow>
+      {streams.length ? (
+        <SelectField
+          key={sectionId}
+          name="streamId"
+          label="Stream / Group"
+          options={streams}
+          placeholder="Whole section (all streams)"
+          hint="Choose a stream when this subject is taught to that group only."
+        />
+      ) : null}
       <div>
         <SubmitButton variant="outline">Assign</SubmitButton>
       </div>

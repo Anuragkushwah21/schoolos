@@ -1,5 +1,7 @@
 import "server-only";
 
+import { type ExamProgress, examStage, publishBlocker } from "@/lib/exam-stage";
+
 import type { Prisma } from "@/generated/prisma/client";
 import type { ExamStatus } from "@/generated/prisma/enums";
 import { CsvFormatError, readCsvRecords } from "@/lib/csv";
@@ -345,10 +347,20 @@ export async function getExamDetail(ctx: TenantContext, examId: string) {
     if (row.marksObtained !== null || row.absent) enteredBy.set(row.assessmentId, (enteredBy.get(row.assessmentId) ?? 0) + 1);
   }
   const now = today();
+  const rows = papers.map((paper) => ({ ...paper, held: paper.date <= now, entered: enteredBy.get(paper.id) ?? 0, expected: roster.length }));
+  const progress: ExamProgress = {
+    published: exam.status === "PUBLISHED",
+    papers: rows.length,
+    notHeld: rows.filter((paper) => !paper.held).length,
+    entered: rows.reduce((sum, paper) => sum + Math.min(paper.entered, paper.expected), 0),
+    expected: rows.reduce((sum, paper) => sum + paper.expected, 0),
+  };
   return {
     exam: { ...exam, sectionLabel: sectionLabel(exam.section), timeStatus: spanStatus(exam.startDate, exam.endDate, now) },
-    papers: papers.map((paper) => ({ ...paper, held: paper.date <= now, entered: enteredBy.get(paper.id) ?? 0, expected: roster.length })),
+    papers: rows,
     students,
+    stage: examStage(progress),
+    blocker: publishBlocker(progress),
   };
 }
 
@@ -380,6 +392,7 @@ export async function listExams(
       papers: {
         select: {
           id: true,
+          date: true,
           _count: { select: { results: { where: { OR: [{ marksObtained: { not: null } }, { absent: true }] } } } },
         },
       },
@@ -401,7 +414,15 @@ export async function listExams(
   return exams
     .map((exam) => {
       const students = studentsIn.get(exam.sectionId) ?? 0;
-      const entered = exam.papers.reduce((sum, paper) => sum + paper._count.results, 0);
+      const entered = exam.papers.reduce((sum, paper) => sum + Math.min(paper._count.results, students), 0);
+      const now = today();
+      const progress: ExamProgress = {
+        published: exam.status === "PUBLISHED",
+        papers: exam.papers.length,
+        notHeld: exam.papers.filter((paper) => paper.date > now).length,
+        entered,
+        expected: exam.papers.length * students,
+      };
       return {
         id: exam.id,
         name: exam.name,
@@ -415,6 +436,8 @@ export async function listExams(
         papers: exam.papers.length,
         entered,
         expected: exam.papers.length * students,
+        /** DRAFT → IN_PROGRESS → MARKS_PENDING → READY_TO_PUBLISH → PUBLISHED, from the marks. */
+        stage: examStage(progress),
       };
     })
     .sort((a, b) => b.startDate.getTime() - a.startDate.getTime() || a.level - b.level || a.section.localeCompare(b.section));
@@ -433,7 +456,7 @@ export async function publishExams(ctx: TenantContext, examIds: string[]): Promi
   });
   if (exams.length !== unique.length) throw new NotFoundError("An exam was not found.");
 
-  const incomplete: string[] = [];
+  const incomplete: Array<{ label: string; headline: string; detail: string; action: "papers" | "marks" }> = [];
   for (const exam of exams) {
     if (exam.status === "PUBLISHED") continue;
     const [papers, roster] = await Promise.all([
@@ -447,18 +470,18 @@ export async function publishExams(ctx: TenantContext, examIds: string[]): Promi
         OR: [{ marksObtained: { not: null } }, { absent: true }],
       },
     });
-    const missing = papers.length * roster.length - entered;
     const notHeld = await ctx.db.assessment.count({ where: { examId: exam.id, date: { gt: today() } } });
-    if (notHeld) incomplete.push(`${sectionLabel(exam.section)} "${exam.name}": ${notHeld} paper${notHeld === 1 ? " is" : "s are"} still to be held`);
-    else if (!papers.length) incomplete.push(`${sectionLabel(exam.section)} "${exam.name}": no papers`);
-    else if (missing > 0) incomplete.push(`${sectionLabel(exam.section)} "${exam.name}": ${missing} marks missing`);
+    const blocker = publishBlocker({ published: false, papers: papers.length, notHeld, entered, expected: papers.length * roster.length });
+    if (blocker) incomplete.push({ label: sectionLabel(exam.section), ...blocker });
   }
   if (incomplete.length) {
-    // Say what is wrong, then what to do: each exam's page lists its papers
-    // with how many marks each still needs.
+    // Say what is wrong, then what to do — in the words the exam page uses.
+    const first = incomplete[0]!;
     throw new AppError(
       "VALIDATION",
-      `Results can't be published yet. ${incomplete.join("; ")}. Open the exam to see which papers are still pending, then publish again.`,
+      incomplete.length === 1
+        ? `${first.headline} ${first.detail} Open the exam to see ${first.action === "papers" ? "the pending papers" : "the missing marks"}.`
+        : `Results can't be published yet for ${incomplete.length} exams: ${incomplete.map((row) => `${row.label} (${row.detail.replace(/\.$/, "")})`).join("; ")}. Nothing was published.`,
     );
   }
 

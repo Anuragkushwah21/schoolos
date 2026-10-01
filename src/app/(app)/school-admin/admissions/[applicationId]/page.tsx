@@ -11,6 +11,7 @@ import { humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
 import { getApplication } from "@/server/admissions/service";
 import { sectionOptions } from "@/server/academics/structure";
+import { admissionSeatOptions } from "@/server/academics/streams";
 import { orNotFound } from "@/server/page-helpers";
 
 export const metadata: Metadata = { title: "Application" };
@@ -29,7 +30,7 @@ export default async function AdmissionPage(props: PageProps<"/school-admin/admi
   const { applicationId } = await props.params;
 
   const application = await orNotFound(getApplication(ctx, applicationId));
-  const sections = await sectionOptions(ctx, application.academicSessionId);
+  const [sections, seats] = await Promise.all([sectionOptions(ctx, application.academicSessionId), admissionSeatOptions(ctx, application.academicSessionId)]);
   const decided = application.status === "ACCEPTED" || application.status === "REJECTED";
 
   // Sections of the class the family asked for come first as a default.
@@ -123,6 +124,8 @@ export default async function AdmissionPage(props: PageProps<"/school-admin/admi
                       applicationId={application.id}
                       sections={sections}
                       defaultSectionId={suggested?.value}
+                      seats={seats}
+                      requestedStreamId={application.requestedStreamId}
                     />
                   ) : (
                     <p className="text-muted-foreground text-sm">

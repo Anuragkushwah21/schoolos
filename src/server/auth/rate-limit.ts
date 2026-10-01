@@ -71,4 +71,11 @@ export function __resetAllRateLimits(): void {
 }
 
 export const LOGIN_RATE_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
+/**
+ * Per account, whatever the address. The IP in a request is only as honest as
+ * the proxy in front, so this cap is what actually bounds guesses against one
+ * account. Higher than the per-IP limit so a family sharing a school's Wi-Fi
+ * is not locked out by one mistyping child.
+ */
+export const LOGIN_ACCOUNT_RATE_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
 export const PUBLIC_FORM_RATE_LIMIT = { limit: 5, windowMs: 60 * 60 * 1000 };

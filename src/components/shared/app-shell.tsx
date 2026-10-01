@@ -3,6 +3,7 @@ import { NAV_BY_ROLE, type NavItem } from "@/lib/nav";
 import { roleProfilePath } from "@/lib/roles";
 import type { SessionUser } from "@/server/auth/session";
 import { getT } from "@/server/i18n";
+import { selfPhotoUrl } from "@/server/people/photos";
 
 /**
  * Chrome shared by every signed-in area: a slim sidebar of what people do,
@@ -26,7 +27,7 @@ export async function AppShell({
   nav?: NavItem[];
   children: React.ReactNode;
 }) {
-  const t = await getT();
+  const [t, photoUrl] = await Promise.all([getT(), selfPhotoUrl(user).catch(() => null)]);
 
   return (
     <ShellChrome
@@ -37,6 +38,7 @@ export async function AppShell({
         email: user.email,
         role: user.role,
         profileHref: roleProfilePath(user.role),
+        photoUrl,
       }}
     >
       {children}

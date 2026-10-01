@@ -1,85 +1,47 @@
 import "server-only";
 
 import type { UserRole } from "@/generated/prisma/enums";
-import { ConflictError, NotFoundError } from "@/lib/errors";
-import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
-import { hashPassword } from "@/server/auth/password";
+import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
+import { recordAudit } from "@/server/audit/log";
+import { type LoginInvite, provisionAccount, resendAccountEmail, sendActivation } from "@/server/auth/account-links";
+import { prisma } from "@/server/db/prisma";
 import { invalidateAllSessionsForUser } from "@/server/auth/session";
-import { generateTemporaryPassword } from "@/server/auth/temp-password";
-import { isUniqueViolation } from "@/server/db/errors";
-import type { Credentials } from "@/server/platform/schools";
 
 /**
  * Portal accounts for people in a school — teachers, students, guardians and
  * non-teaching staff.
  *
  * The School Admin issues them; the role is always set here from the kind of
- * record being linked, never taken from the request. Passwords are generated,
- * shown once, and can only be replaced, never read back.
+ * record being linked, never taken from the request. The person activates the
+ * account from an email and chooses their own password; nobody else ever
+ * sees it (see `server/auth/account-links.ts`).
  */
 
 /** Logins the School Admin issues and manages. Never an administrator. */
 const PORTAL_ROLES: UserRole[] = ["TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"];
 
-/** Create a login and return its one-time credentials. Caller links it. */
+/**
+ * Create a login waiting for activation; the caller links it to the person
+ * and then calls `sendActivation`. No password is set or shown.
+ */
 export async function createPortalUser(
   ctx: TenantContext,
   input: { email: string; role: Exclude<UserRole, "SUPER_ADMIN" | "SCHOOL_ADMIN">; firstName: string; lastName: string; phone?: string | null },
-): Promise<{ userId: string; credentials: Credentials }> {
+): Promise<{ userId: string }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
-  const password = generateTemporaryPassword();
-
-  try {
-    const user = await ctx.db.user.create({
-      data: {
-        schoolId: ctx.schoolId,
-        email: input.email,
-        passwordHash: await hashPassword(password),
-        role: input.role,
-        firstName: input.firstName,
-        lastName: input.lastName,
-        phone: input.phone ?? null,
-      },
-      select: { id: true },
-    });
-    return { userId: user.id, credentials: { email: input.email, password } };
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new ConflictError("That email address is already used by another account.");
-    }
-    throw error;
-  }
+  return { userId: await provisionAccount(ctx.db, { ...input, schoolId: ctx.schoolId }) };
 }
 
-/** Replace a portal user's password and sign them out everywhere. */
-export async function resetPortalPassword(ctx: TenantContext, userId: string): Promise<Credentials> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
-
-  const user = await ctx.db.user.findFirst({
-    where: { id: userId, role: { in: PORTAL_ROLES } },
-    select: { id: true, email: true },
-  });
-  if (!user) throw new NotFoundError();
-
-  const password = generateTemporaryPassword();
-  await ctx.db.user.updateMany({
-    where: { id: user.id },
-    data: { passwordHash: await hashPassword(password) },
-  });
-  await invalidateAllSessionsForUser(user.id);
-
-  await recordAudit({
-    action: "PASSWORD_RESET",
-    entityType: "User",
-    entityId: user.id,
-    schoolId: ctx.schoolId,
-    actorId: ctx.user.id,
-    summary: `Password reset for ${user.email}.`,
-  });
-
-  return { email: user.email, password, label: "New password issued" };
+/**
+ * The office's "send login email": a fresh activation link for an account not
+ * yet activated, a password-reset link for an active one. The office never
+ * sees or sets a password.
+ */
+export async function resetPortalPassword(ctx: TenantContext, userId: string): Promise<LoginInvite> {
+  const result = await resendAccountEmail(ctx, userId);
+  return { email: result.email, delivered: result.delivered, error: result.error, label: result.kind === "ACTIVATION" ? "Activation email" : "Password reset email" };
 }
 
 /** Enable or disable a portal login, signing it out when disabled. */
@@ -99,4 +61,62 @@ export async function setPortalUserActive(
     data: isActive ? { isActive, disabledReason: null, disabledAt: null } : { isActive, disabledReason: "ADMIN", disabledAt: new Date() },
   });
   if (count && !isActive) await invalidateAllSessionsForUser(userId);
+}
+
+/** What happened to a person's sign-in address when their details were saved. */
+export type EmailMove = { from: string; to: string; invite: LoginInvite | null } | null;
+
+/**
+ * Correct the address a person signs in with — for when the office typed it
+ * wrong. The School Admin only; the login must be a portal login in this
+ * school. The address must not belong to any other SchoolOS account.
+ *
+ * Links already emailed (activation, password reset) went to the wrong
+ * address, so they are revoked: whoever owns that address cannot use them.
+ * A login still waiting for activation gets a fresh link at the new address.
+ * Nothing about the password changes.
+ */
+export async function moveLoginEmail(ctx: TenantContext, userId: string | null, nextEmail: string | null | undefined): Promise<EmailMove> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  if (!userId || nextEmail === undefined) return null;
+  const user = await ctx.db.user.findFirst({ where: { id: userId, role: { in: PORTAL_ROLES } }, select: { id: true, email: true, activatedAt: true, isActive: true } });
+  if (!user) throw new NotFoundError();
+  if (!nextEmail) throw new ValidationError("Please correct the highlighted fields.", { email: ["This person signs in with an email, so it cannot be left empty."] });
+  const to = nextEmail.trim().toLowerCase();
+  if (to === user.email) return null;
+  if (await prisma.user.count({ where: { email: to, NOT: { id: user.id } } })) {
+    throw new ConflictError(`${to} is already used by another SchoolOS account.`);
+  }
+  await ctx.db.user.updateMany({ where: { id: user.id }, data: { email: to } });
+  // Links sent to the wrong address must stop working.
+  await prisma.accountToken.updateMany({ where: { userId: user.id, usedAt: null, revokedAt: null }, data: { revokedAt: new Date() } });
+  await recordAudit({
+    action: "LOGIN_EMAIL_CHANGED",
+    entityType: "User",
+    entityId: user.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Sign-in email corrected from ${user.email} to ${to}; links sent to the old address were cancelled.`,
+  });
+  const invite = !user.activatedAt && user.isActive ? await sendActivation(user.id, ctx.user.id) : null;
+  return { from: user.email, to, invite };
+}
+
+/** Before saving a record whose email is also a login: refuse an address another account uses. */
+export async function assertLoginEmailFree(userId: string | null, nextEmail: string | null | undefined): Promise<void> {
+  if (!userId || !nextEmail) return;
+  const to = nextEmail.trim().toLowerCase();
+  if (await prisma.user.count({ where: { email: to, NOT: { id: userId } } })) {
+    throw new ConflictError(`${to} is already used by another SchoolOS account.`);
+  }
+}
+
+/** The office's message after a save that moved a sign-in address. */
+export function emailMoveMessage(move: EmailMove): string {
+  if (!move) return "";
+  const base = ` Sign-in email changed to ${move.to}; any link sent to ${move.from} no longer works.`;
+  if (!move.invite) return base;
+  return move.invite.delivered
+    ? `${base} A new activation email was sent to ${move.to}.`
+    : `${base} The new activation email could not be sent${move.invite.error ? ` — ${move.invite.error}` : ""}. Use "Resend activation" once that is fixed.`;
 }

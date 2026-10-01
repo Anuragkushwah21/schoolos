@@ -211,7 +211,7 @@ export async function getCoverPlan(ctx: TenantContext, date: Date) {
       select: { teacherId: true, status: true },
     }),
     ctx.db.leaveRequest.findMany({
-      where: { status: "APPROVED", startDate: { lte: date }, endDate: { gte: date } },
+      where: { status: "APPROVED", startDate: { lte: date }, endDate: { gte: date }, teacherId: { not: null } },
       select: { teacherId: true, type: true },
     }),
     ctx.db.teacher.findMany({
@@ -239,7 +239,7 @@ export async function getCoverPlan(ctx: TenantContext, date: Date) {
   ]);
 
   const reasonFor = new Map<string, string>();
-  for (const leave of leaves) reasonFor.set(leave.teacherId, `On ${leave.type.toLowerCase().replace(/_/g, " ")} leave`);
+  for (const leave of leaves) if (leave.teacherId) reasonFor.set(leave.teacherId, `On ${leave.type.toLowerCase().replace(/_/g, " ")} leave`);
   for (const mark of marks) if (!reasonFor.has(mark.teacherId)) reasonFor.set(mark.teacherId, mark.status === "ABSENT" ? "Absent" : "On leave");
 
   const nameOf = new Map(teachers.map((teacher) => [teacher.id, fullName(teacher)]));

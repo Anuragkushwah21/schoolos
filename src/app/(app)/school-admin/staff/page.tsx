@@ -5,6 +5,7 @@ import Link from "next/link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
+import { PersonAvatar } from "@/components/shared/person-avatar";
 import { MoreActions } from "@/components/shared/more-actions";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { fullName, humanize } from "@/lib/format";
 import { enumParam, param } from "@/lib/search-params";
 import { STAFF_ROLES, STAFF_STATUSES } from "@/lib/validation/operations";
 import { requireTenant } from "@/server/auth/current-user";
+import { photoUrlsFor } from "@/server/people/photos";
 import { listStaff } from "@/server/operations/staff";
 import { leavingDates } from "@/server/people/lifecycle";
 
@@ -34,7 +36,7 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
     status: enumParam(search.status, STAFF_STATUSES) ?? (statusParam === "ALL" ? undefined : ("CURRENT" as const)),
   };
   const rows = await listStaff(ctx, filters);
-  const leftOn = await leavingDates(ctx, "STAFF", rows);
+  const [leftOn, photos] = await Promise.all([leavingDates(ctx, "STAFF", rows), photoUrlsFor(ctx, "STAFF", rows.map((row) => row.id))]);
 
   return (
     <>
@@ -94,10 +96,15 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
                   {rows.map((row) => (
                     <tr key={row.id} className="border-t">
                       <td className="px-3 py-2">
-                        <Link href={`/school-admin/staff/${row.id}` as Route} className="font-medium hover:underline">
-                          {fullName(row)}
-                        </Link>
-                        <span className="text-muted-foreground block text-xs">{row.employeeId}</span>
+                        <div className="flex items-center gap-3">
+                          <PersonAvatar name={fullName(row)} photoUrl={photos.get(row.id)} fallbackClassName="bg-orange-soft text-orange-strong" />
+                          <div className="min-w-0">
+                            <Link href={`/school-admin/staff/${row.id}` as Route} className="font-medium hover:underline">
+                              {fullName(row)}
+                            </Link>
+                            <span className="text-muted-foreground block text-xs">{row.employeeId}</span>
+                          </div>
+                        </div>
                       </td>
                       <td className="px-3 py-2">
                         {humanize(row.role)}

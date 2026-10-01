@@ -240,6 +240,7 @@ async function clearPreviousDemo(): Promise<void> {
 async function seedSuperAdmin(passwordHash: string): Promise<Credential> {
   await prisma.user.create({
     data: {
+      activatedAt: new Date(),
       email: SUPER_ADMIN_EMAIL,
       passwordHash,
       role: UserRole.SUPER_ADMIN,
@@ -297,6 +298,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
   const adminEmail = `${spec.adminFirst}.${spec.adminLast}.${spec.slug}@schoolos.dev`.toLowerCase();
   const admin = await prisma.user.create({
     data: {
+      activatedAt: new Date(),
       email: adminEmail,
       passwordHash,
       role: UserRole.SCHOOL_ADMIN,
@@ -337,6 +339,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
     const email = `${t.first}.${t.last}.${spec.slug}@schoolos.dev`.toLowerCase();
     const user = await prisma.user.create({
       data: {
+        activatedAt: new Date(),
         email,
         passwordHash,
         role: UserRole.TEACHER,
@@ -424,6 +427,19 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
   const PERIOD_MINUTES = 45;
   const DAY_START = 9 * 60;
 
+  // One room per section, picked per period like the app does.
+  const sectionRooms = new Map<string, { id: string; name: string }>();
+  for (const [sectionIndex, sectionId] of allSections.entries()) {
+    const name = `R${101 + sectionIndex}`;
+    const room = await prisma.room.upsert({
+      where: { schoolId_nameKey: { schoolId: school.id, nameKey: name.toLowerCase() } },
+      update: {},
+      create: { schoolId: school.id, name, nameKey: name.toLowerCase(), capacity: 40 },
+      select: { id: true, name: true },
+    });
+    sectionRooms.set(sectionId, room);
+  }
+
   for (const day of SCHOOL_DAYS) {
     for (const [sectionIndex, sectionId] of allSections.entries()) {
       for (let p = 0; p < 2; p += 1) {
@@ -444,7 +460,8 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
             dayOfWeek: day,
             startMinute,
             endMinute: startMinute + PERIOD_MINUTES,
-            room: `R${101 + sectionIndex}`,
+            roomId: sectionRooms.get(sectionId)?.id,
+            room: sectionRooms.get(sectionId)?.name,
           },
         });
       }
@@ -459,6 +476,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
     const parentEmail = `${family.parentFirst}.${family.surname}.${spec.slug}@schoolos.dev`.toLowerCase();
     const parentUser = await prisma.user.create({
       data: {
+        activatedAt: new Date(),
         email: parentEmail,
         passwordHash,
         role: UserRole.PARENT,
@@ -498,6 +516,7 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
       const studentUser = wantsLogin
         ? await prisma.user.create({
             data: {
+              activatedAt: new Date(),
               email: studentEmail,
               passwordHash,
               role: UserRole.STUDENT,

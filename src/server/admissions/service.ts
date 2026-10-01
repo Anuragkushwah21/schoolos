@@ -1,9 +1,12 @@
 import "server-only";
+import { today } from "@/lib/dates";
+import { admissionYear, allocateAdmissionNumber, ensureAdmissionCounter } from "@/server/people/admission-number";
 
 import type { AdmissionStatus } from "@/generated/prisma/enums";
 import { AppError, ConflictError, NotFoundError, RateLimitedError } from "@/lib/errors";
 import type { AdmissionApplicationInput } from "@/lib/validation/website";
 import { recordAudit } from "@/server/audit/log";
+import { claimSeats } from "@/server/academics/streams";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { PUBLIC_FORM_RATE_LIMIT, rateLimit } from "@/server/auth/rate-limit";
@@ -192,6 +195,8 @@ export async function acceptApplication(
   input: {
     applicationId: string;
     sectionId: string;
+    /** Where the section shares seats among streams; defaults to the stream applied for. */
+    streamId?: string | null;
     rollNumber: string | null;
     admissionNumber: string | null;
     reviewNotes: string | null;
@@ -202,6 +207,7 @@ export async function acceptApplication(
 
   let result: { studentId: string; name: string; applicationNumber: string };
   try {
+    if (!input.admissionNumber) await ensureAdmissionCounter(ctx.schoolId, admissionYear(today()));
     result = await ctx.db.$transaction(async (tx) => {
       const application = await tx.admissionApplication.findFirst({
         where: { id: input.applicationId, status: { in: OPEN } },
@@ -210,22 +216,14 @@ export async function acceptApplication(
 
       const section = await tx.section.findFirst({
         where: { id: input.sectionId, academicSessionId: application.academicSessionId },
-        select: { id: true, classId: true, streamId: true, capacity: true, _count: { select: { enrollments: { where: { status: "ACTIVE" } } } } },
+        select: { id: true, classId: true },
       });
       if (!section) throw new NotFoundError("Choose a section in the application's academic session.");
-      if (section.capacity !== null && section._count.enrollments >= section.capacity) {
-        throw new ConflictError(`That section is full (capacity ${section.capacity}).`);
-      }
+      // Seats under lock: the section's, and the stream's share where it has shares.
+      const streamId = await claimSeats(tx, section.id, input.streamId || application.requestedStreamId);
 
-      let admissionNumber = input.admissionNumber;
-      if (!admissionNumber) {
-        const rows = await tx.student.findMany({ where: { admissionNumber: { startsWith: "ADM" } }, select: { admissionNumber: true } });
-        const highest = rows.reduce((max, row) => {
-          const n = Number.parseInt(row.admissionNumber.slice(3), 10);
-          return Number.isFinite(n) && n > max ? n : max;
-        }, 0);
-        admissionNumber = `ADM${String(highest + 1).padStart(4, "0")}`;
-      }
+      // The school's sequence, allocated in this transaction (see admission-number.ts).
+      const admissionNumber = input.admissionNumber ?? (await allocateAdmissionNumber(tx, admissionYear(today())));
 
       const student = await tx.student.create({
         data: {
@@ -253,7 +251,7 @@ export async function acceptApplication(
           academicSessionId: application.academicSessionId,
           sectionId: section.id,
           classId: section.classId,
-          streamId: section.streamId,
+          streamId,
           rollNumber: input.rollNumber,
         },
       });

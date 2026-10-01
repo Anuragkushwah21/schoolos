@@ -3,11 +3,11 @@
 import type { Route } from "next";
 
 import { type ActionResult, parseFormData, successResult } from "@/lib/action-result";
-import { concernReviewSchema, concernSchema, supportFollowUpSchema, supportSchema } from "@/lib/validation/support";
+import { supportFollowUpSchema, supportSchema } from "@/lib/validation/support";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import { getT } from "@/server/i18n";
 import { performAction } from "@/server/perform-action";
-import { createSupport, followUpSupport, raiseConcern, reviewConcern } from "@/server/support/service";
+import { createSupport, followUpSupport } from "@/server/support/service";
 
 type Result = ActionResult<undefined>;
 
@@ -36,30 +36,6 @@ export async function followUpSupportAction(_p: Result, formData: FormData): Pro
       const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN");
       await followUpSupport(ctx, parseFormData(supportFollowUpSchema, formData));
       return successResult((await getT())("support.followUpSaved"));
-    },
-    { revalidate: PAGES },
-  );
-}
-
-/** A parent raises a concern about one of their current children. */
-export async function raiseConcernAction(_p: Result, formData: FormData): Promise<Result> {
-  return performAction(
-    async () => {
-      const ctx = await requireTenantForAction("PARENT");
-      await raiseConcern(ctx, parseFormData(concernSchema, formData));
-      return successResult((await getT())("support.concernRaised"));
-    },
-    { revalidate: PAGES },
-  );
-}
-
-/** The teacher (or the office) reviews a concern and replies to the parent. */
-export async function reviewConcernAction(_p: Result, formData: FormData): Promise<Result> {
-  return performAction(
-    async () => {
-      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN");
-      await reviewConcern(ctx, parseFormData(concernReviewSchema, formData));
-      return successResult((await getT())("support.concernUpdated"));
     },
     { revalidate: PAGES },
   );

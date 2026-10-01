@@ -15,7 +15,7 @@ import { loginSchema } from "@/lib/validation/auth";
 import { recordAudit } from "@/server/audit/log";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { authenticate } from "@/server/auth/login";
-import { LOGIN_RATE_LIMIT, rateLimit, resetRateLimit } from "@/server/auth/rate-limit";
+import { LOGIN_ACCOUNT_RATE_LIMIT, LOGIN_RATE_LIMIT, rateLimit, resetRateLimit } from "@/server/auth/rate-limit";
 import {
   SESSION_COOKIE_NAME,
   createSession,
@@ -62,14 +62,21 @@ export async function loginAction(
     const { email, password } = parseFormData(loginSchema, formData);
     const { ipAddress, userAgent } = await requestMetadata();
 
-    // Bucket on email as well as IP, so one targeted account cannot be ground
-    // down from a rotating pool of addresses.
-    const limiterKey = `login:${ipAddress ?? "unknown"}:${email}`;
-    const limited = rateLimit(
-      limiterKey,
+    // Two buckets: this address trying this account, and this account from
+    // anywhere. The second one holds even if `x-forwarded-for` is forged on
+    // every request, so one targeted account cannot be ground down from a
+    // rotating pool of addresses.
+    const perAddress = rateLimit(
+      `login:${ipAddress ?? "unknown"}:${email}`,
       LOGIN_RATE_LIMIT.limit,
       LOGIN_RATE_LIMIT.windowMs,
     );
+    const perAccount = rateLimit(
+      `login-account:${email.toLowerCase()}`,
+      LOGIN_ACCOUNT_RATE_LIMIT.limit,
+      LOGIN_ACCOUNT_RATE_LIMIT.windowMs,
+    );
+    const limited = !perAddress.allowed ? perAddress : perAccount;
 
     if (!limited.allowed) {
       return errorResult(
@@ -119,7 +126,8 @@ export async function loginAction(
       expires: expiresAt,
     });
 
-    resetRateLimit(limiterKey);
+    resetRateLimit(`login:${ipAddress ?? "unknown"}:${email}`);
+    resetRateLimit(`login-account:${email.toLowerCase()}`);
 
     const user = await prisma.user.update({
       where: { id: outcome.userId },

@@ -57,6 +57,8 @@ describe("marking attendance", () => {
       sectionId: schoolA.sectionId,
       date,
       entries: [{ studentId: schoolA.studentIds[0]!, status: "LATE", remarks: null }],
+      // A second save on a submitted register is a correction, which needs a reason.
+      reason: "Arrived after the bell",
     });
     const rows = await prisma.studentAttendance.findMany({ where: { studentId: schoolA.studentIds[0], date } });
     expect(rows).toHaveLength(1);

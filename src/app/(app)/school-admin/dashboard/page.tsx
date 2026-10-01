@@ -1,10 +1,9 @@
-import type { Metadata, Route } from "next";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import {
   BarChart3Icon,
   BookOpenIcon,
-  CalendarDaysIcon,
   CalendarOffIcon,
   CheckIcon,
   ClipboardCheckIcon,
@@ -33,13 +32,13 @@ import { PageHeader } from "@/components/shared/page-header";
 import { QuickActions } from "@/components/shared/quick-actions";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
-import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { NoticeList } from "@/features/communication/feed";
+import { SchoolLifeCards } from "@/features/dashboard/school-life";
 import { FinanceOverviewSection, FinanceOverviewSkeleton } from "@/features/finance/overview";
-import { SetupChecklist, isSetUp } from "@/features/school/setup-checklist";
-import { formatDate, formatDayShort } from "@/lib/dates";
+import { SetupProgressCard } from "@/features/school/setup-progress";
+import { setupReport } from "@/server/academics/setup";
+import { formatDayShort } from "@/lib/dates";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { greetingKey } from "@/lib/greeting";
 import { param } from "@/lib/search-params";
@@ -58,8 +57,6 @@ import { needsAttention, schoolToday } from "@/server/analytics/today";
 import { supportSummary } from "@/server/support/service";
 import type { MessageKey } from "@/lib/i18n/translate";
 import { NeedsAttention } from "@/components/shared/needs-attention";
-import { listMeetingsForAdmin } from "@/server/communication/meetings";
-import { noticesFor } from "@/server/communication/notices";
 import { resolveFinanceRange } from "@/server/finance/overview";
 import { getIntlLocale, getT } from "@/server/i18n";
 
@@ -89,28 +86,18 @@ export default async function AdminDashboardPage(props: PageProps<"/school-admin
 
   const session = await getCurrentSession(ctx);
 
-  const [students, teachers, notices, overview, gender, classes, sections, day, meetings, support] = await Promise.all([
+  const [students, teachers, overview, gender, day, support] = await Promise.all([
     db.student.count({ where: { status: "ACTIVE" } }),
     db.teacher.count({ where: { status: { in: ["ACTIVE", "ON_LEAVE"] } } }),
-    noticesFor(ctx, { take: 4 }),
     session ? todayOverview(ctx, session.id) : Promise.resolve(null),
     genderSplit(ctx),
-    db.class.count(),
-    session ? db.section.count({ where: { academicSessionId: session.id } }) : Promise.resolve(0),
     schoolToday(ctx, session?.id ?? null),
-    listMeetingsForAdmin(ctx, { status: "UPCOMING" }),
     supportSummary(ctx),
   ]);
 
   // A school that is not finished being set up needs the order of the steps
   // more than it needs charts of data it does not have yet.
-  const setup = {
-    hasSession: Boolean(session),
-    hasClasses: classes > 0,
-    hasSections: sections > 0,
-    hasTeachers: teachers > 0,
-    hasStudents: students > 0,
-  };
+  const setup = await setupReport(ctx);
 
   const [trend, strength, funnel, attention, registers] = session
     ? await Promise.all([
@@ -140,18 +127,18 @@ export default async function AdminDashboardPage(props: PageProps<"/school-admin
 
   return (
     <>
-      <PageHeader
+      <PageHeader variant="hero"
         title={`${t(greetingKey(), { name: ctx.user.firstName })} 👋`}
         description={session ? `${t("dashboard.admin.session", { name: session.name })} · ${formatDayShort(new Date(), intl)}` : t("dashboard.admin.noSession")}
       />
 
-      {isSetUp(setup) ? null : <SetupChecklist state={setup} />}
+      <SetupProgressCard report={setup} />
 
       <section aria-labelledby="today-overview" className="mb-8">
         <h2 id="today-overview" className="mb-3 text-base font-semibold">
           {t("dashboard.todayOverview")}
         </h2>
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
           <StatCard
             tone="blue"
             icon={GraduationCapIcon}
@@ -179,24 +166,11 @@ export default async function AdminDashboardPage(props: PageProps<"/school-admin
             href="/school-admin/timetable"
           />
           <StatCard tone="purple" icon={NotebookPenIcon} label={t("dashboard.admin.homework")} value={formatNumber(day.homeworkToday, intl)} href="/school-admin/homework" />
-          <StatCard
-            tone="cyan"
-            icon={HandshakeIcon}
-            label={t("dashboard.admin.upcoming")}
-            value={formatNumber(day.upcomingMeetings, intl)}
-            hint={t("dashboard.admin.upcomingHint")}
-            href="/school-admin/meetings"
-          />
-          <StatCard
-            tone="cyan"
-            icon={CalendarDaysIcon}
-            label={t("dashboard.admin.events")}
-            value={formatNumber(day.upcomingEvents, intl)}
-            hint={t("dashboard.admin.eventsHint")}
-            href="/school-admin/events"
-          />
         </div>
       </section>
+
+      <h2 className="mb-3 text-base font-semibold">Events, leave, notices &amp; meetings</h2>
+      <SchoolLifeCards ctx={ctx} base="/school-admin" />
 
       <section aria-labelledby="money-today" className="mb-8">
         <h2 id="money-today" className="mb-3 text-base font-semibold">
@@ -300,40 +274,6 @@ export default async function AdminDashboardPage(props: PageProps<"/school-admin
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>{t("dashboard.admin.meetingsTitle")}</CardTitle>
-            <Button asChild variant="ghost" size="sm">
-              <Link href="/school-admin/meetings">{t("common.viewAll")}</Link>
-            </Button>
-          </CardHeader>
-          <CardContent>
-            {meetings.rows.length ? (
-              <ul className="divide-y text-sm">
-                {meetings.rows.slice(0, 5).map((meeting) => (
-                  <li key={meeting.id} className="flex min-h-11 flex-wrap items-center gap-2 py-2">
-                    <span className="min-w-0 flex-1">
-                      <Link href={`/school-admin/meetings/${meeting.id}` as Route} className="font-medium hover:underline">
-                        {meeting.title}
-                      </Link>
-                      <span className="text-muted-foreground block text-xs">
-                        {formatDate(meeting.date, intl)} · {meeting.time}
-                      </span>
-                    </span>
-                    <TimeStatusBadge status={meeting.timeStatus} />
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="flex flex-col items-start gap-3">
-                <p className="text-muted-foreground text-sm">{t("dashboard.admin.noMeetings")}</p>
-                <Button asChild size="sm" variant="outline">
-                  <Link href="/school-admin/meetings/new">{t("dashboard.admin.createMeeting")}</Link>
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
@@ -362,7 +302,7 @@ export default async function AdminDashboardPage(props: PageProps<"/school-admin
               <div className="bg-info-soft text-info-strong flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2 text-sm font-medium">
                 {t("support.concernsToReview", { count: support.concernsToReview })}
                 <Button asChild size="sm" variant="outline">
-                  <Link href="/school-admin/support">{t("support.reviewConcerns")}</Link>
+                  <Link href="/school-admin/concerns">{t("support.reviewConcerns")}</Link>
                 </Button>
               </div>
             ) : null}
@@ -401,17 +341,6 @@ export default async function AdminDashboardPage(props: PageProps<"/school-admin
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>{t("dashboard.notices")}</CardTitle>
-            <Button asChild variant="ghost" size="sm">
-              <Link href="/school-admin/notices">{t("common.viewAll")}</Link>
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <NoticeList notices={notices} compact showAudience />
-          </CardContent>
-        </Card>
       </div>
 
       <h2 className="mb-3 text-base font-semibold">{t("dashboard.insights")}</h2>

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { id, optionalId, optionalText } from "@/lib/validation/common";
+import { id, optionalId, optionalText, requiredText } from "@/lib/validation/common";
 
 /**
  * Student support — shared by forms, Server Actions and the API.
@@ -22,14 +22,27 @@ export const SUPPORT_REASONS = [
   "PARENT_CONCERN",
   "OTHER",
 ] as const;
-/** The reasons a parent can pick: what they notice at home. */
-export const CONCERN_REASONS = ["DIFFICULTY_UNDERSTANDING", "HOMEWORK_INCOMPLETE", "NEEDS_PRACTICE", "LOW_TEST_PERFORMANCE", "OTHER"] as const;
 export const SUPPORT_ACTIONS = ["EXTRA_PRACTICE", "STUDY_MATERIAL", "REVISION", "EXTRA_CLASS", "ONE_TO_ONE", "HOMEWORK_SUPPORT", "PARENT_DISCUSSION", "MONITOR", "OTHER"] as const;
 export const SUPPORT_PRIORITIES = ["LOW", "MEDIUM", "HIGH"] as const;
 export const SUPPORT_STATUSES = ["NEW", "REVIEWING", "SUPPORT_PLANNED", "IN_PROGRESS", "IMPROVING", "RESOLVED"] as const;
 /** Everything except RESOLVED: the records that still need something done. */
 export const OPEN_SUPPORT = ["NEW", "REVIEWING", "SUPPORT_PLANNED", "IN_PROGRESS", "IMPROVING"] as const;
-export const CONCERN_STATUSES = ["NEW", "REVIEWING", "ACTION_TAKEN", "RESOLVED"] as const;
+/** Parent–teacher concerns: OPEN → IN_PROGRESS → RESOLVED. (CLOSED exists in the database for old rows only.) */
+export const CONCERN_STATUSES = ["OPEN", "IN_PROGRESS", "RESOLVED"] as const;
+/** Still being worked on. */
+export const OPEN_CONCERN = ["OPEN", "IN_PROGRESS"] as const;
+/** What a concern is about. Descriptive — never a label on the child. */
+export const CONCERN_TYPES = [
+  "ACADEMIC",
+  "TOPIC_DIFFICULTY",
+  "HOMEWORK",
+  "ATTENDANCE",
+  "PARTICIPATION",
+  "EXTRA_SUPPORT",
+  "IMPROVEMENT_SUGGESTION",
+  "POSITIVE_FEEDBACK",
+  "OTHER",
+] as const;
 export const SUPPORT_SOURCES = ["TEACHER", "PARENT", "SCHOOL_ADMIN"] as const;
 
 export const supportSchema = z
@@ -61,18 +74,50 @@ export const supportFollowUpSchema = z
   .refine((data) => Boolean(data.note || data.status || data.priority || data.action), { message: "Write a follow-up or choose a change", path: ["note"] });
 export type SupportFollowUpInput = z.infer<typeof supportFollowUpSchema>;
 
-export const concernSchema = z.object({
+/**
+ * A parent raises a concern about one child and one subject. There is no
+ * teacher field: the school decides who receives it from the child's class,
+ * section, stream and subject.
+ */
+export const parentConcernSchema = z.object({
   studentId: id,
-  subjectId: optionalId,
-  reason: z.enum(CONCERN_REASONS, { error: "Choose what you have noticed" }),
-  message: optionalText(600),
+  subjectId: id,
+  type: z.enum(CONCERN_TYPES).default("ACADEMIC"),
+  message: requiredText("your concern", 2000),
 });
-export type ConcernInput = z.infer<typeof concernSchema>;
+export type ParentConcernInput = z.infer<typeof parentConcernSchema>;
 
-export const concernReviewSchema = z.object({
-  concernId: id,
-  status: z.enum(["REVIEWING", "ACTION_TAKEN", "RESOLVED"]),
-  /** What the parent is told. */
-  response: optionalText(600),
+/** A teacher raises a concern for a student's parents, in a subject they teach that student. */
+export const teacherConcernSchema = z.object({
+  studentId: id,
+  subjectId: id,
+  type: z.enum(CONCERN_TYPES).default("ACADEMIC"),
+  priority: z.enum(SUPPORT_PRIORITIES).default("MEDIUM"),
+  message: requiredText("your concern", 2000),
 });
-export type ConcernReviewInput = z.infer<typeof concernReviewSchema>;
+export type TeacherConcernInput = z.infer<typeof teacherConcernSchema>;
+
+/** Staff move a concern along (status), optionally with a short note. */
+export const concernReplySchema = z
+  .object({
+    concernId: id,
+    message: optionalText(2000),
+    status: z.preprocess((value) => (value === "" ? undefined : value), z.enum(CONCERN_STATUSES).optional()),
+    priority: z.preprocess((value) => (value === "" ? undefined : value), z.enum(SUPPORT_PRIORITIES).optional()),
+  })
+  .refine((data) => Boolean(data.message || data.status || data.priority), { message: "Write a reply or choose a change", path: ["message"] });
+export type ConcernReplyInput = z.infer<typeof concernReplySchema>;
+
+/** The School Admin asks the teacher for an update. */
+export const concernUpdateRequestSchema = z.object({
+  concernId: id,
+  note: optionalText(600),
+});
+export type ConcernUpdateRequestInput = z.infer<typeof concernUpdateRequestSchema>;
+
+/** The School Admin hands a concern to a teacher (e.g. one waiting with the office). */
+export const concernAssignSchema = z.object({
+  concernId: id,
+  teacherId: id,
+});
+export type ConcernAssignInput = z.infer<typeof concernAssignSchema>;

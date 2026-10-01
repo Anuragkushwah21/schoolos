@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/shared/page-header";
+import { MyPhotoCard } from "@/features/photos/my-photo-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,6 +34,7 @@ export default async function StudentProfilePage() {
           </Button>
         }
       />
+      <MyPhotoCard ctx={ctx} name={student.name} className="mb-6 max-w-2xl" />
 
       <Card className="max-w-2xl">
         <CardHeader>

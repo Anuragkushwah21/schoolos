@@ -35,13 +35,42 @@ export const STAFF_ROLES = [
   "OTHER",
 ] as const;
 
-/** Read-only modules a School Admin may open to one staff login. */
-export const STAFF_PERMISSIONS = ["VIEW_STUDENTS", "VIEW_LIBRARY", "VIEW_TRANSPORT"] as const;
+/**
+ * Modules a School Admin may open to one staff login. A designation grants
+ * nothing by itself — "Accountant" is a job title; `COLLECT_FEES` is the
+ * permission. `STAFF_ROLE_DEFAULTS` only pre-ticks the usual boxes.
+ */
+export const STAFF_PERMISSIONS = ["VIEW_STUDENTS", "VIEW_LIBRARY", "MANAGE_LIBRARY", "VIEW_TRANSPORT", "COLLECT_FEES"] as const;
 
 export const STAFF_PERMISSION_LABEL: Record<(typeof STAFF_PERMISSIONS)[number], { label: string; hint: string }> = {
   VIEW_STUDENTS: { label: "View students", hint: "Student directory: names, classes and guardian phone numbers. No fees, marks or records." },
   VIEW_LIBRARY: { label: "View library", hint: "The catalogue and who has which book." },
+  MANAGE_LIBRARY: { label: "Run the library", hint: "Add books, issue and return them, and collect fines." },
   VIEW_TRANSPORT: { label: "View transport", hint: "Routes, stops, vehicles and rider counts." },
+  COLLECT_FEES: { label: "Collect fees", hint: "See what each student owes, record payments and print receipts. No expenses, salaries or settings." },
+};
+
+/**
+ * What a designation always carries, whatever boxes are ticked: a Librarian
+ * runs the library — that is the job — and nothing beyond it is implied.
+ */
+export const STAFF_ROLE_IMPLIED: Partial<Record<(typeof STAFF_ROLES)[number], Array<(typeof STAFF_PERMISSIONS)[number]>>> = {
+  LIBRARIAN: ["MANAGE_LIBRARY"],
+};
+
+/** Granted permissions plus those the role implies, without duplicates. */
+export function effectiveStaffPermissions<P extends string>(staff: { role: string; permissions: readonly P[] }): P[] {
+  const implied = (STAFF_ROLE_IMPLIED[staff.role as (typeof STAFF_ROLES)[number]] ?? []) as unknown as P[];
+  return [...new Set([...staff.permissions, ...implied])];
+}
+
+/** What each designation usually needs — suggested when a staff member is added, never enforced. */
+export const STAFF_ROLE_DEFAULTS: Partial<Record<(typeof STAFF_ROLES)[number], Array<(typeof STAFF_PERMISSIONS)[number]>>> = {
+  ACCOUNTANT: ["COLLECT_FEES", "VIEW_STUDENTS"],
+  // The issue desk finds borrowers itself; the full directory (with guardian phones) is not needed.
+  LIBRARIAN: ["MANAGE_LIBRARY"],
+  RECEPTIONIST: ["VIEW_STUDENTS"],
+  TRANSPORT_ATTENDANT: ["VIEW_TRANSPORT"],
 };
 export const STAFF_STATUSES = EMPLOYEE_LIFECYCLE;
 
@@ -139,21 +168,42 @@ export type BookInput = z.infer<typeof bookSchema>;
 
 export const BORROWER_KINDS = ["STUDENT", "TEACHER", "STAFF"] as const;
 
-export const issueBookSchema = z.object({
-  bookId: id,
-  borrowerKind: z.enum(BORROWER_KINDS),
-  /** Admission number, teacher employee ID, or staff employee ID. */
-  borrowerCode: requiredText("the borrower's admission no. or employee ID", 30),
-  issuedOn: requiredDate("the issue date"),
-  dueOn: requiredDate("the due date"),
-  notes: optionalText(200),
-});
+export const issueBookSchema = z
+  .object({
+    bookId: id,
+    /** The physical copy. Without one (older API clients), the first copy on the shelf. */
+    copyId: optionalId,
+    borrowerKind: z.enum(BORROWER_KINDS),
+    /** The student picked in the desk's search; re-checked in this school on the server. */
+    studentId: optionalId,
+    /** Admission number, teacher employee ID, or staff employee ID. */
+    borrowerCode: optionalText(30),
+    issuedOn: requiredDate("the issue date"),
+    dueOn: requiredDate("the due date"),
+    notes: optionalText(200),
+  })
+  .refine((data) => Boolean(data.borrowerCode || (data.borrowerKind === "STUDENT" && data.studentId)), {
+    message: "Search for the student, or enter the admission no. or employee ID",
+    path: ["borrowerCode"],
+  })
+  .transform((data) => ({ ...data, borrowerCode: data.borrowerCode ?? "" }));
 export type IssueBookInput = z.infer<typeof issueBookSchema>;
+
+export const libraryRulesSchema = z.object({
+  loanDays: z.coerce.number({ error: "Enter the loan period" }).int().min(1, "At least 1 day").max(60, "At most 60 days"),
+  maxLoans: z.coerce.number({ error: "Enter a limit" }).int().min(1, "At least 1 book").max(20, "At most 20 books"),
+  finePerDayRupees: z.coerce.number({ error: "Enter the fine" }).min(0, "Cannot be negative").max(1000, "At most ₹1000 a day"),
+});
 
 export const returnBookSchema = z.object({
   issueId: id,
   returnedOn: requiredDate("the return date"),
   finePaid: checkbox,
+});
+
+export const renewLoanSchema = z.object({
+  issueId: id,
+  dueOn: requiredDate("the new due date"),
 });
 
 export const ASSET_CATEGORIES = ["COMPUTER", "FURNITURE", "PROJECTOR", "LAB_EQUIPMENT", "SPORTS", "STATIONERY", "OTHER"] as const;

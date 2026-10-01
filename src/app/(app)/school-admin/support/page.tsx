@@ -1,4 +1,4 @@
-import type { Metadata, Route } from "next";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { HeartHandshakeIcon, MessageCircleHeartIcon, PlusIcon, TrendingUpIcon, UsersIcon } from "lucide-react";
 
@@ -6,13 +6,15 @@ import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { Button } from "@/components/ui/button";
-import { ConcernList, SupportTable } from "@/features/support/views";
+import { ConcernsBanner } from "@/features/concerns/views";
+import { SupportTable } from "@/features/support/views";
 import { enumParam, param } from "@/lib/search-params";
 import { SUPPORT_PRIORITIES, SUPPORT_SOURCES, SUPPORT_STATUSES } from "@/lib/validation/support";
 import { getCurrentSession, sectionOptions } from "@/server/academics/structure";
 import { requireTenant } from "@/server/auth/current-user";
 import { getT } from "@/server/i18n";
-import { listConcerns, listSupport, supportFormOptions, supportSummary } from "@/server/support/service";
+import { listConcerns } from "@/server/support/concerns";
+import { listSupport, supportFormOptions, supportSummary } from "@/server/support/service";
 
 export const metadata: Metadata = { title: "Students needing attention" };
 
@@ -84,7 +86,7 @@ export default async function AdminSupportPage(props: PageProps<"/school-admin/s
         </ul>
       ) : null}
 
-      <ConcernList concerns={concerns} addHref={(concern) => `/school-admin/support/new?student=${concern.studentId}&concern=${concern.id}` as Route} />
+      <ConcernsBanner rows={concerns} href="/school-admin/concerns" />
 
       <FilterBar
         action="/school-admin/support"

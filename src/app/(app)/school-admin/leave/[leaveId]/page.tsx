@@ -15,7 +15,7 @@ import { formatDayShort, formatMinutes, toDateInput } from "@/lib/dates";
 import { humanize, pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
-import { getLeaveRequest } from "@/server/staff/leave";
+import { applicantOf, getLeaveRequest } from "@/server/staff/leave";
 
 export const metadata: Metadata = { title: "Leave request" };
 
@@ -23,7 +23,8 @@ export default async function LeaveDetailPage(props: PageProps<"/school-admin/le
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const { leaveId } = await props.params;
   const { leave, periods } = await orNotFound(getLeaveRequest(ctx, leaveId));
-  const name = `${leave.teacher.firstName} ${leave.teacher.lastName}`;
+  const person = applicantOf(leave);
+  const name = `${person.firstName} ${person.lastName}`;
 
   return (
     <>

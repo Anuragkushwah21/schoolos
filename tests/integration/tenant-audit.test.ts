@@ -21,7 +21,7 @@ import { classStrength, genderSplit } from "@/server/analytics/school";
 import { schoolTracker } from "@/server/analytics/platform";
 import { schoolReport, todayOverview } from "@/server/attendance/service";
 import { listExpenses, removeExpense } from "@/server/finance/expenses";
-import { chargeStudent, listFeePositions, listPayments, recordPayment, removePayment } from "@/server/finance/fees";
+import { chargeStudent, listFeePositions, listPayments, recordPayment, voidPayment } from "@/server/finance/fees";
 import { financeOverview, resolveFinanceRange } from "@/server/finance/overview";
 import { listSalaryPayments, paySalary } from "@/server/finance/salary";
 import { parentOptions } from "@/server/people/parents";
@@ -283,11 +283,11 @@ describe("direct IDs", () => {
   it("refuses other-school money by ID", async () => {
     for (const [who, own, other] of PAIRS()) {
       await expect(removeExpense(ctxFor(own), other.expenseId)).rejects.toBeInstanceOf(NotFoundError);
-      await expect(removePayment(ctxFor(own), other.paymentId)).rejects.toBeInstanceOf(NotFoundError);
+      await expect(voidPayment(ctxFor(own), other.paymentId, "probe")).rejects.toBeInstanceOf(NotFoundError);
       void who;
     }
     expect(await prisma.expense.count({ where: { id: { in: [alpha.expenseId, beta.expenseId] } } })).toBe(2);
-    expect(await prisma.feePayment.count({ where: { id: { in: [alpha.paymentId, beta.paymentId] } } })).toBe(2);
+    expect(await prisma.feePayment.count({ where: { id: { in: [alpha.paymentId, beta.paymentId] }, voidedAt: null } })).toBe(2);
   });
 });
 

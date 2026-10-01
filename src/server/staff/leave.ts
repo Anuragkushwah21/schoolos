@@ -11,11 +11,14 @@ import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { requireStaffSelf } from "@/server/auth/staff-access";
 import { requireTeacherSelf } from "@/server/auth/teacher-access";
 import { getSchoolCalendar } from "@/server/calendar/holidays";
 
 /**
- * Teacher leave: apply, cancel, approve, reject.
+ * Staff leave: apply, cancel, approve, reject — for teachers and for
+ * non-teaching staff alike. A request belongs to exactly one of them
+ * (`teacherId` or `staffMemberId`, checked by the database).
  *
  * Date rules (enforced here for the form and the API alike):
  *   * the range cannot end before it starts (also a database constraint);
@@ -24,7 +27,7 @@ import { getSchoolCalendar } from "@/server/calendar/holidays";
  *   * one request covers at most 60 days;
  *   * it may not overlap the teacher's own pending or approved leave.
  *
- * Approval writes ON_LEAVE into the staff register for every working day
+ * Approval writes ON_LEAVE into the teachers' register for every working day
  * already reached (never over a PRESENT or LATE mark the office entered), and
  * the register pre-fills ON_LEAVE for the days still ahead. Holidays and
  * weekly offs inside the range are not leave days.
@@ -49,9 +52,41 @@ const LEAVE_SELECT = {
   reviewNote: true,
   createdAt: true,
   teacherId: true,
+  staffMemberId: true,
   teacher: { select: { firstName: true, lastName: true, employeeId: true } },
+  staffMember: { select: { firstName: true, lastName: true, employeeId: true, designation: true } },
   reviewedBy: { select: { firstName: true, lastName: true } },
 } as const;
+
+type Person = { firstName: string; lastName: string; employeeId: string };
+
+/** Who asked: the teacher or the staff member on the request. */
+export function applicantOf(row: { teacher: Person | null; staffMember: Person | null }): Person & { kind: "TEACHER" | "STAFF" } {
+  if (row.teacher) return { ...row.teacher, kind: "TEACHER" };
+  if (row.staffMember) return { ...row.staffMember, kind: "STAFF" };
+  return { firstName: "Unknown", lastName: "", employeeId: "", kind: "STAFF" };
+}
+
+/** The signed-in teacher or staff member, as a leave filter. */
+async function requireApplicant(ctx: TenantContext) {
+  assertRole(ctx.user, "TEACHER", "NON_TEACHING_STAFF");
+  if (ctx.user.role === "TEACHER") {
+    const teacher = await requireTeacherSelf(ctx);
+    return { person: teacher, where: { teacherId: teacher.id }, data: { teacherId: teacher.id } };
+  }
+  const staff = await requireStaffSelf(ctx);
+  return { person: staff, where: { staffMemberId: staff.id }, data: { staffMemberId: staff.id } };
+}
+
+/** `t:<id>` or `s:<id>` — one employee filter for the admin list. */
+export function parseEmployeeFilter(value: string | undefined): { teacherId: string } | { staffMemberId: string } | null {
+  if (!value) return null;
+  const [kind, id] = value.split(":");
+  if (!id) return null;
+  if (kind === "t") return { teacherId: id };
+  if (kind === "s") return { staffMemberId: id };
+  return null;
+}
 
 async function withWorkingDays<T extends { startDate: Date; endDate: Date; status: LeaveStatus }>(ctx: TenantContext, rows: T[]) {
   if (!rows.length) return [];
@@ -68,8 +103,7 @@ async function withWorkingDays<T extends { startDate: Date; endDate: Date; statu
 }
 
 export async function applyForLeave(ctx: TenantContext, input: LeaveRequestInput): Promise<{ id: string }> {
-  assertRole(ctx.user, "TEACHER");
-  const teacher = await requireTeacherSelf(ctx);
+  const applicant = await requireApplicant(ctx);
   const now = today();
 
   const errors: Record<string, string[]> = {};
@@ -87,7 +121,7 @@ export async function applyForLeave(ctx: TenantContext, input: LeaveRequestInput
 
   const overlap = await ctx.db.leaveRequest.findFirst({
     where: {
-      teacherId: teacher.id,
+      ...applicant.where,
       status: { in: ["PENDING", "APPROVED"] },
       startDate: { lte: input.endDate },
       endDate: { gte: input.startDate },
@@ -103,7 +137,7 @@ export async function applyForLeave(ctx: TenantContext, input: LeaveRequestInput
   const created = await ctx.db.leaveRequest.create({
     data: {
       schoolId: ctx.schoolId,
-      teacherId: teacher.id,
+      ...applicant.data,
       type: input.type,
       startDate: input.startDate,
       endDate: input.endDate,
@@ -118,19 +152,18 @@ export async function applyForLeave(ctx: TenantContext, input: LeaveRequestInput
     entityId: created.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${fullName(teacher)} requested ${humanize(input.type).toLowerCase()} leave for ${formatSpan(input.startDate, input.endDate)}.`,
+    summary: `${fullName(applicant.person)} requested ${humanize(input.type).toLowerCase()} leave for ${formatSpan(input.startDate, input.endDate)}.`,
   });
   return created;
 }
 
 export async function cancelLeave(ctx: TenantContext, leaveId: string): Promise<void> {
-  assertRole(ctx.user, "TEACHER");
-  const teacher = await requireTeacherSelf(ctx);
+  const applicant = await requireApplicant(ctx);
   const leave = await ctx.db.leaveRequest.findFirst({
-    where: { id: leaveId, teacherId: teacher.id },
+    where: { id: leaveId, ...applicant.where },
     select: { id: true, status: true, startDate: true, endDate: true },
   });
-  // Another teacher's request answers exactly like a missing one.
+  // Someone else's request answers exactly like a missing one.
   if (!leave) throw new NotFoundError("That leave request was not found.");
   const cancellable = leave.status === "PENDING" || (leave.status === "APPROVED" && leave.startDate > today());
   if (!cancellable) {
@@ -144,15 +177,14 @@ export async function cancelLeave(ctx: TenantContext, leaveId: string): Promise<
     entityId: leave.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${fullName(teacher)} cancelled leave for ${formatSpan(leave.startDate, leave.endDate)}.`,
+    summary: `${fullName(applicant.person)} cancelled leave for ${formatSpan(leave.startDate, leave.endDate)}.`,
   });
 }
 
 export async function listMyLeave(ctx: TenantContext) {
-  assertRole(ctx.user, "TEACHER");
-  const teacher = await requireTeacherSelf(ctx);
+  const applicant = await requireApplicant(ctx);
   const rows = await ctx.db.leaveRequest.findMany({
-    where: { teacherId: teacher.id },
+    where: applicant.where,
     orderBy: { startDate: "desc" },
     take: 100,
     select: LEAVE_SELECT,
@@ -166,13 +198,14 @@ export async function listMyLeave(ctx: TenantContext) {
 
 export async function listLeaveRequests(
   ctx: TenantContext,
-  filters: { status?: LeaveStatus; teacherId?: string } = {},
+  filters: { status?: LeaveStatus; teacherId?: string; staffMemberId?: string } = {},
 ) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const rows = await ctx.db.leaveRequest.findMany({
     where: {
       ...(filters.status ? { status: filters.status } : {}),
       ...(filters.teacherId ? { teacherId: filters.teacherId } : {}),
+      ...(filters.staffMemberId ? { staffMemberId: filters.staffMemberId } : {}),
     },
     orderBy: [{ status: "asc" }, { startDate: "asc" }],
     take: 200,
@@ -249,8 +282,9 @@ export async function getLeaveRequest(ctx: TenantContext, leaveId: string) {
   const leave = await ctx.db.leaveRequest.findFirst({ where: { id: leaveId }, select: LEAVE_SELECT });
   if (!leave) throw new NotFoundError("That leave request was not found.");
   const [withDays] = await withWorkingDays(ctx, [leave]);
+  // Only a teacher's leave takes classes away; staff leave has no periods.
   const periods =
-    leave.status === "PENDING" || leave.status === "APPROVED"
+    leave.teacherId && (leave.status === "PENDING" || leave.status === "APPROVED")
       ? await affectedPeriods(ctx, leave.teacherId, leave.startDate, leave.endDate)
       : [];
   return { leave: withDays!, periods };
@@ -266,7 +300,17 @@ export async function decideLeave(ctx: TenantContext, input: LeaveDecisionInput)
   const ids = [...new Set(input.leaveIds)];
   const requests = await ctx.db.leaveRequest.findMany({
     where: { id: { in: ids } },
-    select: { id: true, status: true, teacherId: true, startDate: true, endDate: true, type: true, teacher: { select: { firstName: true, lastName: true } } },
+    select: {
+      id: true,
+      status: true,
+      teacherId: true,
+      staffMemberId: true,
+      startDate: true,
+      endDate: true,
+      type: true,
+      teacher: { select: { firstName: true, lastName: true, employeeId: true } },
+      staffMember: { select: { firstName: true, lastName: true, employeeId: true } },
+    },
   });
   if (requests.length !== ids.length) throw new NotFoundError("A leave request was not found.");
   const decided = requests.filter((row) => row.status !== "PENDING");
@@ -298,9 +342,27 @@ export async function decideLeave(ctx: TenantContext, input: LeaveDecisionInput)
       data: { status: input.decision, reviewedById: ctx.user.id, reviewedAt: new Date(), reviewNote: input.note },
     });
     for (const row of requests) {
+      const teacherId = row.teacherId;
+      const staffMemberId = row.staffMemberId;
+      if (!teacherId) {
+        // A staff member's days go into the staff register the same way.
+        if (!staffMemberId) continue;
+        for (const date of markDays.get(row.id) ?? []) {
+          const existing = await tx.staffAttendance.findFirst({ where: { staffMemberId, date }, select: { id: true, status: true } });
+          if (existing && (existing.status === "PRESENT" || existing.status === "LATE")) continue;
+          if (existing) {
+            await tx.staffAttendance.updateMany({ where: { id: existing.id }, data: { status: "ON_LEAVE", remarks: `${humanize(row.type)} leave` } });
+          } else {
+            await tx.staffAttendance.create({
+              data: { schoolId: ctx.schoolId, staffMemberId, date, status: "ON_LEAVE", remarks: `${humanize(row.type)} leave`, markedByUserId: ctx.user.id },
+            });
+          }
+        }
+        continue;
+      }
       for (const date of markDays.get(row.id) ?? []) {
         const existing = await tx.teacherAttendance.findFirst({
-          where: { teacherId: row.teacherId, date },
+          where: { teacherId, date },
           select: { id: true, status: true },
         });
         // The office's own PRESENT or LATE mark wins: they saw the teacher.
@@ -309,7 +371,7 @@ export async function decideLeave(ctx: TenantContext, input: LeaveDecisionInput)
           await tx.teacherAttendance.updateMany({ where: { id: existing.id }, data: { status: "ON_LEAVE", remarks: `${humanize(row.type)} leave` } });
         } else {
           await tx.teacherAttendance.create({
-            data: { schoolId: ctx.schoolId, teacherId: row.teacherId, date, status: "ON_LEAVE", remarks: `${humanize(row.type)} leave` },
+            data: { schoolId: ctx.schoolId, teacherId, date, status: "ON_LEAVE", remarks: `${humanize(row.type)} leave` },
           });
         }
       }
@@ -323,7 +385,7 @@ export async function decideLeave(ctx: TenantContext, input: LeaveDecisionInput)
       entityId: row.id,
       schoolId: ctx.schoolId,
       actorId: ctx.user.id,
-      summary: `Leave for ${fullName(row.teacher)} (${formatSpan(row.startDate, row.endDate)}) ${approving ? "approved" : "rejected"}.`,
+      summary: `Leave for ${fullName(applicantOf(row))} (${formatSpan(row.startDate, row.endDate)}) ${approving ? "approved" : "rejected"}.`,
     });
   }
   return { decided: requests.length };
@@ -332,13 +394,32 @@ export async function decideLeave(ctx: TenantContext, input: LeaveDecisionInput)
 /** Teachers on approved leave on `date`, by teacher id — for the staff register and cover planning. */
 export async function approvedLeaveOn(ctx: TenantContext, date: Date) {
   const rows = await ctx.db.leaveRequest.findMany({
-    where: { status: "APPROVED", startDate: { lte: date }, endDate: { gte: date } },
+    where: { status: "APPROVED", startDate: { lte: date }, endDate: { gte: date }, teacherId: { not: null } },
     select: { teacherId: true, type: true, startDate: true, endDate: true },
   });
-  return new Map(rows.map((row) => [row.teacherId, row]));
+  return new Map(rows.flatMap((row) => (row.teacherId ? [[row.teacherId, row] as const] : [])));
 }
 
 export function leaveLabel(leave: { type: string; startDate: Date; endDate: Date }): string {
   return `${humanize(leave.type)} leave, ${formatSpan(leave.startDate, leave.endDate)}`;
 }
 
+
+/** The dashboard's Leave card for a teacher's or staff member's own leave. */
+export async function myLeaveSummary(ctx: TenantContext) {
+  const rows = await listMyLeave(ctx);
+  const now = today();
+  const next = rows.filter((row) => row.status === "APPROVED" && row.endDate >= now).sort((a, b) => a.startDate.getTime() - b.startDate.getTime())[0];
+  return {
+    pending: rows.filter((row) => row.status === "PENDING").length,
+    approved: rows.filter((row) => row.status === "APPROVED").length,
+    rejected: rows.filter((row) => row.status === "REJECTED").length,
+    highlight: next ?? rows.find((row) => row.status === "PENDING") ?? null,
+  };
+}
+
+/** The School Admin's count of staff leave waiting for a decision. */
+export async function pendingStaffLeaveCount(ctx: TenantContext): Promise<number> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  return ctx.db.leaveRequest.count({ where: { status: "PENDING" } });
+}

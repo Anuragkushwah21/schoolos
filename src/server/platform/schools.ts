@@ -321,6 +321,7 @@ async function issueFirstAdmin(
 
   await tx.user.create({
     data: {
+      activatedAt: new Date(),
       email,
       passwordHash: await hashPassword(password),
       role: "SCHOOL_ADMIN",
@@ -386,6 +387,7 @@ export async function createSchoolAdmin(
   try {
     const user = await prisma.user.create({
       data: {
+        activatedAt: new Date(),
         email: input.email,
         passwordHash: await hashPassword(password),
         role: "SCHOOL_ADMIN",

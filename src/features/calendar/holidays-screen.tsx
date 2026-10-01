@@ -45,8 +45,10 @@ const ENTRY_STYLE = {
   EVENT: "bg-primary-soft text-primary-strong",
   EXAM: "bg-purple-soft text-purple-strong",
   MEETING: "bg-info-soft text-info-strong",
+  // Approved student leave: a marker only — leave is managed on the Leave pages.
+  LEAVE: "bg-success-soft text-success-strong",
 } as const;
-const ENTRY_LABEL = { EVENT: "Event", EXAM: "Exam", MEETING: "Meeting" } as const;
+const ENTRY_LABEL = { EVENT: "Event", EXAM: "Exam", MEETING: "Meeting", LEAVE: "Leave" } as const;
 
 function MonthGrid({
   month,
@@ -275,7 +277,7 @@ export async function HolidaysScreen({
                 ))}
               </ul>
             ) : (
-              <p className="text-muted-foreground text-sm">No events, exams or meetings this month.</p>
+              <p className="text-muted-foreground text-sm">Nothing on the calendar this month.</p>
             )}
           </CardContent>
         </Card>

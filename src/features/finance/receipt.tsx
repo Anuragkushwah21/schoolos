@@ -48,6 +48,11 @@ export function FeeReceipt({ receipt, format }: { receipt: Receipt; format: Rece
       style={{ colorScheme: "light" }}
       aria-label={`Fee receipt ${payment.receiptNo}`}
     >
+      {payment.voided ? (
+        <p className="mb-4 rounded border-2 border-red-600 px-3 py-2 text-center font-bold tracking-widest text-red-700 uppercase">
+          Void — this receipt was cancelled{payment.voided.reason ? `: ${payment.voided.reason}` : ""}
+        </p>
+      ) : null}
       {/* ---------------- school header ---------------- */}
       <header className="flex items-start gap-4 border-b-2 pb-4" style={{ borderColor: accent }}>
         {school.logoUrl ? (

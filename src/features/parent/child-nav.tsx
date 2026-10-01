@@ -1,6 +1,7 @@
 import type { Route } from "next";
 import Link from "next/link";
 
+import { PersonAvatar } from "@/components/shared/person-avatar";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -127,9 +128,7 @@ export function ChildCard({
   if (child.current === false) {
     return (
       <div className="bg-card/60 flex items-start gap-3 rounded-xl border border-dashed p-4">
-        <span className="bg-muted text-muted-foreground flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-medium" aria-hidden>
-          {child.name.slice(0, 1)}
-        </span>
+        <PersonAvatar name={child.name} className="size-11 opacity-70" fallbackClassName="text-sm" />
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{child.name}</p>
           <p className="text-muted-foreground text-xs">No longer a current student. The school office holds their records.</p>
@@ -141,21 +140,10 @@ export function ChildCard({
   return (
     <Link
       href={`/parent/children/${child.id}` as Route}
-      className="hover:ring-primary/40 bg-card flex flex-col gap-3 rounded-xl border p-4 transition-shadow hover:ring-2"
+      className="hover:ring-primary/40 bg-card shadow-card hover:shadow-lift flex flex-col gap-3 rounded-2xl border border-border/70 p-4 transition-[box-shadow,transform] hover:-translate-y-0.5 hover:ring-2"
     >
       <div className="flex items-start gap-3">
-        {child.photoUrl ? (
-          // A school-supplied URL; there is no upload pipeline in V1.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={child.photoUrl} alt="" className="size-11 shrink-0 rounded-full object-cover" />
-        ) : (
-          <span
-            className="bg-muted text-muted-foreground flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-medium"
-            aria-hidden
-          >
-            {child.name.slice(0, 1)}
-          </span>
-        )}
+        <PersonAvatar name={child.name} photoUrl={child.photoUrl} className="size-11" fallbackClassName="text-sm" />
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{child.name}</p>
           <p className="text-muted-foreground text-xs">

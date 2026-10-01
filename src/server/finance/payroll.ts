@@ -76,7 +76,7 @@ export async function getPayroll(ctx: TenantContext, month: Date) {
       select: { id: true, teacherId: true, amountMinor: true, paidOn: true, method: true },
     }),
     ctx.db.leaveRequest.findMany({
-      where: { type: "UNPAID", status: "APPROVED", startDate: { lte: end }, endDate: { gte: start } },
+      where: { type: "UNPAID", status: "APPROVED", startDate: { lte: end }, endDate: { gte: start }, teacherId: { not: null } },
       select: { teacherId: true, startDate: true, endDate: true },
     }),
     getSchoolCalendar(ctx, start, end),
@@ -85,6 +85,7 @@ export async function getPayroll(ctx: TenantContext, month: Date) {
   const paidBy = new Map(payments.map((payment) => [payment.teacherId, payment]));
   const leaveDays = new Map<string, number>();
   for (const leave of unpaidLeave) {
+    if (!leave.teacherId) continue;
     const from = leave.startDate > start ? leave.startDate : start;
     const to = leave.endDate < end ? leave.endDate : end;
     leaveDays.set(leave.teacherId, (leaveDays.get(leave.teacherId) ?? 0) + workingDays(calendar, from, to).length);

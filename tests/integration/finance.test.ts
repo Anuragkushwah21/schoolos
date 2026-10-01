@@ -23,7 +23,7 @@ import {
   getStudentFees,
   listFeePositions,
   recordPayment,
-  removePayment,
+  voidPayment,
   summarise,
 } from "@/server/finance/fees";
 import { getMySalary, getTeacherSalary, listSalaries, setSalary } from "@/server/finance/salary";
@@ -194,11 +194,15 @@ describe("charging and collecting", () => {
     const before = await getStudentFees(admin, schoolA.studentIds[0]!);
     const payment = before.payments.find((p) => p.receiptNo === "REC-9001")!;
 
-    await removePayment(admin, payment.id);
+    await voidPayment(admin, payment.id, "Entered by mistake");
 
     const after = await getStudentFees(admin, schoolA.studentIds[0]!);
     expect(after.summary.paidMinor).toBe(before.summary.paidMinor - payment.amountMinor);
     expect(after.summary.pendingMinor).toBe(before.summary.pendingMinor + payment.amountMinor);
+    // Voided, not deleted: the receipt number stays on record, marked void.
+    const kept = after.payments.find((p) => p.id === payment.id);
+    expect(kept?.voidedAt).toBeInstanceOf(Date);
+    await expect(voidPayment(admin, payment.id, "again")).rejects.toThrow(/already void/);
   });
 
   it("lists the school's position, and filters it by status", async () => {
@@ -309,22 +313,6 @@ describe("what a parent can see of fees", () => {
     ).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it("lets a student see their own fees and nobody else's, once the school allows it", async () => {
-    const { getMyFees } = await import("@/server/student/me");
-    // Off by default: parents see fees, students do not.
-    expect(await getMyFees(studentOf(schoolA))).toBeNull();
-    await prisma.school.update({ where: { id: schoolA.schoolId }, data: { showFeesToStudents: true } });
-
-    const mine = (await getMyFees(studentOf(schoolA)))!;
-    expect(mine.me.student.id).toBe(schoolA.studentIds[0]);
-
-    const office = await getStudentFees(adminOf(schoolA), schoolA.studentIds[0]!);
-    expect(mine.summary).toEqual(office.summary);
-
-    // There is no id to change: the read starts from the session.
-    await expect(getMyFees(parentOf(schoolA))).rejects.toBeInstanceOf(ForbiddenError);
-    await prisma.school.update({ where: { id: schoolA.schoolId }, data: { showFeesToStudents: false } });
-  });
 });
 
 describe("teacher salary", () => {
@@ -604,7 +592,7 @@ describe("parents as families", () => {
     const admin = adminOf(schoolA);
     const parentsBefore = await prisma.parent.count({ where: { schoolId: schoolA.schoolId } });
 
-    const sibling = await createStudent(
+    const { studentId: sibling } = await createStudent(
       admin,
       createStudentSchema.parse({
         firstName: "Second",

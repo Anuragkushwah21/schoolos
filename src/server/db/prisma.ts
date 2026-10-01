@@ -67,8 +67,12 @@ const isStale =
     globalForPrisma.prismaUrl !== env.DATABASE_URL);
 
 if (isStale) {
-  // Let go of the old pool rather than leaking it for the rest of the session.
-  void globalForPrisma.prisma?.$disconnect().catch(() => {});
+  // Drop the old client, but do not close its pool. Next.js keeps separate
+  // module graphs (pages, route handlers) that reload at different moments;
+  // one graph may still hold the old client, and closing its pool under it
+  // fails every query there with "Cannot use a pool after calling end on the
+  // pool". An idle pool is released when nothing references it any more —
+  // this only ever happens in development, after a schema or URL change.
   globalForPrisma.prisma = undefined;
 }
 

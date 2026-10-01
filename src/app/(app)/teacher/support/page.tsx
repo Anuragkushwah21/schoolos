@@ -5,10 +5,12 @@ import { HeartHandshakeIcon, PlusIcon } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ConcernList, SupportTable } from "@/features/support/views";
+import { ConcernsBanner } from "@/features/concerns/views";
+import { SupportTable } from "@/features/support/views";
 import { requireTenant } from "@/server/auth/current-user";
 import { getT } from "@/server/i18n";
-import { listConcerns, listSupport, supportSuggestions } from "@/server/support/service";
+import { listConcerns } from "@/server/support/concerns";
+import { listSupport, supportSuggestions } from "@/server/support/service";
 
 export const metadata: Metadata = { title: "Student support" };
 
@@ -37,7 +39,7 @@ export default async function TeacherSupportPage() {
           </Button>
         }
       />
-      <ConcernList concerns={concerns} addHref={(concern) => `/teacher/support/new?student=${concern.studentId}&concern=${concern.id}` as Route} />
+      <ConcernsBanner rows={concerns} href="/teacher/concerns" />
       <SupportTable rows={rows} basePath="/teacher/support" />
       {suggestions.length ? (
         <Card className="mt-8">

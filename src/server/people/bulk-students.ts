@@ -1,4 +1,5 @@
 import "server-only";
+import { admissionYear, allocateAdmissionNumber, ensureAdmissionCounter } from "@/server/people/admission-number";
 
 import { changeStudentStatus } from "@/server/people/lifecycle";
 
@@ -7,6 +8,7 @@ import { CsvFormatError, readCsvRecords } from "@/lib/csv";
 import { parseDateInput, today } from "@/lib/dates";
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { sectionLabel } from "@/server/academics/structure";
+import { claimSeatsForGroup } from "@/server/academics/streams";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -71,16 +73,15 @@ export async function promoteStudents(
   }
 
   const students = await requireStudents(ctx, input.studentIds);
-  const [sourceRows, alreadyPlaced, occupied] = await Promise.all([
+  const [sourceRows, alreadyPlaced] = await Promise.all([
     ctx.db.studentEnrollment.findMany({
       where: { academicSessionId: fromSession.id, studentId: { in: students.map((s) => s.id) } },
-      select: { id: true, studentId: true, status: true },
+      select: { id: true, studentId: true, status: true, streamId: true, section: { select: { streamId: true } } },
     }),
     ctx.db.studentEnrollment.findMany({
       where: { academicSessionId: toSession.id, studentId: { in: students.map((s) => s.id) } },
       select: { studentId: true },
     }),
-    ctx.db.studentEnrollment.count({ where: { sectionId: toSection.id, status: "ACTIVE" } }),
   ]);
 
   const inSource = new Set(sourceRows.map((row) => row.studentId));
@@ -89,27 +90,31 @@ export async function promoteStudents(
   const placed = new Set(alreadyPlaced.map((row) => row.studentId));
   const duplicates = students.filter((student) => placed.has(student.id));
   if (duplicates.length) throw new ConflictError(`Already placed in ${toSession.name}: ${names(duplicates)}.`);
-  if (toSection.capacity !== null && occupied + students.length > toSection.capacity) {
-    throw new ConflictError(`${sectionLabel(toSection)} has room for ${Math.max(toSection.capacity - occupied, 0)} more (capacity ${toSection.capacity}).`);
-  }
 
-  await ctx.db.$transaction([
-    ctx.db.studentEnrollment.createMany({
+  // Each student keeps their stream; capacity (the section's, and each
+  // stream's share) is checked under lock in the same transaction.
+  await ctx.db.$transaction(async (tx) => {
+    const streams = await claimSeatsForGroup(
+      tx,
+      toSection.id,
+      sourceRows.map((row) => ({ studentId: row.studentId, streamId: row.streamId ?? row.section.streamId })),
+    );
+    await tx.studentEnrollment.createMany({
       data: students.map((student) => ({
         schoolId: ctx.schoolId,
         studentId: student.id,
         academicSessionId: toSession.id,
         sectionId: toSection.id,
         classId: toSection.classId,
-        streamId: toSection.streamId,
+        streamId: streams.get(student.id) ?? null,
       })),
-    }),
+    });
     // Last year's placement is closed, not changed: its records stay put.
-    ctx.db.studentEnrollment.updateMany({
+    await tx.studentEnrollment.updateMany({
       where: { id: { in: sourceRows.filter((row) => row.status === "ACTIVE").map((row) => row.id) } },
       data: { status: "COMPLETED" },
-    }),
-  ]);
+    });
+  });
 
   await recordAudit({
     action: "STUDENTS_PROMOTED",
@@ -135,21 +140,25 @@ export async function changeSection(
   const students = await requireStudents(ctx, input.studentIds);
   const rows = await ctx.db.studentEnrollment.findMany({
     where: { academicSessionId: toSection.academicSessionId, studentId: { in: students.map((s) => s.id) } },
-    select: { id: true, studentId: true, sectionId: true },
+    select: { id: true, studentId: true, sectionId: true, streamId: true, section: { select: { streamId: true } } },
   });
   const found = new Set(rows.map((row) => row.studentId));
   const missing = students.filter((student) => !found.has(student.id));
   if (missing.length) throw new ConflictError(`Not placed in that section's session: ${names(missing)}.`);
 
   const moving = rows.filter((row) => row.sectionId !== toSection.id);
-  const occupied = await ctx.db.studentEnrollment.count({ where: { sectionId: toSection.id, status: "ACTIVE" } });
-  if (toSection.capacity !== null && occupied + moving.length > toSection.capacity) {
-    throw new ConflictError(`${sectionLabel(toSection)} has room for ${Math.max(toSection.capacity - occupied, 0)} more.`);
-  }
-
-  await ctx.db.studentEnrollment.updateMany({
-    where: { id: { in: moving.map((row) => row.id) } },
-    data: { sectionId: toSection.id, classId: toSection.classId, streamId: toSection.streamId, rollNumber: null, status: "ACTIVE" },
+  await ctx.db.$transaction(async (tx) => {
+    const streams = await claimSeatsForGroup(
+      tx,
+      toSection.id,
+      moving.map((row) => ({ studentId: row.studentId, streamId: row.streamId ?? row.section.streamId })),
+    );
+    for (const row of moving) {
+      await tx.studentEnrollment.updateMany({
+        where: { id: row.id },
+        data: { sectionId: toSection.id, classId: toSection.classId, streamId: streams.get(row.studentId) ?? null, rollNumber: null, status: "ACTIVE" },
+      });
+    }
   });
 
   await recordAudit({
@@ -215,6 +224,8 @@ export const STUDENT_IMPORT_COLUMNS = [
   "Date of birth",
   "Class",
   "Section",
+  /** Needed only where the section's seats are shared among streams. */
+  "Stream",
   "Roll no.",
   "Guardian first name",
   "Guardian last name",
@@ -224,6 +235,16 @@ export const STUDENT_IMPORT_COLUMNS = [
 ] as const;
 
 export type ImportError = { line: number; message: string };
+
+/** What a check (or an import) found: rows that will go in, rows that cannot, and notes worth a look. */
+export type StudentImportReport = {
+  total: number;
+  valid: number;
+  created: number;
+  errors: ImportError[];
+  /** Not wrong, but worth knowing — e.g. a guardian matched to one already on file. */
+  warnings: ImportError[];
+};
 
 const GENDERS: Record<string, Gender> = { m: "MALE", male: "MALE", boy: "MALE", f: "FEMALE", female: "FEMALE", girl: "FEMALE", o: "OTHER", other: "OTHER" };
 const RELATIONS: Record<string, ParentRelationship> = { father: "FATHER", mother: "MOTHER", guardian: "GUARDIAN" };
@@ -241,10 +262,24 @@ function parseImportDate(value: string): Date | null {
  * Admit students from a CSV into the current session. Every row is checked
  * first — required fields, a class and section that exist this session,
  * admission and roll numbers unique in the file and in the school, a real past
- * date of birth — and nothing is written unless all rows pass. A guardian
- * whose phone the school already has is linked, not duplicated.
+ * date of birth. A guardian whose phone the school already has is linked, not
+ * duplicated.
+ *
+ *   * `check` writes nothing and reports valid rows, errors and warnings —
+ *     the preview the office sees before anything changes;
+ *   * `import` (the default) writes only if every row passes;
+ *   * `import` with `validOnly` writes the rows that pass and leaves the
+ *     rest out, reported. Whole-file problems (section capacity, the plan
+ *     limit) still stop everything.
+ *
+ * Whatever is written is written in one transaction: never half a file.
  */
-export async function importStudents(ctx: TenantContext, text: string): Promise<{ created: number; errors: ImportError[] }> {
+export async function importStudents(
+  ctx: TenantContext,
+  text: string,
+  options: { mode?: "check" | "import"; validOnly?: boolean } = {},
+): Promise<StudentImportReport> {
+  const mode = options.mode ?? "import";
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
   if (!session) throw new AppError("VALIDATION", "Set a current academic session before importing students.");
@@ -253,13 +288,14 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
   try {
     records = readCsvRecords(text, { required: ["First name", "Last name", "Class", "Section", "Guardian phone"], maxRows: 500 });
   } catch (error) {
-    if (error instanceof CsvFormatError) return { created: 0, errors: [{ line: 1, message: error.message }] };
+    if (error instanceof CsvFormatError) return { total: 0, valid: 0, created: 0, warnings: [], errors: [{ line: 1, message: error.message }] };
     throw error;
   }
-  if (!records.length) return { created: 0, errors: [{ line: 1, message: "The file has no students." }] };
+  if (!records.length) return { total: 0, valid: 0, created: 0, warnings: [], errors: [{ line: 1, message: "The file has no students." }] };
 
-  const [sections, existingAdmissions, existingRolls, parents] = await Promise.all([
+  const [sections, shares, existingAdmissions, existingRolls, parents] = await Promise.all([
     ctx.db.section.findMany({ where: { academicSessionId: session.id }, select: SECTION_SELECT }),
+    ctx.db.sectionStream.findMany({ where: { section: { academicSessionId: session.id } }, select: { sectionId: true, streamId: true, capacity: true, stream: { select: { name: true } } } }),
     ctx.db.student.findMany({ select: { admissionNumber: true } }),
     ctx.db.studentEnrollment.findMany({
       where: { academicSessionId: session.id, rollNumber: { not: null } },
@@ -275,6 +311,7 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
   const parentByPhone = new Map(parents.map((parent) => [phoneDigits(parent.phone), parent.id]));
 
   const errors: ImportError[] = [];
+  const warnings: ImportError[] = [];
   const rows: Array<{
     admissionNumber: string | null;
     firstName: string;
@@ -282,6 +319,7 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
     gender: Gender | null;
     dateOfBirth: Date | null;
     section: (typeof sections)[number];
+    streamId: string | null;
     rollNumber: string | null;
     guardian: { firstName: string; lastName: string; phone: string; email: string | null; relationship: ParentRelationship };
   }> = [];
@@ -315,6 +353,21 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
     const section = sectionByKey.get(`${(v["class"] ?? "").toLowerCase()}|${(v["section"] ?? "").toLowerCase()}`);
     if (!section) problems.push(`no section "${v["class"]} ${v["section"]}" this session`);
 
+    // Stream: required (and one of its shares) where the section is shared among streams.
+    const streamRaw = (v["stream"] ?? "").trim();
+    let streamId: string | null = null;
+    if (section) {
+      const offered = shares.filter((row) => row.sectionId === section.id);
+      if (offered.length) {
+        const match = offered.find((row) => row.stream.name.toLowerCase() === streamRaw.toLowerCase());
+        if (!streamRaw) problems.push(`${sectionLabel(section)} is shared among streams — add a Stream (${offered.map((row) => row.stream.name).join(", ")})`);
+        else if (!match) problems.push(`stream "${streamRaw}" is not offered in ${sectionLabel(section)}`);
+        else streamId = match.streamId;
+      } else if (streamRaw && section.stream?.name.toLowerCase() !== streamRaw.toLowerCase()) {
+        problems.push(`${sectionLabel(section)} has no stream "${streamRaw}"`);
+      }
+    }
+
     const rollNumber = (v["roll no"] ?? "").trim() || null;
     if (rollNumber && section) {
       const key = `${section.id}|${rollNumber.toLowerCase()}`;
@@ -337,6 +390,8 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
       errors.push({ line: record.line, message: problems.join("; ") });
       continue;
     }
+    if (known) warnings.push({ line: record.line, message: `guardian phone ${phone} is already on file — ${firstName} will be linked to that guardian` });
+    if (!genderRaw) warnings.push({ line: record.line, message: "gender is blank" });
     perSection.set(section!.id, (perSection.get(section!.id) ?? 0) + 1);
     rows.push({
       admissionNumber,
@@ -345,6 +400,7 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
       gender,
       dateOfBirth,
       section: section!,
+      streamId,
       rollNumber,
       guardian: {
         firstName: guardianFirst,
@@ -365,27 +421,51 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
       errors.push({ line: 1, message: `${sectionLabel(section)} has room for ${Math.max(section.capacity - occupied, 0)} more, but the file adds ${adding}.` });
     }
   }
+  // And each stream's share of its section.
+  const perStream = new Map<string, number>();
+  for (const row of rows) if (row.streamId) perStream.set(`${row.section.id}|${row.streamId}`, (perStream.get(`${row.section.id}|${row.streamId}`) ?? 0) + 1);
+  for (const [key, adding] of perStream) {
+    const [sectionId, streamId] = key.split("|") as [string, string];
+    const share = shares.find((row) => row.sectionId === sectionId && row.streamId === streamId)!;
+    const occupied = await ctx.db.studentEnrollment.count({ where: { sectionId, streamId, status: "ACTIVE" } });
+    if (occupied + adding > share.capacity) {
+      const section = sections.find((row) => row.id === sectionId)!;
+      errors.push({ line: 1, message: `${share.stream.name} in ${sectionLabel(section)} has room for ${Math.max(share.capacity - occupied, 0)} more, but the file adds ${adding}.` });
+    }
+  }
   const capacity = await remainingStudentCapacity(ctx);
   if (capacity && rows.length > capacity.remaining) {
     errors.push({ line: 1, message: `Your ${capacity.plan} plan allows ${capacity.remaining} more active students; the file has ${rows.length}.` });
   }
-  if (errors.length) return { created: 0, errors: errors.sort((a, b) => a.line - b.line) };
+  const byLine = (a: ImportError, b: ImportError) => a.line - b.line;
+  const report = { total: records.length, valid: rows.length, errors: errors.sort(byLine), warnings: warnings.sort(byLine) };
+  // Line 1 errors are about the whole file; they stop an import of valid rows too.
+  const fileLevel = errors.some((error) => error.line === 1);
+  if (mode === "check") return { ...report, created: 0 };
+  if (errors.length && (!options.validOnly || fileLevel)) return { ...report, created: 0 };
+  if (!rows.length) return { ...report, created: 0 };
 
+  const year = admissionYear(today());
+  if (rows.some((row) => !row.admissionNumber)) await ensureAdmissionCounter(ctx.schoolId, year);
   const created = await ctx.db.$transaction(
     async (tx) => {
-      let nextNumber = (
-        await tx.student.findMany({ where: { admissionNumber: { startsWith: "ADM" } }, select: { admissionNumber: true } })
-      ).reduce((max, row) => {
-        const n = Number.parseInt(row.admissionNumber.slice(3), 10);
-        return Number.isFinite(n) && n > max ? n : max;
-      }, 0);
       const newParents = new Map<string, string>();
+      // Seats, under lock: each section's total and each stream's share.
+      for (const sectionId of perSection.keys()) {
+        await claimSeatsForGroup(
+          tx,
+          sectionId,
+          rows.flatMap((row, index) => (row.section.id === sectionId ? [{ studentId: String(index), streamId: row.streamId ?? row.section.streamId }] : [])),
+        );
+      }
 
       for (const row of rows) {
         const student = await tx.student.create({
           data: {
             schoolId: ctx.schoolId,
-            admissionNumber: row.admissionNumber ?? `ADM${String(++nextNumber).padStart(4, "0")}`,
+            // A number from the school's old register is kept; a blank one gets the next in sequence.
+            admissionNumber: row.admissionNumber ?? (await allocateAdmissionNumber(tx, year)),
+            admissionDate: today(),
             firstName: row.firstName,
             lastName: row.lastName,
             gender: row.gender,
@@ -400,7 +480,7 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
             academicSessionId: session.id,
             sectionId: row.section.id,
             classId: row.section.classId,
-            streamId: row.section.streamId,
+            streamId: row.streamId ?? row.section.streamId,
             rollNumber: row.rollNumber,
           },
         });
@@ -438,5 +518,5 @@ export async function importStudents(ctx: TenantContext, text: string): Promise<
     actorId: ctx.user.id,
     summary: `${created} student${created === 1 ? "" : "s"} imported from CSV.`,
   });
-  return { created, errors: [] };
+  return { ...report, created };
 }

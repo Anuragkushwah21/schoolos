@@ -49,6 +49,7 @@ const NOTICE_CARD = {
   scope: true,
   isPublic: true,
   publishAt: true,
+  expiresAt: true,
   createdAt: true,
 } as const;
 
@@ -127,6 +128,81 @@ export async function noticesFor(ctx: TenantContext, options: { take?: number } 
     take: options.take ?? 50,
     select: NOTICE_CARD,
   });
+}
+
+/**
+ * The signed-in person's Notices page: live notices with an Unread flag each,
+ * and their history (notices that have expired), newest first. Read state is
+ * per person — opening or marking a notice read writes a `NoticeRead` row.
+ */
+export async function myNotices(ctx: TenantContext, options: { historyTake?: number } = {}) {
+  const now = new Date();
+  const visible = await visibleNoticeWhere(ctx);
+  const [live, history] = await Promise.all([
+    ctx.db.notice.findMany({
+      where: { AND: [liveWhere(now), visible] },
+      orderBy: [{ publishAt: "desc" }, { createdAt: "desc" }],
+      take: 100,
+      select: NOTICE_CARD,
+    }),
+    ctx.db.notice.findMany({
+      where: { AND: [{ status: "PUBLISHED", expiresAt: { lt: today(now) } }, visible] },
+      orderBy: [{ expiresAt: "desc" }],
+      take: options.historyTake ?? 20,
+      select: NOTICE_CARD,
+    }),
+  ]);
+  const read = await readNoticeIds(ctx, [...live, ...history].map((row) => row.id));
+  const mark = <T extends { id: string }>(rows: T[]) => rows.map((row) => ({ ...row, isRead: read.has(row.id) }));
+  const marked = mark(live);
+  return { live: marked, history: mark(history), unread: marked.filter((row) => !row.isRead).length };
+}
+
+async function readNoticeIds(ctx: TenantContext, noticeIds: string[]): Promise<Set<string>> {
+  if (!noticeIds.length) return new Set();
+  const rows = await ctx.db.noticeRead.findMany({
+    where: { userId: ctx.user.id, noticeId: { in: noticeIds } },
+    select: { noticeId: true },
+  });
+  return new Set(rows.map((row) => row.noticeId));
+}
+
+/** How many live notices this person has not read yet — the dashboard card. */
+export async function unreadNoticeSummary(ctx: TenantContext) {
+  const live = await ctx.db.notice.findMany({
+    where: { AND: [liveWhere(new Date()), await visibleNoticeWhere(ctx)] },
+    orderBy: [{ publishAt: "desc" }, { createdAt: "desc" }],
+    take: 100,
+    select: { id: true, title: true, publishAt: true, createdAt: true },
+  });
+  const read = await readNoticeIds(ctx, live.map((row) => row.id));
+  const unread = live.filter((row) => !read.has(row.id));
+  return { unread: unread.length, total: live.length, latest: unread[0] ?? live[0] ?? null };
+}
+
+/**
+ * Mark notices read for the signed-in person — the ones given, or every
+ * notice addressed to them. Ids they cannot see are ignored, so this can
+ * never reveal or touch another audience's notice.
+ */
+export async function markNoticesRead(ctx: TenantContext, noticeIds: string[] | "ALL"): Promise<number> {
+  const visible = await ctx.db.notice.findMany({
+    where: {
+      AND: [
+        { status: "PUBLISHED" },
+        await visibleNoticeWhere(ctx),
+        noticeIds === "ALL" ? {} : { id: { in: noticeIds } },
+      ],
+    },
+    take: 500,
+    select: { id: true },
+  });
+  if (!visible.length) return 0;
+  const { count } = await ctx.db.noticeRead.createMany({
+    data: visible.map((row) => ({ schoolId: ctx.schoolId, noticeId: row.id, userId: ctx.user.id })),
+    skipDuplicates: true,
+  });
+  return count;
 }
 
 /** Public notices for a school's website. Called with an ACTIVE school's id only. */

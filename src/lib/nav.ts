@@ -77,88 +77,97 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/api-tokens", labelKey: "nav.apiTokens", icon: "tokens" },
     { href: "/account", labelKey: "common.account", icon: "account" },
   ],
+  // Each concept has its own entry: Events (something happening), Calendar
+  // (a date overview), Notices (a message), Meetings (people meeting) and
+  // Leave (an absence request). Screens that belong to one of these sit
+  // behind it as tabs, so nothing lost its page.
   SCHOOL_ADMIN: [
-    { href: "/school-admin/dashboard", labelKey: "nav.home", icon: "dashboard", exact: true },
-    { href: "/school-admin/students", labelKey: "nav.students", icon: "students", match: ["/school-admin/admissions", "/school-admin/parents", "/school-admin/support"] },
-    {
-      href: "/school-admin/teachers",
-      labelKey: "nav.teachersStaff",
-      icon: "teachers",
-      match: ["/school-admin/staff", "/school-admin/leave", "/school-admin/substitutes"],
-    },
-    { href: "/school-admin/academics/classes", labelKey: "nav.classes", icon: "academics", match: ["/school-admin/academics"] },
-    { href: "/school-admin/timetable", labelKey: "nav.timetable", icon: "timetable" },
-    { href: "/school-admin/attendance", labelKey: "nav.attendance", icon: "attendance" },
-    { href: "/school-admin/homework", labelKey: "nav.homework", icon: "homework" },
+    { href: "/school-admin/dashboard", labelKey: "nav.dashboard", icon: "dashboard", exact: true },
+    { href: "/school-admin/students", labelKey: "nav.students", icon: "students", match: ["/school-admin/admissions", "/school-admin/parents", "/school-admin/support", "/school-admin/concerns"] },
+    { href: "/school-admin/teachers", labelKey: "nav.teachersStaff", icon: "teachers", match: ["/school-admin/staff", "/school-admin/substitutes"] },
+    { href: "/school-admin/academics/classes", labelKey: "nav.academics", icon: "academics", match: ["/school-admin/academics", "/school-admin/homework"] },
+    { href: "/school-admin/attendance", labelKey: "nav.attendance", icon: "attendance", match: ["/school-admin/reports"] },
     { href: "/school-admin/exams", labelKey: "nav.exams", icon: "exams" },
     {
       href: "/school-admin/finance/payments",
       labelKey: "nav.fees",
       icon: "fees",
-      match: ["/school-admin/finance/fees", "/school-admin/finance/receipts"],
+      match: ["/school-admin/finance/fees", "/school-admin/finance/receipts", "/school-admin/finance/expenses", "/school-admin/finance/salaries", "/school-admin/finance/payroll"],
       matchExact: ["/school-admin/finance"],
     },
-    {
-      href: "/school-admin/finance/expenses",
-      labelKey: "nav.expenses",
-      icon: "expenses",
-      match: ["/school-admin/finance/salaries", "/school-admin/finance/payroll"],
-    },
-    { href: "/school-admin/holidays", labelKey: "nav.calendar", icon: "holidays", match: ["/school-admin/events"] },
+    { href: "/school-admin/library", labelKey: "nav.library", icon: "library", match: ["/school-admin/inventory"] },
+    { href: "/school-admin/transport", labelKey: "nav.transport", icon: "transport" },
+    { href: "/school-admin/timetable", labelKey: "nav.timetable", icon: "timetable" },
+    { href: "/school-admin/events", labelKey: "nav.events", icon: "events" },
+    { href: "/school-admin/holidays", labelKey: "nav.calendar", icon: "holidays" },
     { href: "/school-admin/notices", labelKey: "nav.notices", icon: "notices", match: ["/school-admin/complaints"] },
     { href: "/school-admin/meetings", labelKey: "nav.meetings", icon: "meetings" },
-    { href: "/school-admin/inventory", labelKey: "nav.facilities", icon: "inventory", match: ["/school-admin/library", "/school-admin/transport"] },
-    { href: "/school-admin/reports", labelKey: "nav.reports", icon: "reports" },
+    { href: "/school-admin/student-leave", labelKey: "nav.leave", icon: "leave", match: ["/school-admin/leave"] },
     { href: "/school-admin/settings", labelKey: "nav.settings", icon: "settings", match: ["/school-admin/website", "/school-admin/audit"] },
   ],
   TEACHER: [
     // The dashboard sits at /teacher/dashboard, not /teacher — see ROLE_HOME.
-    { href: "/teacher/dashboard", labelKey: "nav.home", icon: "dashboard", exact: true },
+    { href: "/teacher/dashboard", labelKey: "nav.dashboard", icon: "dashboard", exact: true },
     { href: "/teacher/classes", labelKey: "nav.myClasses", icon: "students", match: ["/teacher/activities", "/teacher/students"] },
     { href: "/teacher/attendance", labelKey: "nav.attendance", icon: "attendance" },
-    { href: "/teacher/homework", labelKey: "nav.homework", icon: "homework" },
-    { href: "/teacher/exams", labelKey: "nav.examsMarks", icon: "exams" },
-    { href: "/teacher/support", labelKey: "nav.support", icon: "support" },
     { href: "/teacher/timetable", labelKey: "nav.timetable", icon: "timetable" },
+    { href: "/teacher/homework", labelKey: "nav.homework", icon: "homework" },
+    { href: "/teacher/exams", labelKey: "nav.examsShort", icon: "exams" },
+    { href: "/teacher/concerns", labelKey: "nav.studentConcerns", icon: "support", match: ["/teacher/support"] },
+    { href: "/teacher/student-leave", labelKey: "nav.leaveRequests", icon: "leave", match: ["/teacher/leave"] },
+    { href: "/teacher/notices", labelKey: "nav.notices", icon: "notices", match: ["/teacher/complaints"] },
+    { href: "/teacher/events", labelKey: "nav.events", icon: "events" },
     { href: "/teacher/meetings", labelKey: "nav.meetings", icon: "meetings" },
-    { href: "/teacher/notices", labelKey: "nav.notices", icon: "notices", match: ["/teacher/holidays", "/teacher/complaints"] },
-    { href: "/teacher/leave", labelKey: "nav.leave", icon: "leave" },
-    { href: "/teacher/profile", labelKey: "nav.myProfile", icon: "teachers" },
+    { href: "/teacher/holidays", labelKey: "nav.calendar", icon: "holidays" },
+    { href: "/teacher/profile", labelKey: "nav.profile", icon: "teachers" },
   ],
   STUDENT: [
-    { href: "/student/dashboard", labelKey: "nav.today", icon: "dashboard", exact: true },
-    { href: "/student/classes", labelKey: "nav.classes", icon: "records", match: ["/student/upcoming", "/student/lessons"] },
-    { href: "/student/homework", labelKey: "nav.homework", icon: "homework" },
-    { href: "/student/materials", labelKey: "nav.studyMaterial", icon: "materials" },
-    { href: "/student/results", labelKey: "nav.results", icon: "reports" },
-    { href: "/student/attendance", labelKey: "nav.attendance", icon: "attendance" },
+    { href: "/student/dashboard", labelKey: "nav.dashboard", icon: "dashboard", exact: true },
     { href: "/student/timetable", labelKey: "nav.timetable", icon: "timetable" },
+    { href: "/student/attendance", labelKey: "nav.attendance", icon: "attendance" },
+    { href: "/student/homework", labelKey: "nav.homework", icon: "homework" },
+    { href: "/student/results", labelKey: "nav.results", icon: "reports" },
+    { href: "/student/classes", labelKey: "nav.classes", icon: "records", match: ["/student/upcoming", "/student/lessons"] },
+    { href: "/student/materials", labelKey: "nav.studyMaterial", icon: "materials" },
     { href: "/student/remarks", labelKey: "nav.remarks", icon: "teachers" },
-    { href: "/student/notices", labelKey: "nav.notices", icon: "notices", match: ["/student/holidays", "/student/complaints"] },
-    { href: "/student/meetings", labelKey: "nav.meetings", icon: "meetings" },
     { href: "/student/library", labelKey: "nav.library", icon: "library" },
-    { href: "/student/profile", labelKey: "nav.myProfile", icon: "students" },
+    { href: "/student/complaints", labelKey: "nav.concerns", icon: "support" },
+    { href: "/student/leave", labelKey: "nav.leave", icon: "leave" },
+    { href: "/student/notices", labelKey: "nav.notices", icon: "notices" },
+    { href: "/student/events", labelKey: "nav.events", icon: "events" },
+    { href: "/student/meetings", labelKey: "nav.meetings", icon: "meetings" },
+    { href: "/student/holidays", labelKey: "nav.calendar", icon: "holidays" },
+    { href: "/student/profile", labelKey: "nav.profile", icon: "students" },
   ],
   PARENT: [
-    { href: "/parent/dashboard", labelKey: "nav.home", icon: "dashboard", exact: true },
-    // Everything about one child hangs off this entry, so the child's own
-    // screens are reached from their card rather than from the sidebar: a
-    // guardian with three children would otherwise need three of every link.
+    { href: "/parent/dashboard", labelKey: "nav.dashboard", icon: "dashboard", exact: true },
+    // Everything about one child hangs off this entry. Attendance, Homework
+    // and Results open the chosen child's page (or ask which child).
     { href: "/parent/children", labelKey: "nav.myChildren", icon: "children" },
+    { href: "/parent/attendance", labelKey: "nav.attendance", icon: "attendance" },
+    { href: "/parent/homework", labelKey: "nav.homework", icon: "homework" },
+    { href: "/parent/results", labelKey: "nav.results", icon: "reports" },
     { href: "/parent/fees", labelKey: "nav.fees", icon: "fees" },
-    { href: "/parent/support", labelKey: "nav.childSupport", icon: "support" },
+    { href: "/parent/concerns", labelKey: "nav.concerns", icon: "support", match: ["/parent/support"] },
+    { href: "/parent/leave", labelKey: "nav.leave", icon: "leave" },
+    { href: "/parent/notices", labelKey: "nav.notices", icon: "notices", match: ["/parent/complaints"] },
+    { href: "/parent/events", labelKey: "nav.events", icon: "events" },
     { href: "/parent/meetings", labelKey: "nav.meetings", icon: "meetings" },
-    { href: "/parent/notices", labelKey: "nav.notices", icon: "notices", match: ["/parent/holidays", "/parent/complaints"] },
-    { href: "/parent/profile", labelKey: "nav.myProfile", icon: "teachers" },
+    { href: "/parent/holidays", labelKey: "nav.calendar", icon: "holidays" },
+    { href: "/parent/profile", labelKey: "nav.profile", icon: "teachers" },
   ],
   // The base a staff login always has. Modules the School Admin grants are
   // added per person by `staffNav()`, because they differ from one staff
   // member to the next.
   NON_TEACHING_STAFF: [
-    { href: "/staff/dashboard", labelKey: "nav.home", icon: "dashboard", exact: true },
-    { href: "/staff/meetings", labelKey: "nav.meetings", icon: "meetings" },
+    { href: "/staff/dashboard", labelKey: "nav.dashboard", icon: "dashboard", exact: true },
+    { href: "/staff/attendance", labelKey: "nav.attendance", icon: "attendance" },
+    { href: "/staff/leave", labelKey: "nav.leave", icon: "leave" },
     { href: "/staff/notices", labelKey: "nav.notices", icon: "notices" },
-    { href: "/staff/profile", labelKey: "nav.myProfile", icon: "teachers" },
+    { href: "/staff/events", labelKey: "nav.events", icon: "events" },
+    { href: "/staff/meetings", labelKey: "nav.meetings", icon: "meetings" },
+    { href: "/staff/holidays", labelKey: "nav.calendar", icon: "holidays" },
+    { href: "/staff/profile", labelKey: "nav.profile", icon: "teachers" },
   ],
 };
 
@@ -167,6 +176,9 @@ export const STAFF_PERMISSION_NAV: Record<StaffPermission, NavItem> = {
   VIEW_STUDENTS: { href: "/staff/students", labelKey: "nav.students", icon: "students" },
   VIEW_LIBRARY: { href: "/staff/library", labelKey: "nav.library", icon: "library" },
   VIEW_TRANSPORT: { href: "/staff/transport", labelKey: "nav.transport", icon: "transport" },
+  // Running the library is the same page with the desk controls switched on.
+  MANAGE_LIBRARY: { href: "/staff/library", labelKey: "nav.library", icon: "library" },
+  COLLECT_FEES: { href: "/staff/fees", labelKey: "nav.fees", icon: "fees" },
 };
 
 /** A staff member's sidebar: the base links with their granted modules after Home. */
@@ -174,7 +186,8 @@ export function staffNav(permissions: readonly StaffPermission[]): NavItem[] {
   const [home, ...rest] = NAV_BY_ROLE.NON_TEACHING_STAFF;
   const granted = (Object.keys(STAFF_PERMISSION_NAV) as StaffPermission[])
     .filter((permission) => permissions.includes(permission))
-    .map((permission) => STAFF_PERMISSION_NAV[permission]);
+    .map((permission) => STAFF_PERMISSION_NAV[permission])
+    .filter((item, index, all) => all.findIndex((other) => other.href === item.href) === index);
   return [home!, ...granted, ...rest];
 }
 
@@ -203,71 +216,74 @@ export const AREA_TABS: Partial<Record<UserRole, AreaTab[][]>> = {
       { href: "/school-admin/admissions", labelKey: "tabs.admissions" },
       { href: "/school-admin/parents", labelKey: "tabs.parents" },
       { href: "/school-admin/support", labelKey: "tabs.support" },
+      { href: "/school-admin/concerns", labelKey: "tabs.concerns" },
     ],
     [
       { href: "/school-admin/teachers", labelKey: "tabs.teachers" },
       { href: "/school-admin/staff", labelKey: "tabs.staff" },
-      { href: "/school-admin/leave", labelKey: "tabs.leaveCover" },
       { href: "/school-admin/substitutes", labelKey: "tabs.substitutes" },
     ],
     [
       { href: "/school-admin/academics/classes", labelKey: "tabs.classesSections" },
       { href: "/school-admin/academics/class-teachers", labelKey: "tabs.classTeachers" },
+      { href: "/school-admin/academics/rooms", labelKey: "tabs.rooms" },
+      { href: "/school-admin/homework", labelKey: "tabs.homework" },
       { href: "/school-admin/academics", labelKey: "tabs.setup", exact: true },
     ],
     [
       { href: "/school-admin/attendance", labelKey: "tabs.studentAttendance" },
       { href: "/school-admin/attendance/absent", labelKey: "absentees.tab" },
       { href: "/school-admin/attendance/staff", labelKey: "tabs.staffAttendance" },
+      { href: "/school-admin/reports", labelKey: "tabs.attendanceReports" },
     ],
     [
       { href: "/school-admin/finance/payments", labelKey: "tabs.payments" },
       { href: "/school-admin/finance/fees", labelKey: "tabs.feeStructure" },
       { href: "/school-admin/finance/receipts", labelKey: "tabs.receipts" },
       { href: "/school-admin/finance", labelKey: "tabs.overview", exact: true },
-    ],
-    [
       { href: "/school-admin/finance/expenses", labelKey: "tabs.expenses" },
       { href: "/school-admin/finance/salaries", labelKey: "tabs.salaries" },
       { href: "/school-admin/finance/payroll", labelKey: "tabs.payroll" },
     ],
     [
-      { href: "/school-admin/holidays", labelKey: "tabs.holidays" },
-      { href: "/school-admin/events", labelKey: "tabs.events" },
+      { href: "/school-admin/library", labelKey: "tabs.library" },
+      { href: "/school-admin/library/loans", labelKey: "tabs.loans" },
+      { href: "/school-admin/inventory", labelKey: "tabs.inventory" },
     ],
     [
       { href: "/school-admin/notices", labelKey: "tabs.notices" },
       { href: "/school-admin/complaints", labelKey: "tabs.complaints" },
     ],
     [
-      { href: "/school-admin/inventory", labelKey: "tabs.inventory" },
-      { href: "/school-admin/library", labelKey: "tabs.library" },
-      { href: "/school-admin/library/loans", labelKey: "tabs.loans" },
-      { href: "/school-admin/transport", labelKey: "tabs.transport" },
+      { href: "/school-admin/student-leave", labelKey: "tabs.studentLeave" },
+      { href: "/school-admin/leave", labelKey: "tabs.staffLeave" },
     ],
   ],
   TEACHER: [
+    [
+      { href: "/teacher/student-leave", labelKey: "tabs.studentLeave" },
+      { href: "/teacher/leave", labelKey: "tabs.myLeave" },
+    ],
+    [
+      { href: "/teacher/concerns", labelKey: "tabs.concerns" },
+      { href: "/teacher/support", labelKey: "tabs.support" },
+    ],
     [
       { href: "/teacher/classes", labelKey: "tabs.myClasses" },
       { href: "/teacher/activities", labelKey: "tabs.classRecords" },
     ],
     [
       { href: "/teacher/notices", labelKey: "tabs.notices" },
-      { href: "/teacher/holidays", labelKey: "tabs.calendar" },
       { href: "/teacher/complaints", labelKey: "tabs.complaints" },
-    ],
-  ],
-  STUDENT: [
-    [
-      { href: "/student/notices", labelKey: "tabs.notices" },
-      { href: "/student/holidays", labelKey: "tabs.calendar" },
-      { href: "/student/complaints", labelKey: "tabs.complaints" },
     ],
   ],
   PARENT: [
     [
+      { href: "/parent/concerns", labelKey: "tabs.concerns" },
+      { href: "/parent/support", labelKey: "nav.childSupport" },
+    ],
+    [
       { href: "/parent/notices", labelKey: "tabs.notices" },
-      { href: "/parent/holidays", labelKey: "tabs.calendar" },
       { href: "/parent/complaints", labelKey: "tabs.complaints" },
     ],
   ],

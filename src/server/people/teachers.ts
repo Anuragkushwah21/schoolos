@@ -6,18 +6,17 @@ import { today } from "@/lib/dates";
 
 import type { Prisma } from "@/generated/prisma/client";
 import type { TeacherStatus } from "@/generated/prisma/enums";
-import { ConflictError, NotFoundError } from "@/lib/errors";
+import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import type { CreateTeacherInput, UpdateTeacherInput } from "@/lib/validation/school";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
-import { hashPassword } from "@/server/auth/password";
-import { generateTemporaryPassword } from "@/server/auth/temp-password";
+import { type LoginInvite, provisionAccount, sendActivation, unusablePasswordHash } from "@/server/auth/account-links";
+import { assertLoginEmailFree, type EmailMove, moveLoginEmail } from "@/server/people/accounts";
 import { requireCurrentSession } from "@/server/academics/structure";
 import { isUniqueViolation } from "@/server/db/errors";
 import { changeEmployeeStatus } from "@/server/people/lifecycle";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
-import type { Credentials } from "@/server/platform/schools";
 
 /**
  * Teaching staff. Every teacher has a login — they need one to see their
@@ -96,7 +95,7 @@ export async function getTeacherProfile(ctx: TenantContext, teacherId: string) {
   const teacher = await ctx.db.teacher.findFirst({
     where: { id: teacherId },
     include: {
-      user: { select: { id: true, email: true, isActive: true, lastLoginAt: true } },
+      user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, activatedAt: true } },
       assignments: {
         where: { academicSessionId: session?.id ?? "__none__" },
         orderBy: { createdAt: "asc" },
@@ -104,6 +103,7 @@ export async function getTeacherProfile(ctx: TenantContext, teacherId: string) {
           id: true,
           subject: { select: { name: true, code: true } },
           section: { select: { id: true, name: true, class: { select: { name: true, level: true } }, stream: { select: { name: true } } } },
+          stream: { select: { name: true } },
         },
       },
       classTeacherOf: {
@@ -136,28 +136,22 @@ async function nextEmployeeId(ctx: TenantContext): Promise<string> {
 export async function createTeacher(
   ctx: TenantContext,
   input: CreateTeacherInput,
-): Promise<{ teacherId: string; credentials: Credentials }> {
+): Promise<{ teacherId: string; invite: LoginInvite }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   await assertWithinPlanLimit(ctx, "teachers");
 
-  const password = generateTemporaryPassword();
   const employeeId = input.employeeId ?? (await nextEmployeeId(ctx));
-  const passwordHash = await hashPassword(password);
+  const unusableHash = await unusablePasswordHash();
 
   try {
-    const teacherId = await ctx.db.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: {
-          schoolId: ctx.schoolId,
-          email: input.email,
-          passwordHash,
-          role: "TEACHER",
-          firstName: input.firstName,
-          lastName: input.lastName,
-          phone: input.phone,
-        },
-        select: { id: true },
-      });
+    const { teacherId, userId } = await ctx.db.$transaction(async (tx) => {
+      // The login waits for the teacher to activate it from the email.
+      const userId = await provisionAccount(
+        tx,
+        { schoolId: ctx.schoolId, email: input.email, role: "TEACHER", firstName: input.firstName, lastName: input.lastName, phone: input.phone },
+        unusableHash,
+      );
+      const user = { id: userId };
 
       const teacher = await tx.teacher.create({
         data: {
@@ -180,7 +174,7 @@ export async function createTeacher(
         },
         select: { id: true },
       });
-      return teacher.id;
+      return { teacherId: teacher.id, userId: user.id };
     });
 
     await recordAudit({
@@ -192,10 +186,8 @@ export async function createTeacher(
       summary: `Teacher ${input.firstName} ${input.lastName} (${employeeId}) added.`,
     });
 
-    return {
-      teacherId,
-      credentials: { email: input.email, password, label: `Sign-in for ${input.firstName}` },
-    };
+    // After the commit: a failed email never undoes the teacher.
+    return { teacherId, invite: { ...(await sendActivation(userId, ctx.user.id)), label: `Login for ${input.firstName}` } };
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new ConflictError("That email address or employee ID is already in use.");
@@ -204,7 +196,7 @@ export async function createTeacher(
   }
 }
 
-export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInput): Promise<void> {
+export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInput): Promise<EmailMove> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const { teacherId, status, ...data } = input;
 
@@ -218,19 +210,13 @@ export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInpu
   // The address is the teacher's way in, so a typo in it locks them out for
   // good unless it can be corrected here. Both copies move together: the
   // staff record's own address and the one they sign in with.
-  const emailChanged = data.email !== existing.user.email;
-
+  await assertLoginEmailFree(existing.userId, data.email);
+  let move: EmailMove = null;
   try {
     await ctx.db.teacher.updateMany({ where: { id: teacherId }, data });
-    await ctx.db.user.updateMany({
-      where: { id: existing.userId },
-      data: {
-        firstName: data.firstName,
-        lastName: data.lastName,
-        phone: data.phone,
-        email: data.email,
-      },
-    });
+    await ctx.db.user.updateMany({ where: { id: existing.userId }, data: { firstName: data.firstName, lastName: data.lastName, phone: data.phone } });
+    // The sign-in address moves with it; links sent to the old one stop working.
+    move = await moveLoginEmail(ctx, existing.userId, data.email);
   } catch (error) {
     if (isUniqueViolation(error)) {
       throw new ConflictError("That employee ID or email address is already in use.");
@@ -250,10 +236,11 @@ export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInpu
     entityId: teacherId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: emailChanged
-      ? `Teacher ${data.firstName} ${data.lastName} updated; sign-in moved to ${data.email}.`
+    summary: move
+      ? `Teacher ${data.firstName} ${data.lastName} updated; sign-in moved to ${move.to}.`
       : `Teacher ${data.firstName} ${data.lastName} updated.`,
   });
+  return move;
 }
 
 /**
@@ -265,7 +252,7 @@ export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInpu
  * over, so that refusal tells the admin what to move first.
  */
 async function deletionBlockers(ctx: TenantContext, teacherId: string) {
-  const [attendance, scheduled, taught, homework, remarks, slots, sections] = await Promise.all([
+  const [attendance, scheduled, taught, homework, remarks, slots, sections, salary, leave, papers, classTeacherYears] = await Promise.all([
     ctx.db.teacherAttendance.count({ where: { teacherId } }),
     ctx.db.classSession.count({ where: { scheduledTeacherId: teacherId } }),
     ctx.db.classSession.count({ where: { actualTeacherId: teacherId } }),
@@ -273,9 +260,17 @@ async function deletionBlockers(ctx: TenantContext, teacherId: string) {
     ctx.db.studentRemark.count({ where: { teacherId } }),
     ctx.db.timetableSlot.count({ where: { teacherId } }),
     ctx.db.section.count({ where: { classTeacherId: teacherId } }),
+    ctx.db.salaryPayment.count({ where: { teacherId } }),
+    ctx.db.leaveRequest.count({ where: { teacherId } }),
+    ctx.db.assessment.count({ where: { teacherId } }),
+    ctx.db.classTeacherAssignment.count({ where: { teacherId } }),
   ]);
 
   const history: string[] = [];
+  if (salary) history.push("salary payments");
+  if (leave) history.push("leave requests");
+  if (papers) history.push("exam papers");
+  if (classTeacherYears && !sections) history.push("class-teacher history");
   if (attendance) history.push(`${attendance} attendance ${attendance === 1 ? "record" : "records"}`);
   if (scheduled || taught) history.push(`${Math.max(scheduled, taught)} class records`);
   if (homework) history.push(`${homework} ${homework === 1 ? "assignment" : "assignments"}`);
@@ -340,12 +335,16 @@ export async function deleteTeacher(ctx: TenantContext, teacherId: string): Prom
 }
 
 /**
- * Assign a subject in a section for the current session. This is also the
- * authorization grant that lets the teacher mark that section's attendance.
+ * Assign a subject in a section for the current session — to the whole
+ * section, or (`streamId`) to one stream / group that shares the section's
+ * seats: "9 – A Science: Physics → Rahul", "9 – A Commerce: Accountancy →
+ * Amit". This is also the authorization grant that lets the teacher work with
+ * that section, and it decides whom a parent's concern about the subject
+ * reaches.
  */
 export async function assignSubject(
   ctx: TenantContext,
-  input: { teacherId: string; subjectId: string; sectionId: string },
+  input: { teacherId: string; subjectId: string; sectionId: string; streamId?: string | null },
 ): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const session = await requireCurrentSession(ctx);
@@ -360,6 +359,21 @@ export async function assignSubject(
   ]);
   if (!teacher || !subject || !section) throw new NotFoundError();
 
+  // A stream must be one this section shares its seats with.
+  const streamId = input.streamId || null;
+  let streamName: string | null = null;
+  if (streamId) {
+    const share = await ctx.db.sectionStream.findFirst({ where: { sectionId: section.id, streamId }, select: { stream: { select: { name: true } } } });
+    if (!share) throw new ValidationError("Please correct the highlighted fields.", { streamId: ["That stream / group is not set up in this section."] });
+    streamName = share.stream.name;
+  }
+
+  // The unique key cannot see two whole-section rows as equal (NULL ≠ NULL), so check.
+  const duplicate = await ctx.db.teacherSubjectAssignment.count({
+    where: { academicSessionId: session.id, teacherId: teacher.id, subjectId: subject.id, sectionId: section.id, streamId },
+  });
+  if (duplicate) throw new ConflictError("That assignment already exists.");
+
   try {
     await ctx.db.teacherSubjectAssignment.create({
       data: {
@@ -368,6 +382,7 @@ export async function assignSubject(
         teacherId: teacher.id,
         subjectId: subject.id,
         sectionId: section.id,
+        streamId,
       },
     });
   } catch (error) {
@@ -381,7 +396,7 @@ export async function assignSubject(
     entityId: teacher.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${teacher.firstName} ${teacher.lastName} assigned ${subject.name} in ${section.class.name} – ${section.name}.`,
+    summary: `${teacher.firstName} ${teacher.lastName} assigned ${subject.name} in ${section.class.name} – ${section.name}${streamName ? ` • ${streamName}` : ""}.`,
   });
 }
 

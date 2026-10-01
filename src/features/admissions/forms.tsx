@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { ActionForm } from "@/components/forms/action-form";
 import {
   FieldRow,
@@ -10,6 +12,7 @@ import {
   TextareaField,
 } from "@/components/forms/fields";
 import { today, toDateInput } from "@/lib/dates";
+import { type SectionSeats, StreamSeatPicker } from "@/features/school/stream-seat-picker";
 
 import { acceptApplicationAction, setApplicationStatusAction, submitApplicationAction } from "./actions";
 
@@ -126,15 +129,31 @@ export function AcceptApplicationForm({
   applicationId,
   sections,
   defaultSectionId,
+  seats = {},
+  requestedStreamId,
 }: {
   applicationId: string;
   sections: SelectOption[];
   defaultSectionId?: string;
+  /** Each section's stream shares and free seats. */
+  seats?: Record<string, SectionSeats>;
+  /** The stream the family applied for, preselected where offered. */
+  requestedStreamId?: string | null;
 }) {
+  const [sectionId, setSectionId] = useState(defaultSectionId ?? "");
   return (
     <ActionForm action={acceptApplicationAction} className="gap-4">
       <input type="hidden" name="applicationId" value={applicationId} />
-      <SelectField name="sectionId" label="Place in section" options={sections} defaultValue={defaultSectionId} placeholder="Select…" required />
+      <SelectField
+        name="sectionId"
+        label="Place in section"
+        options={sections}
+        value={sectionId}
+        onChange={(event) => setSectionId(event.target.value)}
+        placeholder="Select…"
+        required
+      />
+      <StreamSeatPicker key={sectionId} seats={seats[sectionId]} defaultValue={requestedStreamId} />
       <FieldRow>
         <TextField name="rollNumber" label="Roll number" />
         <TextField name="admissionNumber" label="Admission number" hint="Blank to number automatically." />

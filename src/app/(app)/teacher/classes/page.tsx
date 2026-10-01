@@ -41,7 +41,8 @@ export default async function TeacherClassesPage() {
     );
   }
 
-  const pending = classes.filter((cls) => !cls.attendanceMarkedToday).length;
+  // Only the class teacher owes a section's daily register.
+  const pending = classes.filter((cls) => cls.isClassTeacher && !cls.attendanceMarkedToday).length;
 
   return (
     <>
@@ -72,7 +73,9 @@ export default async function TeacherClassesPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="mt-auto flex flex-wrap items-center gap-2">
-              {cls.attendanceMarkedToday ? (
+              {!cls.isClassTeacher ? (
+                <span className="text-muted-foreground text-sm">Attendance by the class teacher</span>
+              ) : cls.attendanceMarkedToday ? (
                 <span
                   className="inline-flex items-center gap-1 text-sm"
                   style={{ color: "var(--viz-good)" }}
@@ -89,11 +92,13 @@ export default async function TeacherClassesPage() {
                 <Button asChild size="sm" variant="outline">
                   <Link href={`/teacher/classes/${cls.sectionId}`}>Students</Link>
                 </Button>
-                <Button asChild size="sm" variant={cls.attendanceMarkedToday ? "ghost" : "default"}>
-                  <Link href={`/teacher/attendance?section=${cls.sectionId}`}>
-                    {cls.attendanceMarkedToday ? "Register" : "Mark"}
-                  </Link>
-                </Button>
+                {cls.isClassTeacher ? (
+                  <Button asChild size="sm" variant={cls.attendanceMarkedToday ? "ghost" : "default"}>
+                    <Link href={`/teacher/attendance?section=${cls.sectionId}`}>
+                      {cls.attendanceMarkedToday ? "Register" : "Mark"}
+                    </Link>
+                  </Button>
+                ) : null}
               </div>
             </CardContent>
           </Card>

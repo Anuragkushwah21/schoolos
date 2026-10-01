@@ -23,12 +23,14 @@ const staffBody = z.object({
   entries: z
     .array(
       z.object({
-        teacherId: id,
+        /** One of the two: a teacher, or a non-teaching staff member. */
+        teacherId: id.optional(),
+        staffMemberId: id.optional(),
         status: z.enum(STAFF_ATTENDANCE_STATUSES as [string, ...string[]]),
         remarks: z.string().trim().max(200).optional().transform((value) => value || null),
       }),
     )
-    .min(1, "Mark at least one teacher"),
+    .min(1, "Mark at least one person"),
 });
 
 export const POST = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }) => {
@@ -36,7 +38,8 @@ export const POST = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx 
   const { saved } = await markStaffAttendance(ctx, {
     date: input.date,
     entries: input.entries.map((entry) => ({
-      teacherId: entry.teacherId,
+      teacherId: entry.teacherId ?? null,
+      staffMemberId: entry.staffMemberId ?? null,
       status: entry.status as (typeof STAFF_ATTENDANCE_STATUSES)[number],
       remarks: entry.remarks,
     })),

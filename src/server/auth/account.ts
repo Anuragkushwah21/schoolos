@@ -48,6 +48,8 @@ export async function changePassword(
         tokenHash: { not: hashSessionToken(currentSessionToken) },
       },
     }),
+    // A token issued under the old password does not survive the change.
+    prisma.apiToken.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } }),
   ]);
 
   await recordAudit({

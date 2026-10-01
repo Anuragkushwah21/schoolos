@@ -1,10 +1,11 @@
 import { UserCogIcon, PlusIcon } from "lucide-react";
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
+import { PersonAvatar } from "@/components/shared/person-avatar";
 import { Pager } from "@/components/shared/pager";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ import { enumParam, pageParam, param } from "@/lib/search-params";
 import { TEACHER_STATUSES } from "@/lib/validation/school";
 import { formatDate } from "@/lib/dates";
 import { requireTenant } from "@/server/auth/current-user";
+import { photoUrlsFor } from "@/server/people/photos";
 import { leavingDates } from "@/server/people/lifecycle";
 import { listTeachers } from "@/server/people/teachers";
 
@@ -40,19 +42,29 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
     page: pageParam(search.page),
   });
 
-  const leftOn = await leavingDates(ctx, "TEACHER", rows);
+  const [leftOn, photos] = await Promise.all([leavingDates(ctx, "TEACHER", rows), photoUrlsFor(ctx, "TEACHER", rows.map((row) => row.id))]);
 
   return (
     <>
       <PageHeader icon={UserCogIcon} tone="purple"
         title="Teachers"
         actions={
-          <Button asChild>
-            <Link href="/school-admin/teachers/new">
-              <PlusIcon aria-hidden />
-              Add teacher
-            </Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link href="/school-admin/teachers/import">Import CSV</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href={"/school-admin/reports/export?kind=teachers" as Route} prefetch={false}>
+                Export CSV
+              </Link>
+            </Button>
+            <Button asChild>
+              <Link href="/school-admin/teachers/new">
+                <PlusIcon aria-hidden />
+                Add teacher
+              </Link>
+            </Button>
+          </>
         }
       />
 
@@ -89,10 +101,15 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
               {rows.map((teacher) => (
                 <TableRow key={teacher.id}>
                   <TableCell>
-                    <Link href={`/school-admin/teachers/${teacher.id}`} className="font-medium hover:underline">
-                      {teacher.firstName} {teacher.lastName}
-                    </Link>
-                    <p className="text-muted-foreground text-xs">{teacher.employeeId}</p>
+                    <div className="flex items-center gap-3">
+                      <PersonAvatar name={`${teacher.firstName} ${teacher.lastName}`} photoUrl={photos.get(teacher.id)} fallbackClassName="bg-purple-soft text-purple-strong" />
+                      <div className="min-w-0">
+                        <Link href={`/school-admin/teachers/${teacher.id}`} className="font-medium hover:underline">
+                          {teacher.firstName} {teacher.lastName}
+                        </Link>
+                        <p className="text-muted-foreground text-xs">{teacher.employeeId}</p>
+                      </div>
+                    </div>
                   </TableCell>
                   <TableCell className="max-w-56 whitespace-normal">
                     {[...new Set(teacher.assignments.map((a) => a.subject.name))].join(", ") || (

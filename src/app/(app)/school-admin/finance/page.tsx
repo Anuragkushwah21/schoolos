@@ -143,9 +143,10 @@ export default async function FinancePage() {
                       </span>
                       <span className="text-muted-foreground block text-xs">
                         {payment.receiptNo} · {formatDate(payment.paidOn)}
+                        {payment.voidedAt ? " · Void" : ""}
                       </span>
                     </span>
-                    <span className="text-sm tabular-nums">{rupees(payment.amountMinor)}</span>
+                    <span className={`text-sm tabular-nums ${payment.voidedAt ? "text-muted-foreground line-through" : ""}`}>{rupees(payment.amountMinor)}</span>
                     <ReceiptLinks paymentId={payment.id} receiptNo={payment.receiptNo} />
                   </li>
                 ))}

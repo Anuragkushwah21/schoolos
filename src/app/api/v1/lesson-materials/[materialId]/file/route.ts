@@ -28,6 +28,9 @@ export const GET = apiRoute<{ materialId: string }>(
         "Cache-Control": "private, no-store",
         // Only ever a validated PDF; never let a browser guess otherwise.
         "X-Content-Type-Options": "nosniff",
+        // Opened inline, a PDF runs in the browser's viewer on our origin; the
+        // sandbox keeps any script or form inside it away from the session.
+        "Content-Security-Policy": "sandbox",
       },
     });
   },

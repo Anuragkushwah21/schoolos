@@ -14,6 +14,11 @@ if (typeof window !== "undefined") {
   );
 }
 
+/** An empty `KEY=""` in `.env` means "not set", not "set to nothing". */
+function blankIsUnset<T extends z.ZodType>(schema: T) {
+  return z.preprocess((value) => (typeof value === "string" && !value.trim() ? undefined : value), schema);
+}
+
 const envSchema = z.object({
   /** PostgreSQL connection string (Supabase / Neon / local). */
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
@@ -40,7 +45,23 @@ const envSchema = z.object({
    * Resend API key. Optional: without it, mail is written to the server log
    * instead of being delivered.
    */
-  RESEND_API_KEY: z.string().trim().min(1).optional(),
+  RESEND_API_KEY: blankIsUnset(z.string().trim().min(1).optional()),
+  /**
+   * SMTP delivery (e.g. Gmail with an App Password). When SMTP_HOST, SMTP_USER
+   * and SMTP_PASSWORD are all set, mail goes through SMTP instead of Resend.
+   * Blank values count as unset.
+   */
+  SMTP_HOST: blankIsUnset(z.string().trim().min(1).optional()),
+  SMTP_PORT: blankIsUnset(z.coerce.number().int().min(1).max(65535).default(587)),
+  /** "true" for implicit TLS (port 465); "false" upgrades with STARTTLS (port 587). */
+  SMTP_SECURE: blankIsUnset(z.enum(["true", "false"]).optional()),
+  SMTP_USER: blankIsUnset(z.string().trim().min(1).optional()),
+  SMTP_PASSWORD: blankIsUnset(z.string().min(1).optional()),
+  /** The From address for SMTP mail; defaults to SMTP_USER. Gmail replaces any address you have not verified with SMTP_USER. */
+  SMTP_FROM_EMAIL: blankIsUnset(z.email().optional()),
+
+  /** Shared secret for scheduled jobs (`/api/cron/*`). Without it they are off. */
+  CRON_SECRET: z.string().trim().min(16).optional(),
 
   /**
    * Where uploaded lesson documents are kept. Defaults to `./uploads`, which is
@@ -65,7 +86,11 @@ const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 function loadEnv(): Env {
-  const parsed = envSchema.safeParse(process.env);
+  // EMAIL_FROM is accepted as another name for MAIL_FROM: a deployment
+  // configured with it would otherwise send from the sandbox address, which
+  // only reaches the Resend account's owner.
+  const source = { ...process.env, MAIL_FROM: process.env.MAIL_FROM || process.env.EMAIL_FROM || undefined };
+  const parsed = envSchema.safeParse(source);
 
   if (!parsed.success) {
     // Report every problem at once, and never echo the offending values —

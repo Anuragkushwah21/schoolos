@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { MyPhotoCard } from "@/features/photos/my-photo-card";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -95,6 +96,7 @@ export default async function TeacherProfilePage(props: PageProps<"/teacher/prof
         }
       />
 
+      <MyPhotoCard ctx={ctx} name={teacher.name} className="mb-6 max-w-2xl" />
       <div className="grid gap-6 xl:grid-cols-[1fr_1.4fr]">
         <div className="flex flex-col gap-6">
           <Card>

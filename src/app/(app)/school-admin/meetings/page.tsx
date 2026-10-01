@@ -1,18 +1,20 @@
-import { HandshakeIcon, PlusIcon } from "lucide-react";
+import { HandshakeIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 
+import { ActionButton } from "@/components/forms/action-button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { Pager } from "@/components/shared/pager";
 import { StatCard } from "@/components/shared/stat-card";
-import { TimeStatusBadge } from "@/components/shared/time-status-badge";
+import { LifecycleBadge } from "@/components/shared/lifecycle-badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDate } from "@/lib/dates";
 import { enumParam, pageParam, param } from "@/lib/search-params";
 import { MEETING_TIME_STATUSES, MEETING_TYPES } from "@/lib/validation/meetings";
+import { deleteMeetingAction } from "@/features/communication/meeting-actions";
 import { requireTenant } from "@/server/auth/current-user";
 import { listMeetingsForAdmin } from "@/server/communication/meetings";
 
@@ -93,6 +95,7 @@ export default async function AdminMeetingsPage(props: PageProps<"/school-admin/
                 <TableHead>When</TableHead>
                 <TableHead className="hidden lg:table-cell">Invited</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -113,7 +116,30 @@ export default async function AdminMeetingsPage(props: PageProps<"/school-admin/
                   </TableCell>
                   <TableCell className="text-muted-foreground hidden max-w-xs whitespace-normal lg:table-cell">{meeting.audience}</TableCell>
                   <TableCell>
-                    <TimeStatusBadge status={meeting.timeStatus} />
+                    <LifecycleBadge status={meeting.stage} countdown={meeting.countdown} />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-1">
+                      {meeting.timeStatus === "UPCOMING" || meeting.timeStatus === "CANCELLED" ? (
+                        <Button asChild variant="ghost" size="sm">
+                          <Link href={`/school-admin/meetings/${meeting.id}#edit` as Route}>
+                            <PencilIcon aria-hidden />
+                            {meeting.timeStatus === "CANCELLED" ? "Reschedule" : "Edit"}
+                          </Link>
+                        </Button>
+                      ) : null}
+                      <ActionButton
+                        action={deleteMeetingAction}
+                        fields={{ meetingId: meeting.id }}
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive"
+                        confirm={{ title: `Delete "${meeting.title}"?`, description: "It disappears from everyone's list. This cannot be undone. To keep it visible as called off, cancel it instead.", confirmLabel: "Delete" }}
+                      >
+                        <Trash2Icon aria-hidden />
+                        Delete
+                      </ActionButton>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

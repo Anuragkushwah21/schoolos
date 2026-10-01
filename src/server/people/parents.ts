@@ -148,7 +148,7 @@ export async function getParentWithChildren(ctx: TenantContext, parentId: string
       email: true,
       occupation: true,
       addressLine: true,
-      user: { select: { id: true, email: true, isActive: true, lastLoginAt: true } },
+      user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, activatedAt: true } },
       children: {
         orderBy: { isPrimary: "desc" },
         select: {

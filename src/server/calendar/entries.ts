@@ -3,6 +3,7 @@ import "server-only";
 import { sectionLabel } from "@/server/academics/structure";
 import type { TenantContext } from "@/server/auth/current-user";
 import { accessibleSectionIds } from "@/server/auth/teacher-access";
+import { approvedLeavesBetween } from "@/server/attendance/student-leave";
 import { visibleMeetingWhere } from "@/server/communication/meetings";
 
 /**
@@ -14,10 +15,14 @@ import { visibleMeetingWhere } from "@/server/communication/meetings";
  *     behind the publish switch.
  *   * Meetings — scheduled ones the user is invited to (see
  *     `visibleMeetingWhere`); every one to the admin.
+ *   * Approved student leave — a marker only, for those it concerns: a
+ *     parent or student their own, a class teacher their class. The admin's
+ *     calendar leaves it out (the whole school's leave would bury the
+ *     dates); leave itself is managed on the Leave pages, never here.
  */
 
 export type CalendarEntry = {
-  kind: "EVENT" | "EXAM" | "MEETING";
+  kind: "EVENT" | "EXAM" | "MEETING" | "LEAVE";
   title: string;
   startDate: Date;
   endDate: Date;
@@ -52,7 +57,8 @@ export async function getCalendarEntries(ctx: TenantContext, from: Date, to: Dat
   const sections = await visibleSectionIds(ctx);
   const sectionWhere = sections === "ALL" ? {} : { sectionId: { in: sections } };
 
-  const [events, exams, meetings] = await Promise.all([
+  const showLeave = ctx.user.role === "TEACHER" || ctx.user.role === "PARENT" || ctx.user.role === "STUDENT";
+  const [events, exams, meetings, leaves] = await Promise.all([
     ctx.db.event.findMany({
       where: { date: { gte: from, lte: to }, ...(admin ? {} : { isPublished: true }) },
       select: { title: true, date: true },
@@ -67,6 +73,7 @@ export async function getCalendarEntries(ctx: TenantContext, from: Date, to: Dat
       where: { AND: [await visibleMeetingWhere(ctx), { date: { gte: from, lte: to }, status: "SCHEDULED" }] },
       select: { title: true, date: true },
     }),
+    showLeave ? approvedLeavesBetween(ctx, from, to) : Promise.resolve([]),
   ]);
 
   // One exam is created per section; show it once per name and dates.
@@ -83,5 +90,6 @@ export async function getCalendarEntries(ctx: TenantContext, from: Date, to: Dat
     ...events.map((event) => ({ kind: "EVENT" as const, title: event.title, startDate: event.date, endDate: event.date })),
     ...examKeys.values(),
     ...meetings.map((meeting) => ({ kind: "MEETING" as const, title: meeting.title, startDate: meeting.date, endDate: meeting.date })),
+    ...leaves.map((leave) => ({ kind: "LEAVE" as const, title: `${leave.student} on leave`, startDate: leave.fromDate, endDate: leave.toDate })),
   ].sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
 }

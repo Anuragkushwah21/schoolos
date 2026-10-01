@@ -74,7 +74,6 @@ beforeAll(async () => {
     dayOfWeek: day,
     startMinute: 9 * 60,
     endMinute: 9 * 60 + 45,
-    room: "R1",
   });
   slotId = (
     await prisma.timetableSlot.findFirstOrThrow({

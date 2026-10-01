@@ -1,5 +1,7 @@
 import "server-only";
 
+import type { Gender } from "@/generated/prisma/enums";
+
 import { addDays, today } from "@/lib/dates";
 import { fullName } from "@/lib/format";
 import { assertRole } from "@/server/auth/assert";
@@ -106,6 +108,7 @@ export type RosterStudent = {
   rollNumber: string | null;
   name: string;
   photoUrl: string | null;
+  gender: Gender | null;
   status: string;
   counts: AttendanceCounts;
   /** Null when nothing has been marked yet — not zero, which would read as 0%. */
@@ -145,7 +148,7 @@ export async function getMyRoster(
       select: {
         rollNumber: true,
         student: {
-          select: { id: true, firstName: true, lastName: true, photoUrl: true, status: true },
+          select: { id: true, firstName: true, lastName: true, photoUrl: true, gender: true, status: true },
         },
       },
     }),
@@ -172,6 +175,7 @@ export async function getMyRoster(
         rollNumber: row.rollNumber,
         name: fullName(row.student),
         photoUrl: row.student.photoUrl,
+        gender: row.student.gender,
         status: row.student.status,
         counts: c,
         share: attendedShare(c),
@@ -253,6 +257,7 @@ export async function getMyStudent(ctx: TenantContext, studentId: string) {
       name: fullName(enrollment.student),
       admissionNumber: enrollment.student.admissionNumber,
       photoUrl: enrollment.student.photoUrl,
+      gender: enrollment.student.gender,
       status: enrollment.student.status,
       rollNumber: enrollment.rollNumber,
     },

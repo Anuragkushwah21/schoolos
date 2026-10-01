@@ -9,6 +9,7 @@ import {
   classSchema,
   classTeacherSchema,
   sectionSchema,
+  streamAllocationSchema,
   streamSchema,
   subjectSchema,
   updateClassSchema,
@@ -31,6 +32,7 @@ import {
   updateClass,
   updateSection,
 } from "@/server/academics/structure";
+import { saveStreamAllocations } from "@/server/academics/streams";
 import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
@@ -177,8 +179,21 @@ export async function updateSectionAction(_p: Result, formData: FormData): Promi
     async () => {
       const ctx = await admin();
       const { sectionId, ...input } = parseFormData(updateSectionSchema, formData);
-      await updateSection(ctx, sectionId, input);
-      return successResult("Section saved.");
+      const { warning } = await updateSection(ctx, sectionId, input);
+      return successResult(warning ? `Section saved. ${warning}` : "Section saved.");
+    },
+    { revalidate: REVALIDATE },
+  );
+}
+
+/** Share a section's seats among streams / groups. */
+export async function saveStreamAllocationsAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const { sectionId, allocations } = parseFormData(streamAllocationSchema, formData);
+      const { warnings } = await saveStreamAllocations(ctx, sectionId, allocations);
+      return successResult(["Stream seats saved.", ...warnings].join(" "));
     },
     { revalidate: REVALIDATE },
   );

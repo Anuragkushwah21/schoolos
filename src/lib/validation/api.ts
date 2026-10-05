@@ -75,7 +75,7 @@ export const holidaysQuery = z
 export const noticesQuery = z.object({ status: z.enum(NOTICE_STATUSES).optional() });
 
 export const admissionsQuery = z.object({
-  status: z.enum(["SUBMITTED", "UNDER_REVIEW", "WAITLISTED", "ACCEPTED", "REJECTED"]).optional(),
+  status: z.enum(["SUBMITTED", "UNDER_REVIEW", "SHORTLISTED", "APPROVED", "REJECTED", "CONVERTED"]).optional(),
 });
 
 export const schoolsQuery = pageQuery.extend({

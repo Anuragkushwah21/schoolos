@@ -1,13 +1,7 @@
 "use client";
 
 import { ActionForm } from "@/components/forms/action-form";
-import {
-  FieldRow,
-  SelectField,
-  SubmitButton,
-  TextField,
-  TextareaField,
-} from "@/components/forms/fields";
+import { FieldRow, PhoneField, SelectField, SubmitButton, TextField, TextareaField } from "@/components/forms/fields";
 
 import { sendInquiryAction } from "./contact-actions";
 import { INQUIRY_TOPIC_OPTIONS } from "./topics";
@@ -30,7 +24,7 @@ export function ContactForm({ defaultTopic }: { defaultTopic?: string }) {
       </FieldRow>
       <FieldRow>
         <TextField name="email" label="Email" type="email" autoComplete="email" required />
-        <TextField name="phone" label="Phone / WhatsApp" type="tel" autoComplete="tel" />
+        <PhoneField name="phone" label="Phone / WhatsApp" />
       </FieldRow>
       <FieldRow>
         <TextField name="city" label="City" autoComplete="address-level2" />

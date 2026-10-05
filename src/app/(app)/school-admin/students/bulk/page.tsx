@@ -59,6 +59,10 @@ export default async function BulkStudentsPage(props: PageProps<"/school-admin/s
         },
       })
     : [];
+  // A section whose seats are split among streams offers "Assign stream".
+  const streamShares = section
+    ? await ctx.db.sectionStream.findMany({ where: { sectionId: section.id, stream: { isActive: true } }, select: { capacity: true, stream: { select: { id: true, name: true } } } })
+    : [];
   const rollOrder = (roll: string | null) => (roll && /^\d+$/.test(roll) ? Number(roll) : Number.MAX_SAFE_INTEGER);
   enrollments.sort((a, b) => rollOrder(a.rollNumber) - rollOrder(b.rollNumber) || a.student.firstName.localeCompare(b.student.firstName));
 
@@ -67,7 +71,7 @@ export default async function BulkStudentsPage(props: PageProps<"/school-admin/s
       <PageHeader
         back={{ href: "/school-admin/students", label: "Students" }}
         title="Bulk student actions"
-        description="Promote a class to the next session, move students between sections, or change status."
+        description="Promote a class to the next session, move students between sections, assign a stream, or change status."
       />
       <FilterBar
         action="/school-admin/students/bulk"
@@ -159,6 +163,27 @@ export default async function BulkStudentsPage(props: PageProps<"/school-admin/s
                 </div>
               </CardContent>
             </Card>
+            {streamShares.length ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Assign stream</CardTitle>
+                  <CardDescription>This section&apos;s seats are shared among streams. Each stream&apos;s seat limit is checked.</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                  <SelectField
+                    name="assignStreamId"
+                    label="Stream / group"
+                    options={streamShares.map((row) => ({ value: row.stream.id, label: `${row.stream.name} (${row.capacity} seats)` }))}
+                    placeholder="Choose a stream"
+                  />
+                  <div>
+                    <SubmitButton name="operation" value="stream" variant="outline" pendingLabel="Assigning…">
+                      Assign selected
+                    </SubmitButton>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
             <Card>
               <CardHeader>
                 <CardTitle>Change status</CardTitle>

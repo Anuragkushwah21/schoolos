@@ -1,13 +1,7 @@
 "use client";
 
 import { ActionForm } from "@/components/forms/action-form";
-import {
-  CheckboxField,
-  FieldRow,
-  SubmitButton,
-  TextField,
-  TextareaField,
-} from "@/components/forms/fields";
+import { CheckboxField, FieldRow, PhoneField, SubmitButton, TextField, TextareaField } from "@/components/forms/fields";
 
 import { addMediaAction, savePageAction, updateWebsiteProfileAction } from "./actions";
 
@@ -65,7 +59,7 @@ export function WebsiteProfileForm({ profile }: { profile: Profile }) {
       <Group title="Public contact details">
         <FieldRow>
           <TextField name="email" label="Email" type="email" defaultValue={profile.email ?? ""} />
-          <TextField name="phone" label="Phone" type="tel" defaultValue={profile.phone ?? ""} />
+          <PhoneField name="phone" label="Phone" defaultValue={profile.phone ?? ""} />
         </FieldRow>
         <TextField name="addressLine" label="Address" defaultValue={profile.addressLine ?? ""} />
         <FieldRow>

@@ -28,13 +28,13 @@ const METHODS = [
   { value: "OTHER", label: "Other" },
 ];
 
-function PayrollRow({ row }: { row: Row }) {
+function PayrollRow({ row, readOnly }: { row: Row; readOnly: boolean }) {
   const { fieldErrors } = useFormContext();
   const errors = fieldErrors?.[`amount:${row.teacherId}`];
   return (
     <tr className="border-t align-top">
       <td className="px-3 py-2">
-        {row.payment ? null : (
+        {row.payment || readOnly ? null : (
           <input
             type="checkbox"
             name="pay"
@@ -69,6 +69,8 @@ function PayrollRow({ row }: { row: Row }) {
             <span className="tabular-nums">{rupees(row.payment.amountMinor)}</span>
             <StatusBadge status="PAID" label={`Paid ${row.payment.paidOn}`} tone="positive" />
           </span>
+        ) : readOnly ? (
+          <span className="text-muted-foreground tabular-nums">{row.dueMinor !== null ? `${rupees(row.dueMinor)} due` : "—"}</span>
         ) : (
           <>
             <Input
@@ -87,7 +89,8 @@ function PayrollRow({ row }: { row: Row }) {
   );
 }
 
-export function PayrollForm({ month, today, rows }: { month: string; today: string; rows: Row[] }) {
+/** `readOnly` for staff who may view payroll but not pay it: no selection, amounts or pay button. */
+export function PayrollForm({ month, today, rows, readOnly = false }: { month: string; today: string; rows: Row[]; readOnly?: boolean }) {
   const unpaid = rows.filter((row) => !row.payment).length;
   return (
     <ActionForm action={payPayrollAction}>
@@ -107,12 +110,12 @@ export function PayrollForm({ month, today, rows }: { month: string; today: stri
           </thead>
           <tbody>
             {rows.map((row) => (
-              <PayrollRow key={row.teacherId} row={row} />
+              <PayrollRow key={row.teacherId} row={row} readOnly={readOnly} />
             ))}
           </tbody>
         </table>
       </div>
-      {unpaid ? (
+      {unpaid && !readOnly ? (
         <>
           <FieldRow>
             <TextField name="paidOn" label="Paid on" type="date" defaultValue={today} max={today} required />

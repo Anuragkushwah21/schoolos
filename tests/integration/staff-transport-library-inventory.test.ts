@@ -68,14 +68,14 @@ describe("transport", () => {
     const attendant = await prisma.staffMember.findFirstOrThrow({ where: { schoolId: schoolA.schoolId, employeeId: "ATT1" } });
     // An attendant cannot be the driver.
     await expect(
-      saveRoute(adminOf(schoolA), { routeId: null, name: "Route 1", vehicleId, driverId: attendant.id, attendantId: null, isActive: true, notes: null }),
+      saveRoute(adminOf(schoolA), { routeId: null, name: "Route 1", code: null, startPoint: null, endPoint: null, vehicleId, driverId: attendant.id, attendantId: null, isActive: true, notes: null }),
     ).rejects.toBeInstanceOf(NotFoundError);
-    routeId = await saveRoute(adminOf(schoolA), { routeId: null, name: "Route 1", vehicleId, driverId, attendantId: attendant.id, isActive: true, notes: null });
-    await addStop(adminOf(schoolA), { routeId, name: "Main gate", sequence: 1, pickupMinute: 450, dropMinute: 870 });
+    routeId = await saveRoute(adminOf(schoolA), { routeId: null, name: "Route 1", code: null, startPoint: null, endPoint: null, vehicleId, driverId, attendantId: attendant.id, isActive: true, notes: null });
+    await addStop(adminOf(schoolA), { routeId, stopId: null, name: "Main gate", location: null, sequence: 1, pickupMinute: 450, dropMinute: 870 });
     stopId = (await prisma.routeStop.findFirstOrThrow({ where: { routeId } })).id;
     // Another school cannot use A's vehicle or driver.
     await expect(
-      saveRoute(adminOf(schoolB), { routeId: null, name: "Stolen", vehicleId, driverId: null, attendantId: null, isActive: true, notes: null }),
+      saveRoute(adminOf(schoolB), { routeId: null, name: "Stolen", code: null, startPoint: null, endPoint: null, vehicleId, driverId: null, attendantId: null, isActive: true, notes: null }),
     ).rejects.toBeInstanceOf(NotFoundError);
   });
 

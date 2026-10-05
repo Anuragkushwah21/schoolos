@@ -20,6 +20,8 @@ import {
   createSectionAction,
   createStreamAction,
   createSubjectAction,
+  updateStreamAction,
+  updateSubjectAction,
   updateClassAction,
   updateSectionAction,
   saveStreamAllocationsAction,
@@ -46,6 +48,38 @@ export function AcademicSessionForm({ suggestion }: { suggestion: { name: string
         <SubmitButton>Create session</SubmitButton>
       </div>
     </ActionForm>
+  );
+}
+
+/**
+ * Rename a subject (name and code) or a stream. Pick one, the current name
+ * fills in, change it. History follows: every record reads the name from it.
+ */
+export function RenameForm({ kind, items }: { kind: "subject" | "stream"; items: Array<{ id: string; name: string; code?: string }> }) {
+  const [chosen, setChosen] = useState(items[0]?.id ?? "");
+  const item = items.find((row) => row.id === chosen);
+  if (!items.length) return null;
+  return (
+    <details className="text-sm">
+      <summary className="text-muted-foreground cursor-pointer text-xs">Rename a {kind}</summary>
+      <ActionForm action={kind === "subject" ? updateSubjectAction : updateStreamAction} className="mt-3 gap-3">
+        <SelectField
+          name={kind === "subject" ? "subjectId" : "streamId"}
+          label={kind === "subject" ? "Subject" : "Stream"}
+          value={chosen}
+          onChange={(event) => setChosen(event.target.value)}
+          options={items.map((row) => ({ value: row.id, label: row.code ? `${row.name} (${row.code})` : row.name }))}
+          required
+        />
+        <div className="flex flex-wrap items-start gap-3" key={chosen}>
+          <TextField name="name" label="New name" defaultValue={item?.name ?? ""} className="min-w-40 flex-1" required />
+          {kind === "subject" ? <TextField name="code" label="Code" defaultValue={item?.code ?? ""} className="w-28" required /> : null}
+        </div>
+        <div>
+          <SubmitButton variant="outline">Rename</SubmitButton>
+        </div>
+      </ActionForm>
+    </details>
   );
 }
 

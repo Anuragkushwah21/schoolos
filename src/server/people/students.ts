@@ -12,11 +12,11 @@ import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import { type LoginInvite, provisionAccount, sendActivation, unusablePasswordHash } from "@/server/auth/account-links";
 import { assertLoginEmailFree, type EmailMove, moveLoginEmail } from "@/server/people/accounts";
-import { claimSeats } from "@/server/academics/streams";
+import { admissionSeatOptions, claimSeats } from "@/server/academics/streams";
 import { allocateAdmissionNumber, admissionYear, ensureAdmissionCounter, normaliseImportedAdmissionNumber } from "@/server/people/admission-number";
 import { prisma } from "@/server/db/prisma";
 import type { TenantContext } from "@/server/auth/current-user";
-import { requireCurrentSession } from "@/server/academics/structure";
+import { requireCurrentSession, sectionLabel } from "@/server/academics/structure";
 import { isUniqueViolation } from "@/server/db/errors";
 import type { TenantDb } from "@/server/tenancy/scope";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
@@ -210,6 +210,10 @@ export async function getStudentProfile(ctx: TenantContext, studentId: string) {
               email: true,
               occupation: true,
               addressLine: true,
+              alternatePhone: true,
+              city: true,
+              state: true,
+              postalCode: true,
               // getStudentProfile is School Admin only, so the ID proof may be read here.
               idProofType: true,
               idProofNumber: true,
@@ -263,7 +267,8 @@ async function createGuardian(
 }
 
 /** Last ten digits of a phone number — how two ways of writing one number are matched. */
-const phoneKey = (phone: string) => phone.replace(/\D/g, "").slice(-10);
+/** Phones compared by their last ten digits: "97777 00001" and "+91-97777-00001" are one number. */
+export const phoneKey = (phone: string) => phone.replace(/\D/g, "").slice(-10);
 
 export type AdmissionResult = {
   studentId: string;
@@ -563,16 +568,18 @@ export async function enrollStudent(
  * and a child admitted by mistake has both within a second of being added.
  */
 async function studentDeletionBlockers(ctx: TenantContext, studentId: string) {
-  const [attendance, remarks, results, application, charges, payments, support, promoted] = await Promise.all([
+  const [attendance, remarks, results, application, enquiry, charges, payments, support, promoted, loans] = await Promise.all([
     ctx.db.studentAttendance.count({ where: { studentId } }),
     ctx.db.studentRemark.count({ where: { studentId } }),
     ctx.db.assessmentResult.count({ where: { studentId } }),
     ctx.db.admissionApplication.count({ where: { createdStudentId: studentId } }),
+    ctx.db.enquiryChild.count({ where: { convertedStudentId: studentId } }),
     ctx.db.feeCharge.count({ where: { studentId } }),
     ctx.db.feePayment.count({ where: { studentId } }),
     ctx.db.studentSupport.count({ where: { studentId } }),
     // More than one year's placement means they have already moved up once.
     ctx.db.studentEnrollment.count({ where: { studentId } }),
+    ctx.db.bookIssue.count({ where: { studentId } }),
   ]);
 
   const history: string[] = [];
@@ -580,9 +587,11 @@ async function studentDeletionBlockers(ctx: TenantContext, studentId: string) {
   if (remarks) history.push(`${remarks} ${remarks === 1 ? "remark" : "remarks"}`);
   if (results) history.push(`${results} assessment ${results === 1 ? "result" : "results"}`);
   if (application) history.push("an admission application on file");
+  if (enquiry) history.push("a family enquiry on file");
   if (charges || payments) history.push("fee records");
   if (support) history.push("student support records");
   if (promoted > 1) history.push("placements in more than one year");
+  if (loans) history.push(`${loans} library ${loans === 1 ? "loan" : "loans"}`);
 
   return history;
 }
@@ -638,16 +647,20 @@ export async function deleteStudent(ctx: TenantContext, studentId: string): Prom
 export async function searchParents(ctx: TenantContext, q?: string) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   return ctx.db.parent.findMany({
-    where: q
-      ? {
-          OR: [
-            { firstName: { contains: q, mode: "insensitive" } },
-            { lastName: { contains: q, mode: "insensitive" } },
-            { phone: { contains: q } },
-            { email: { contains: q, mode: "insensitive" } },
-          ],
-        }
-      : {},
+    where: {
+      // An archived parent is history, not someone to link a new child to.
+      archivedAt: null,
+      ...(q
+        ? {
+            OR: [
+              { firstName: { contains: q, mode: "insensitive" } },
+              { lastName: { contains: q, mode: "insensitive" } },
+              { phone: { contains: q } },
+              { email: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    },
     orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
     take: 200,
     select: { id: true, firstName: true, lastName: true, phone: true, email: true },
@@ -742,6 +755,11 @@ export async function updateParent(
     email: string | null;
     occupation: string | null;
     addressLine: string | null;
+    /** Undefined: left as it is. */
+    alternatePhone?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postalCode?: string | null;
     withIdProof?: boolean;
     idProofType?: string | null;
     idProofNumber?: string | null;
@@ -848,4 +866,22 @@ export async function grantParentPortal(
   });
 
   return { ...(await sendActivation(userId, ctx.user.id)), label: `Login for ${parent.firstName} ${parent.lastName}` };
+}
+
+/** Sections for the admission form: class level (for the student-login step), class id, and seats left. */
+export async function studentFormSections(ctx: TenantContext, academicSessionId: string) {
+  const [sections, seats] = await Promise.all([
+    ctx.db.section.findMany({
+      where: { academicSessionId },
+      orderBy: [{ class: { level: "asc" } }, { name: "asc" }],
+      select: { id: true, name: true, classId: true, class: { select: { name: true, level: true } }, stream: { select: { name: true } } },
+    }),
+    admissionSeatOptions(ctx, academicSessionId),
+  ]);
+  return sections.map((section) => {
+    const plan = seats[section.id];
+    const left = plan?.capacity != null ? plan.capacity - plan.occupied : null;
+    const note = left === null ? "" : left <= 0 ? " · full" : ` · ${left} seat${left === 1 ? "" : "s"} left`;
+    return { value: section.id, label: `${sectionLabel(section)}${note}`, level: section.class.level, classId: section.classId };
+  });
 }

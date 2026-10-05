@@ -11,7 +11,7 @@ import {
   toggleStreamAction,
   toggleSubjectAction,
 } from "@/features/school/academics-actions";
-import { AcademicSessionForm, InlineCreateForm } from "@/features/school/academics-forms";
+import { AcademicSessionForm, InlineCreateForm, RenameForm } from "@/features/school/academics-forms";
 import { addDays, formatDate, toDateInput } from "@/lib/dates";
 import { pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
@@ -111,7 +111,7 @@ export default async function AcademicsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Subjects</CardTitle>
-            <CardDescription>Disabled subjects stay on past records but cannot be newly assigned.</CardDescription>
+            <CardDescription>Subjects are never deleted: disable one to archive it — it stays on past records but cannot be newly assigned. Renaming updates it everywhere.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-5">
             <ul className="flex flex-wrap gap-2">
@@ -135,6 +135,7 @@ export default async function AcademicsPage() {
               ))}
             </ul>
             <InlineCreateForm kind="subject" />
+            <RenameForm kind="subject" items={subjects.map((subject) => ({ id: subject.id, name: subject.name, code: subject.code }))} />
           </CardContent>
         </Card>
 
@@ -163,6 +164,7 @@ export default async function AcademicsPage() {
               ))}
             </ul>
             <InlineCreateForm kind="stream" />
+            <RenameForm kind="stream" items={streams.map((stream) => ({ id: stream.id, name: stream.name }))} />
           </CardContent>
         </Card>
       </div>

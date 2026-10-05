@@ -30,6 +30,7 @@ import {
   listMyPapers,
   publishExams,
   saveMarks,
+  submitMarks,
   unpublishExam,
 } from "@/server/exams/service";
 import { getChildResults } from "@/server/parent/child";
@@ -273,7 +274,7 @@ describe("publishing and visibility", () => {
 });
 
 describe("class tests", () => {
-  it("lets a teacher set one for their own subject, visible as soon as it is marked", async () => {
+  it("lets a teacher set one for their own subject, visible to families only once submitted", async () => {
     const teacher = teacherOf(schoolA);
     await expect(
       createClassTest(teacher, { sectionId: schoolA.sectionId, subjectId: scienceId, name: "Quiz", date: today(), maxMarks: 10 }),
@@ -286,7 +287,13 @@ describe("class tests", () => {
       date: today(),
       maxMarks: 20,
     });
-    await saveMarks(teacher, id, [{ studentId: schoolA.studentIds[0]!, marks: 18, absent: false, remark: null }]);
+    await saveMarks(teacher, id, [
+      { studentId: schoolA.studentIds[0]!, marks: 18, absent: false, remark: null },
+      ...schoolA.studentIds.slice(1).map((studentId) => ({ studentId, marks: null, absent: true, remark: null })),
+    ]);
+    // A draft is the teacher's alone.
+    expect((await getMyResults(studentOf(schoolA))).past.find((row) => row.id === id)).toBeUndefined();
+    await submitMarks(teacher, id);
     expect((await getMyResults(studentOf(schoolA))).past.find((row) => row.id === id)?.marksObtained).toBe(18);
     expect((await listMyPapers(teacher)).papers.some((paper) => paper.id === id && paper.kind === "CLASS_TEST")).toBe(true);
   });

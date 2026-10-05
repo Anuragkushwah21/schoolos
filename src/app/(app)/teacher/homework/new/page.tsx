@@ -5,14 +5,17 @@ import { NoSessionNotice } from "@/components/shared/no-session-notice";
 import { PageHeader } from "@/components/shared/page-header";
 import { HomeworkForm } from "@/features/classwork/forms";
 import { toDateInput, today } from "@/lib/dates";
+import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession } from "@/server/academics/structure";
 import { myTeachingOptions } from "@/server/people/teacher-self";
 
 export const metadata: Metadata = { title: "Set homework" };
 
-export default async function NewHomeworkPage() {
+export default async function NewHomeworkPage(props: PageProps<"/teacher/homework/new">) {
   const ctx = await requireTenant("TEACHER");
+  // "?section=" from the dashboard pre-selects that class.
+  const defaultSectionId = param((await props.searchParams).section);
   if (!(await getCurrentSession(ctx))) {
     return (
       <NoSessionNotice
@@ -44,6 +47,7 @@ export default async function NewHomeworkPage() {
         description="Published work is visible to the class and their parents straight away."
       />
       <HomeworkForm
+        defaultSectionId={defaultSectionId}
         today={toDateInput(today())}
         sections={teaching.map((option) => ({
           value: option.sectionId,

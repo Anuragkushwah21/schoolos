@@ -25,6 +25,11 @@ export const TENANT_MODELS = new Set([
   "AttendanceRegister",
   "ApiToken",
   "AdmissionApplication",
+  "AdmissionPortal",
+  "Enquiry",
+  "EnquiryChild",
+  "EnquiryFollowUp",
+  "EnquiryFeeRevision",
   "Assessment",
   "Asset",
   "AssetEvent",
@@ -88,6 +93,16 @@ export const TENANT_MODELS = new Set([
   "TransportRoute",
   "Vehicle",
   "WorkCover",
+  // Added 5 Oct 2026: these carried a schoolId but were not filtered, so a
+  // lookup by id alone could reach another school's row.
+  "AdmissionFollowUp",
+  "FeeConcession",
+  "FamilyPayment",
+  "FeeCarryForward",
+  "StaffRoleProfile",
+  "StaffSubstitution",
+  "TransportTripLog",
+  "TransportIssue",
   "User",
 ]);
 

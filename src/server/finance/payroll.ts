@@ -6,7 +6,7 @@ import { addDays, dateOnly, formatMonth, today } from "@/lib/dates";
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { formatMoney, fullName } from "@/lib/format";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { getSchoolCalendar } from "@/server/calendar/holidays";
 import { monthOf } from "@/server/finance/salary";
@@ -49,7 +49,7 @@ function monthBounds(month: Date) {
 }
 
 export async function getPayroll(ctx: TenantContext, month: Date) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "payroll.view");
   const { start, end } = monthBounds(month);
 
   const [teachers, payments, unpaidLeave, calendar] = await Promise.all([
@@ -149,7 +149,7 @@ export async function payPayroll(
     entries: Array<{ teacherId: string; amountMinor: number }>;
   },
 ): Promise<{ paid: number; totalMinor: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "payroll.pay");
   const forMonth = monthOf(input.month);
   if (input.paidOn > today()) throw new AppError("VALIDATION", "A payment cannot be dated in the future.");
   if (!input.entries.length) throw new AppError("VALIDATION", "Tick at least one teacher to pay.");

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { normalizePhone, phoneErrorFor } from "@/lib/phone";
 import { parseDateInput, timeToMinutes, today } from "@/lib/dates";
 
 /**
@@ -61,12 +62,24 @@ export const requiredEmail = z
   .pipe(z.email("Enter a valid email address"))
   .transform((value) => value.toLowerCase());
 
-/** Indian phone numbers vary in formatting; accept digits, spaces, + and -. */
+/**
+ * A phone number: country code (+91 by default) and at most 10 local digits,
+ * stored as "+91 9876543210". Older spellings ("98765 43210",
+ * "+91-98765-43210", "09876543210") are accepted and normalised. The same
+ * rule as the PhoneInput component (`@/lib/phone`).
+ */
 export const requiredPhone = z
   .string({ error: "Enter a phone number" })
   .trim()
   .min(1, "Enter a phone number")
-  .regex(/^\+?[0-9][0-9\s-]{6,18}$/, "Enter a valid phone number");
+  .transform((value, ctx) => {
+    const normalized = normalizePhone(value);
+    if (!normalized) {
+      ctx.addIssue({ code: "custom", message: phoneErrorFor(value) });
+      return z.NEVER;
+    }
+    return normalized;
+  });
 
 export const optionalPhone = z
   .preprocess(emptyToUndefined, requiredPhone.optional())

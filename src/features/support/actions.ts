@@ -3,11 +3,11 @@
 import type { Route } from "next";
 
 import { type ActionResult, parseFormData, successResult } from "@/lib/action-result";
-import { supportFollowUpSchema, supportSchema } from "@/lib/validation/support";
+import { extraClassSchema, supportFollowUpSchema, supportSchema } from "@/lib/validation/support";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import { getT } from "@/server/i18n";
 import { performAction } from "@/server/perform-action";
-import { createSupport, followUpSupport } from "@/server/support/service";
+import { createSupport, followUpSupport, scheduleExtraClass } from "@/server/support/service";
 
 type Result = ActionResult<undefined>;
 
@@ -36,6 +36,17 @@ export async function followUpSupportAction(_p: Result, formData: FormData): Pro
       const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN");
       await followUpSupport(ctx, parseFormData(supportFollowUpSchema, formData));
       return successResult((await getT())("support.followUpSaved"));
+    },
+    { revalidate: PAGES },
+  );
+}
+
+export async function scheduleExtraClassAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN");
+      await scheduleExtraClass(ctx, parseFormData(extraClassSchema, formData));
+      return successResult("Extra class booked. The student, their parents and the teacher see it under Meetings.");
     },
     { revalidate: PAGES },
   );

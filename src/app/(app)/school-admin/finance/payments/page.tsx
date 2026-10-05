@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/table";
 import { removeChargeAction, removePaymentAction } from "@/features/finance/actions";
 import { FeeDesk } from "@/features/finance/fee-desk";
+import { StudentFeeAccount } from "@/features/finance/family-views";
+import { previousDues } from "@/server/finance/carry-forward";
 import { ReceiptLinks } from "@/features/finance/receipt-links";
 import { FEE_STATUS_LABEL, FEE_STATUS_TONE, rupees } from "@/features/finance/money";
 import { formatDate } from "@/lib/dates";
@@ -82,9 +84,14 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
         title="Payments"
         description={`${session.name} · record what has been received`}
         actions={
-          <Button asChild variant="outline">
-            <Link href="/school-admin/finance/receipts">Receipt settings</Link>
-          </Button>
+          <>
+            <Button asChild variant="outline">
+              <Link href="/school-admin/finance/family">Family payment</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/school-admin/finance/receipts">Receipt settings</Link>
+            </Button>
+          </>
         }
       />
 
@@ -99,6 +106,7 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
             receiptNo={receiptNo}
             justRecorded={justRecorded}
           />
+          {selected && account ? <StudentFeeAccount studentId={selected.studentId} account={account} previous={await previousDues(ctx, selected.studentId)} canManage /> : null}
         </div>
 
         <Card>

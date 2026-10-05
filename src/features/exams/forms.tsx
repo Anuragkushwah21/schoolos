@@ -4,7 +4,7 @@ import { useActionState, useState } from "react";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 
 import { ActionForm, useFormContext } from "@/components/forms/action-form";
-import { FieldRow, SelectField, SubmitButton, TextField } from "@/components/forms/fields";
+import { FieldRow, SelectField, SubmitButton, TextareaField, TextField } from "@/components/forms/fields";
 import { nativeSelectClass } from "@/components/forms/styles";
 import { FieldError } from "@/components/shared/field-error";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,9 @@ import {
   createExamAction,
   importMarksAction,
   type ImportResult,
+  reopenMarksAction,
   saveMarksAction,
+  updateClassTestAction,
   updateExamAction,
 } from "./actions";
 
@@ -237,46 +239,63 @@ type MarksRow = {
   remark: string | null;
 };
 
+const ENTRY_BADGE = {
+  ENTERED: "bg-success-soft text-success-strong",
+  ABSENT: "bg-muted text-muted-foreground",
+  MISSING: "bg-warning-soft text-warning-strong",
+  INVALID: "bg-danger-soft text-danger-strong",
+} as const;
+
 function MarksRowView({ row, maxMarks, editable }: { row: MarksRow; maxMarks: number; editable: boolean }) {
   const { fieldErrors } = useFormContext();
   const [absent, setAbsent] = useState(row.absent);
+  const [marks, setMarks] = useState(row.marksObtained === null ? "" : String(row.marksObtained));
   const errors = fieldErrors?.[`marks:${row.studentId}`];
+  const number = marks.trim() === "" ? null : Number(marks);
+  const invalid = number !== null && (!Number.isInteger(number) || number < 0 || number > maxMarks);
+  const status = absent ? "ABSENT" : invalid ? "INVALID" : number === null ? "MISSING" : "ENTERED";
+  const percent = !absent && number !== null && !invalid && maxMarks ? Math.round((number / maxMarks) * 1000) / 10 : null;
   return (
     <tr className="border-t align-top">
       <td className="px-3 py-2">
         <input type="hidden" name={`row:${row.studentId}`} value="1" />
         <span className="font-medium">{row.name}</span>
-        <span className="text-muted-foreground block text-xs">
-          {[row.rollNumber ? `Roll ${row.rollNumber}` : null, row.admissionNumber].filter(Boolean).join(" · ")}
-        </span>
+        {row.rollNumber ? <span className="text-muted-foreground block text-xs">Roll {row.rollNumber}</span> : null}
       </td>
+      <td className="text-muted-foreground px-3 py-2 tabular-nums">{row.admissionNumber}</td>
       <td className="px-3 py-2">
         <Input
           name={`marks:${row.studentId}`}
-          aria-label={`Marks for ${row.name}`}
-          aria-invalid={errors?.length ? true : undefined}
+          aria-label={`Marks for ${row.name}, out of ${maxMarks}`}
+          aria-invalid={errors?.length || invalid ? true : undefined}
           type="number"
           inputMode="numeric"
           min={0}
           max={maxMarks}
-          defaultValue={row.marksObtained ?? ""}
+          value={absent ? "" : marks}
+          onChange={(event) => setMarks(event.currentTarget.value)}
           disabled={!editable || absent}
           className="w-24"
         />
+        {invalid ? <span className="text-danger-strong mt-1 block text-xs">0 to {maxMarks} only</span> : null}
         <FieldError id={`marks-${row.studentId}-error`} messages={errors} />
-      </td>
-      <td className="px-3 py-2">
-        <label className="flex items-center gap-2 text-sm">
+        <label className="text-muted-foreground mt-1.5 flex items-center gap-1.5 text-xs">
           <input
             type="checkbox"
             name={`absent:${row.studentId}`}
             defaultChecked={row.absent}
             disabled={!editable}
             onChange={(event) => setAbsent(event.currentTarget.checked)}
-            className="accent-primary size-4"
+            className="accent-primary size-3.5"
           />
           Absent
         </label>
+      </td>
+      <td className="px-3 py-2 tabular-nums">{percent === null ? "—" : `${percent}%`}</td>
+      <td className="px-3 py-2">
+        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap ${ENTRY_BADGE[status]}`}>
+          {status === "ENTERED" ? "Entered" : status === "ABSENT" ? "Absent" : status === "INVALID" ? "Check marks" : "Missing"}
+        </span>
       </td>
       <td className="px-3 py-2">
         <Input
@@ -292,28 +311,39 @@ function MarksRowView({ row, maxMarks, editable }: { row: MarksRow; maxMarks: nu
   );
 }
 
+/**
+ * The marks sheet: Student | Admission no. | Marks | Percentage | Status.
+ * "Save draft" keeps the marks private; "Submit results" saves and hands them
+ * in — every student needs a mark or Absent — after which they lock.
+ */
 export function MarksSheetForm({
   assessmentId,
   maxMarks,
   rows,
   editable,
+  canSubmit,
+  submitHint,
 }: {
   assessmentId: string;
   maxMarks: number;
   rows: MarksRow[];
   editable: boolean;
+  canSubmit?: boolean;
+  submitHint?: string;
 }) {
   return (
     <ActionForm action={saveMarksAction}>
       <input type="hidden" name="assessmentId" value={assessmentId} />
       <div className="overflow-x-auto rounded-xl border">
-        <table className="w-full min-w-[40rem] text-sm">
-          <thead className="bg-muted/40 text-left">
+        <table className="w-full min-w-[44rem] text-sm">
+          <thead className="bg-muted/60 text-muted-foreground text-left text-xs uppercase">
             <tr>
-              <th className="px-3 py-2 font-medium">Student</th>
-              <th className="w-32 px-3 py-2 font-medium">Marks / {maxMarks}</th>
-              <th className="w-28 px-3 py-2 font-medium">Attendance</th>
-              <th className="px-3 py-2 font-medium">Remark</th>
+              <th className="px-3 py-2 font-semibold">Student</th>
+              <th className="px-3 py-2 font-semibold">Admission no.</th>
+              <th className="w-36 px-3 py-2 font-semibold">Marks / {maxMarks}</th>
+              <th className="w-24 px-3 py-2 font-semibold">Percentage</th>
+              <th className="w-28 px-3 py-2 font-semibold">Status</th>
+              <th className="px-3 py-2 font-semibold">Remark</th>
             </tr>
           </thead>
           <tbody>
@@ -324,9 +354,16 @@ export function MarksSheetForm({
         </table>
       </div>
       {editable ? (
-        <div className="flex items-center gap-3">
-          <SubmitButton pendingLabel="Saving…">Save marks</SubmitButton>
-          <p className="text-muted-foreground text-xs">A row left blank, not absent and without a remark is not saved.</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <SubmitButton name="intent" value="save" variant="outline" pendingLabel="Saving…">
+            Save draft
+          </SubmitButton>
+          {canSubmit ? (
+            <SubmitButton name="intent" value="submit" pendingLabel="Submitting…">
+              Submit results
+            </SubmitButton>
+          ) : null}
+          <p className="text-muted-foreground text-xs">{submitHint ?? "Save a draft as often as you like. Submitting locks the marks."}</p>
         </div>
       ) : null}
     </ActionForm>
@@ -370,36 +407,159 @@ export function ImportMarksForm({ assessmentId }: { assessmentId: string }) {
 }
 
 // -----------------------------------------------------------------------------
-// Class tests (teacher)
+// Tests (teacher)
 // -----------------------------------------------------------------------------
 
-export function ClassTestForm({ options, today }: { options: Option[]; today: string }) {
-  const [pair, setPair] = useState(options[0]?.value ?? "");
-  const [sectionId, subjectId] = pair.split("|");
+export type TestOption = {
+  value: string;
+  sectionId: string;
+  subjectId: string;
+  streamId: string | null;
+  subject: string;
+  className: string;
+  section: string;
+  stream: string | null;
+  students: number;
+  label: string;
+};
+
+function Fact({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <dt className="text-muted-foreground text-xs">{label}</dt>
+      <dd className="font-semibold">{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * Create a test in two steps: fill in, then check the preview and create.
+ * Subject, class, section and stream come from the teacher's own assignment —
+ * there is nothing to type and nothing outside their teaching to choose.
+ */
+/** `sectionId` pre-selects a class (from the dashboard's class switcher). */
+export function ClassTestForm({ options, today, sectionId }: { options: TestOption[]; today: string; sectionId?: string }) {
+  const [value, setValue] = useState((options.find((option) => option.sectionId === sectionId) ?? options[0])?.value ?? "");
+  const [previewing, setPreviewing] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ name: "", date: today, maxMarks: "25", description: "" });
+  const chosen = options.find((option) => option.value === value) ?? options[0];
+  const set = (key: keyof typeof draft) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setDraft((current) => ({ ...current, [key]: event.target.value }));
+
+  function preview() {
+    const max = Number(draft.maxMarks);
+    if (!draft.name.trim()) return setProblem("Enter a test name.");
+    if (!draft.date) return setProblem("Choose the test date.");
+    if (!Number.isInteger(max) || max < 1 || max > 1000) return setProblem("Maximum marks must be a whole number from 1 to 1000.");
+    setProblem(null);
+    setPreviewing(true);
+  }
+
+  if (!chosen) return null;
   return (
     <ActionForm action={createClassTestAction} className="max-w-3xl">
-      <input type="hidden" name="sectionId" value={sectionId ?? ""} />
-      <input type="hidden" name="subjectId" value={subjectId ?? ""} />
+      <input type="hidden" name="sectionId" value={chosen.sectionId} />
+      <input type="hidden" name="subjectId" value={chosen.subjectId} />
+      <input type="hidden" name="streamId" value={chosen.streamId ?? ""} />
+      <input type="hidden" name="name" value={draft.name} />
+      <input type="hidden" name="date" value={draft.date} />
+      <input type="hidden" name="maxMarks" value={draft.maxMarks} />
+      <input type="hidden" name="description" value={draft.description} />
+
+      {!previewing ? (
+        <>
+          <SelectField
+            name="assignment"
+            label="What are you testing?"
+            hint="Only the subjects and classes you are assigned to teach are listed."
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            options={options.map((option) => ({ value: option.value, label: option.label }))}
+            required
+          />
+          <dl className="bg-muted/50 grid grid-cols-2 gap-3 rounded-xl p-4 text-sm sm:grid-cols-4">
+            <Fact label="Subject" value={chosen.subject} />
+            <Fact label="Class" value={chosen.className} />
+            <Fact label="Section" value={chosen.section} />
+            <Fact label="Stream" value={chosen.stream ?? "Whole section"} />
+          </dl>
+          <FieldRow>
+            <TextField name="_name" label="Test name" placeholder="Unit Test 2" value={draft.name} onChange={set("name")} maxLength={80} required />
+            <TextField name="_date" label="Test date" type="date" value={draft.date} onChange={set("date")} required />
+          </FieldRow>
+          <FieldRow>
+            <TextField name="_maxMarks" label="Maximum marks" type="number" min={1} max={1000} value={draft.maxMarks} onChange={set("maxMarks")} required />
+            <div />
+          </FieldRow>
+          <TextareaField name="_description" label="Description (optional)" rows={2} placeholder="Chapters 3–5, short answers" value={draft.description} onChange={set("description")} maxLength={500} />
+          {problem ? (
+            <p role="alert" className="text-destructive text-sm">
+              {problem}
+            </p>
+          ) : null}
+          <div>
+            <Button type="button" onClick={preview}>
+              Preview test
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="bg-primary-soft/60 ring-primary/20 flex flex-col gap-3 rounded-2xl p-5 ring-1">
+            <p className="text-primary-strong text-xs font-semibold tracking-wide uppercase">Preview — check before creating</p>
+            <p className="text-xl font-bold">{draft.name}</p>
+            <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+              <Fact label="Subject" value={chosen.subject} />
+              <Fact label="Class & section" value={`${chosen.className} – ${chosen.section}`} />
+              <Fact label="Stream" value={chosen.stream ?? "Whole section"} />
+              <Fact label="Test date" value={new Date(`${draft.date}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })} />
+              <Fact label="Maximum marks" value={draft.maxMarks} />
+              <Fact label="Students" value={chosen.students} />
+            </dl>
+            {draft.description ? <p className="text-muted-foreground text-sm">{draft.description}</p> : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <SubmitButton pendingLabel="Creating…">Create test</SubmitButton>
+            <Button type="button" variant="ghost" onClick={() => setPreviewing(false)}>
+              Back to edit
+            </Button>
+          </div>
+        </>
+      )}
+    </ActionForm>
+  );
+}
+
+/** Edit a test's name, date, maximum or description while its marks are a draft. */
+export function EditTestForm({ test }: { test: { id: string; name: string; date: string; maxMarks: number; description: string | null } }) {
+  return (
+    <ActionForm action={updateClassTestAction}>
+      <input type="hidden" name="assessmentId" value={test.id} />
       <FieldRow>
-        <SelectField
-          name="pair"
-          label="Class and subject"
-          value={pair}
-          onChange={(event) => setPair(event.target.value)}
-          options={options}
-          required
-        />
-        <TextField name="name" label="Test name" placeholder="Unit Test 2" required />
+        <TextField name="name" label="Test name" defaultValue={test.name} maxLength={80} required />
+        <TextField name="date" label="Test date" type="date" defaultValue={test.date} required />
       </FieldRow>
       <FieldRow>
-        <TextField name="date" label="Date" type="date" defaultValue={today} required />
-        <FieldRow>
-          <TextField name="maxMarks" label="Max marks" type="number" min={1} max={1000} defaultValue="25" required />
-          <TextField name="passMarks" label="Pass marks" type="number" min={0} hint="Blank = 33%" />
-        </FieldRow>
+        <TextField name="maxMarks" label="Maximum marks" type="number" min={1} max={1000} defaultValue={String(test.maxMarks)} required />
+        <div />
       </FieldRow>
+      <TextareaField name="description" label="Description (optional)" rows={2} defaultValue={test.description ?? ""} maxLength={500} />
       <div>
-        <SubmitButton>Create test</SubmitButton>
+        <SubmitButton variant="outline">Save test details</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** School Admin: reopen submitted marks for a correction, with the reason recorded. */
+export function ReopenMarksForm({ assessmentId }: { assessmentId: string }) {
+  return (
+    <ActionForm action={reopenMarksAction}>
+      <input type="hidden" name="assessmentId" value={assessmentId} />
+      <TextField name="reason" label="Why do these marks need correcting?" placeholder="Wrong marks entered for roll 12" maxLength={300} required />
+      <div>
+        <SubmitButton variant="outline">Reopen for correction</SubmitButton>
       </div>
     </ActionForm>
   );

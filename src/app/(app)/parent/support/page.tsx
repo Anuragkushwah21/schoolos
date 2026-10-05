@@ -58,6 +58,12 @@ export default async function ParentSupportPage() {
                       {t(k(`support.action.${row.action}`))}
                       {row.actionNote ? ` — ${row.actionNote}` : ""}
                     </p>
+                    {row.parentRemark ? (
+                      <p className="bg-success-soft/60 rounded-lg px-3 py-2">
+                        <span className="text-muted-foreground">From {row.teacher ?? "the teacher"}: </span>
+                        {row.parentRemark}
+                      </p>
+                    ) : null}
                     {row.extraClass && row.extraClass.status !== "CANCELLED" ? (
                       <p className="bg-info-soft text-info-strong rounded-lg px-3 py-2">
                         {t("support.extraClassOn", { date: formatDate(row.extraClass.date, intl), time: formatMinutes(row.extraClass.startMinute) })}

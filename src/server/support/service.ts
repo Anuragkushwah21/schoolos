@@ -2,11 +2,11 @@ import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
 import type { SupportPriority, SupportSource, SupportStatus } from "@/generated/prisma/enums";
-import { addDays, formatDate, today } from "@/lib/dates";
+import { addDays, formatDate, formatMinutes, today } from "@/lib/dates";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName, humanize } from "@/lib/format";
 import { CURRENT_EMPLOYEE, CURRENT_STUDENT } from "@/lib/validation/lifecycle";
-import { OPEN_SUPPORT, type SupportFollowUpInput, type SupportInput } from "@/lib/validation/support";
+import { type ExtraClassInput, OPEN_SUPPORT, type SupportFollowUpInput, type SupportInput } from "@/lib/validation/support";
 import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
@@ -123,6 +123,7 @@ const ROW_SELECT = {
   priority: true,
   action: true,
   actionNote: true,
+  parentRemark: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -148,6 +149,7 @@ function shape(row: Row) {
     priority: row.priority,
     action: row.action,
     actionNote: row.actionNote,
+    parentRemark: row.parentRemark,
     status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -263,7 +265,7 @@ export async function createSupport(ctx: TenantContext, input: SupportInput): Pr
 }
 
 /** A follow-up: a note, and/or a change of status, priority or action. */
-export async function followUpSupport(ctx: TenantContext, input: SupportFollowUpInput): Promise<void> {
+export async function followUpSupport(ctx: TenantContext, input: Omit<SupportFollowUpInput, "parentRemark"> & { parentRemark?: string | null }): Promise<void> {
   assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
   const support = await ctx.db.studentSupport.findFirst({
     where: { AND: [{ id: input.supportId }, await visibleSupportWhere(ctx)] },
@@ -277,11 +279,13 @@ export async function followUpSupport(ctx: TenantContext, input: SupportFollowUp
     ...(status ? { status, resolvedAt: status === "RESOLVED" ? new Date() : null } : {}),
     ...(input.priority && input.priority !== support.priority ? { priority: input.priority } : {}),
     ...(input.action && input.action !== support.action ? { action: input.action } : {}),
+    ...(input.parentRemark ? { parentRemark: input.parentRemark } : {}),
   };
   const changes = [
     status ? `status ${humanize(support.status)} → ${humanize(status)}` : null,
     data.priority ? `priority → ${humanize(String(data.priority))}` : null,
     data.action ? `action → ${humanize(String(data.action))}` : null,
+    input.parentRemark ? "remark shared with the family" : null,
   ].filter(Boolean);
 
   await ctx.db.$transaction(async (tx) => {
@@ -478,6 +482,7 @@ export async function familySupport(ctx: TenantContext) {
         topic: true,
         action: true,
         actionNote: true,
+        parentRemark: true,
         status: true,
         updatedAt: true,
         subject: { select: { name: true } },
@@ -626,6 +631,10 @@ export async function extraClassPrefill(ctx: TenantContext, supportId: string) {
  */
 export async function linkExtraClass(ctx: TenantContext, supportId: string, meetingId: string, when: string): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await attachExtraClass(ctx, supportId, meetingId, when);
+}
+
+async function attachExtraClass(ctx: TenantContext, supportId: string, meetingId: string, when: string): Promise<void> {
   const support = await ctx.db.studentSupport.findFirst({ where: { id: supportId }, select: { id: true, status: true } });
   if (!support) throw new NotFoundError("That support record was not found.");
   const moving = support.status === "NEW" || support.status === "REVIEWING" || support.status === "SUPPORT_PLANNED";
@@ -699,4 +708,72 @@ export async function studentSupportAlerts(ctx: TenantContext, studentId: string
     href: "/student/dashboard",
     tone: "info" as const,
   }));
+}
+
+/**
+ * Book an extra class for one support record — by the teacher looking after
+ * it, the class teacher, or the office. It is a Meeting (the existing way
+ * people are invited to something): for the student, their parents and the
+ * teacher, so it shows in each of their Meetings and calendars.
+ */
+export async function scheduleExtraClass(ctx: TenantContext, input: ExtraClassInput): Promise<string> {
+  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
+  const support = await ctx.db.studentSupport.findFirst({
+    where: { AND: [{ id: input.supportId }, await visibleSupportWhere(ctx)] },
+    select: {
+      id: true,
+      status: true,
+      topic: true,
+      teacherId: true,
+      studentId: true,
+      academicSessionId: true,
+      subject: { select: { name: true } },
+      teacher: { select: { userId: true } },
+      student: { select: { firstName: true, lastName: true } },
+      section: { select: { id: true, classTeacherId: true } },
+      extraClass: { select: { date: true, status: true } },
+    },
+  });
+  if (!support) throw new NotFoundError("That support record was not found.");
+  await assertMayEdit(ctx, support);
+  if (support.status === "RESOLVED") throw new ConflictError("This support is completed. Reopen it before booking an extra class.");
+  if (input.date < today()) throw new ValidationError("Please correct the highlighted fields.", { date: ["Choose today or a later date"] });
+  if (support.extraClass && support.extraClass.status === "SCHEDULED" && support.extraClass.date >= today()) {
+    throw new ConflictError("An extra class is already booked for this support. Change it from Meetings, or wait until it has taken place.");
+  }
+
+  const title = `Extra class: ${support.subject?.name ?? "Support"}${support.topic ? ` — ${support.topic}` : ""}`;
+  const meetingId = await ctx.db.$transaction(async (tx) => {
+    const meeting = await tx.meeting.create({
+      data: {
+        schoolId: ctx.schoolId,
+        academicSessionId: support.academicSessionId,
+        type: "GENERAL",
+        title,
+        description: `For ${fullName(support.student)}.`,
+        date: input.date,
+        startMinute: input.startMinute,
+        endMinute: input.endMinute,
+        location: input.location,
+        audiences: ["STUDENTS", "PARENTS"],
+        scope: "PEOPLE",
+        createdById: ctx.user.id,
+      },
+      select: { id: true },
+    });
+    await tx.meetingStudent.create({ data: { schoolId: ctx.schoolId, meetingId: meeting.id, studentId: support.studentId } });
+    const teacherUserId = support.teacher?.userId ?? (ctx.user.role === "TEACHER" ? ctx.user.id : null);
+    if (teacherUserId) await tx.meetingRecipient.create({ data: { schoolId: ctx.schoolId, meetingId: meeting.id, userId: teacherUserId } });
+    return meeting.id;
+  });
+  await attachExtraClass(ctx, support.id, meetingId, `${formatDate(input.date)} at ${formatMinutes(input.startMinute)}`);
+  await recordAudit({
+    action: "SUPPORT_EXTRA_CLASS_SCHEDULED",
+    entityType: "StudentSupport",
+    entityId: support.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Extra class booked for ${fullName(support.student)} on ${formatDate(input.date)}.`,
+  });
+  return meetingId;
 }

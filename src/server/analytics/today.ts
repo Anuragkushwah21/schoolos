@@ -52,7 +52,7 @@ export async function schoolToday(ctx: TenantContext, academicSessionId: string 
 }
 
 export type AttentionItem = {
-  key: "absent" | "registers" | "staff-register" | "missed" | "fees" | "leave" | "admissions" | "complaints";
+  key: "absent" | "registers" | "staff-register" | "missed" | "fees" | "leave" | "admissions" | "enquiries" | "complaints";
   count: number;
   /** Money items carry the amount in paise; the screen formats it. */
   amountMinor?: number;
@@ -71,11 +71,13 @@ export async function needsAttention(
 ): Promise<AttentionItem[]> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const date = today();
-  const [absent, missed, leave, admissions, complaints, fees] = await Promise.all([
+  const [absent, missed, leave, admissions, enquiries, complaints, fees] = await Promise.all([
     ctx.db.studentAttendance.count({ where: { date, status: "ABSENT" } }),
     ctx.db.classSession.count({ where: { date, status: "MISSED" } }),
     ctx.db.leaveRequest.count({ where: { status: "PENDING" } }),
     ctx.db.admissionApplication.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
+    // Family enquiries whose follow-up date has come.
+    ctx.db.enquiry.count({ where: { status: { in: ["NEW", "CONTACTED", "FOLLOW_UP"] }, nextFollowUpOn: { lte: date } } }),
     ctx.db.complaint.count({ where: { status: { in: ["OPEN", "IN_PROGRESS"] } } }),
     input.academicSessionId ? listFeePositions(ctx, { academicSessionId: input.academicSessionId }) : Promise.resolve(null),
   ]);
@@ -88,6 +90,7 @@ export async function needsAttention(
     { key: "fees", count: overdue, amountMinor: fees?.totals?.pendingMinor ?? 0, href: "/school-admin/finance/fees", tone: "orange" },
     { key: "leave", count: leave, href: "/school-admin/leave", tone: "purple" },
     { key: "admissions", count: admissions, href: "/school-admin/admissions", tone: "blue" },
+    { key: "enquiries", count: enquiries, href: "/school-admin/admissions/enquiries?followUp=due", tone: "purple" },
     { key: "complaints", count: complaints, href: "/school-admin/complaints", tone: "red" },
   ];
   return items.filter((item) => item.count > 0);

@@ -20,6 +20,11 @@ export const changeSectionSchema = z.object({
   studentIds: idList,
 });
 
+export const assignStreamSchema = z.object({
+  assignStreamId: id,
+  studentIds: idList,
+});
+
 export const bulkStatusSchema = z.object({
   status: z.enum(STUDENT_STATUSES, { error: "Choose a status" }),
   studentIds: idList,

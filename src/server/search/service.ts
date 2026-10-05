@@ -7,7 +7,7 @@ import { CURRENT_STUDENT } from "@/lib/validation/lifecycle";
 import { sectionLabel } from "@/server/academics/structure";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
-import { staffPermissions } from "@/server/auth/staff-access";
+import { staffHolds } from "@/server/auth/staff-access";
 
 /**
  * One search box across the school's people and classes.
@@ -52,7 +52,7 @@ export async function searchSchool(ctx: TenantContext, raw: string): Promise<Sea
   if (ctx.user.role === "SCHOOL_ADMIN") return adminSearch(ctx, q, session?.id ?? null);
   if (ctx.user.role === "TEACHER") return teacherSearch(ctx, q, session?.id ?? null);
   // Non-teaching staff: only with the student directory granted.
-  if (!(await staffPermissions(ctx)).includes("VIEW_STUDENTS")) return [];
+  if (!(await staffHolds(ctx, "students.directory"))) return [];
   const students = await findStudents(ctx, q, session?.id ?? null, undefined);
   return students.map((row) => ({ ...row, href: `/staff/students?q=${encodeURIComponent(row.title)}` as Route }));
 }

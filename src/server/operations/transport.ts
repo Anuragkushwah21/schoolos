@@ -59,18 +59,21 @@ export async function saveVehicle(ctx: TenantContext, input: VehicleInput): Prom
 
 export async function listRoutes(ctx: TenantContext) {
   // The School Admin, or staff the admin has let see this (read-only).
-  await assertAdminOrStaffPermission(ctx, "VIEW_TRANSPORT");
+  await assertAdminOrStaffPermission(ctx, "transport.routes");
   const routes = await ctx.db.transportRoute.findMany({
     orderBy: { name: "asc" },
     select: {
       id: true,
       name: true,
+      code: true,
+      startPoint: true,
+      endPoint: true,
       isActive: true,
       notes: true,
       vehicle: { select: { id: true, registrationNo: true, capacity: true } },
       driver: { select: { id: true, firstName: true, lastName: true, phone: true } },
       attendant: { select: { id: true, firstName: true, lastName: true, phone: true } },
-      stops: { orderBy: { sequence: "asc" }, select: { id: true, name: true, sequence: true, pickupMinute: true, dropMinute: true } },
+      stops: { orderBy: { sequence: "asc" }, select: { id: true, name: true, location: true, sequence: true, pickupMinute: true, dropMinute: true } },
       _count: { select: { students: { where: { status: "ACTIVE" } } } },
     },
   });
@@ -117,6 +120,11 @@ export async function saveRoute(ctx: TenantContext, input: RouteInput): Promise<
   }
 }
 
+/**
+ * Add a stop to a route, or edit one (`stopId`): name, landmark, order and
+ * times. Stops are optional — a route works without any. The order number is
+ * unique on the route.
+ */
 export async function addStop(ctx: TenantContext, input: StopInput): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const route = await ctx.db.transportRoute.findFirst({ where: { id: input.routeId }, select: { id: true, name: true } });
@@ -124,13 +132,19 @@ export async function addStop(ctx: TenantContext, input: StopInput): Promise<voi
   if (input.pickupMinute !== null && input.dropMinute !== null && input.dropMinute <= input.pickupMinute) {
     throw new AppError("VALIDATION", "Drop time must be after pickup time.");
   }
+  const { stopId, ...data } = input;
   try {
-    await ctx.db.routeStop.create({ data: { ...input, schoolId: ctx.schoolId } });
+    if (stopId) {
+      const { count } = await ctx.db.routeStop.updateMany({ where: { id: stopId, routeId: route.id }, data: { name: data.name, location: data.location, sequence: data.sequence, pickupMinute: data.pickupMinute, dropMinute: data.dropMinute } });
+      if (!count) throw new NotFoundError("That stop was not found on this route.");
+    } else {
+      await ctx.db.routeStop.create({ data: { ...data, schoolId: ctx.schoolId } });
+    }
   } catch (error) {
     if (isUniqueViolation(error)) throw new ConflictError(`Stop number ${input.sequence} already exists on ${route.name}.`);
     throw error;
   }
-  await audit(ctx, "TRANSPORT_UPDATED", `Stop ${input.name} added to ${route.name}.`, route.id);
+  await audit(ctx, "TRANSPORT_UPDATED", `Stop ${input.name} ${stopId ? "updated on" : "added to"} ${route.name}.`, route.id);
 }
 
 export async function removeStop(ctx: TenantContext, stopId: string): Promise<void> {
@@ -340,3 +354,76 @@ export async function transportTable(ctx: TenantContext): Promise<ReportTable> {
   };
 }
 
+
+// --- crew: who drives and attends a route -------------------------------------
+
+export type RouteCrewRole = "DRIVER" | "ATTENDANT";
+
+async function crewMember(ctx: TenantContext, staffId: string, as: RouteCrewRole) {
+  const staff = await ctx.db.staffMember.findFirst({ where: { id: staffId }, select: { id: true, firstName: true, lastName: true, role: true, status: true } });
+  if (!staff) throw new NotFoundError("That staff member was not found.");
+  const needed = as === "DRIVER" ? "DRIVER" : "TRANSPORT_ATTENDANT";
+  if (staff.role !== needed) throw new AppError("VALIDATION", as === "DRIVER" ? "Only a staff member with the Driver role can drive a route." : "Only a Transport attendant can attend a route.");
+  if (staff.status !== "ACTIVE" && staff.status !== "ON_LEAVE") throw new ConflictError(`${staff.firstName} ${staff.lastName} is not a current staff member.`);
+  return staff;
+}
+
+/**
+ * Put a driver or attendant on a route, from their profile. Whoever had that
+ * seat on the route is replaced (and told in the result); the route's stops
+ * and students are not touched.
+ */
+export async function assignRouteCrew(ctx: TenantContext, input: { routeId: string; staffId: string; as: RouteCrewRole }): Promise<{ replaced: string | null }> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const staff = await crewMember(ctx, input.staffId, input.as);
+  const route = await ctx.db.transportRoute.findFirst({
+    where: { id: input.routeId },
+    select: { id: true, name: true, driver: { select: { id: true, firstName: true, lastName: true } }, attendant: { select: { id: true, firstName: true, lastName: true } } },
+  });
+  if (!route) throw new NotFoundError("That route was not found.");
+  const current = input.as === "DRIVER" ? route.driver : route.attendant;
+  if (current?.id === staff.id) return { replaced: null };
+  await ctx.db.transportRoute.updateMany({ where: { id: route.id }, data: input.as === "DRIVER" ? { driverId: staff.id } : { attendantId: staff.id } });
+  const replaced = current ? `${current.firstName} ${current.lastName}` : null;
+  await audit(ctx, "TRANSPORT_UPDATED", `${staff.firstName} ${staff.lastName} now ${input.as === "DRIVER" ? "drives" : "attends"} ${route.name}${replaced ? ` (replacing ${replaced})` : ""}.`, route.id);
+  return { replaced };
+}
+
+/** Take a driver or attendant off a route. The route keeps running without them until someone is assigned. */
+export async function removeRouteCrew(ctx: TenantContext, input: { routeId: string; staffId: string }): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const route = await ctx.db.transportRoute.findFirst({ where: { id: input.routeId }, select: { id: true, name: true, driverId: true, attendantId: true } });
+  if (!route) throw new NotFoundError("That route was not found.");
+  if (route.driverId !== input.staffId && route.attendantId !== input.staffId) throw new NotFoundError("They are not on that route.");
+  await ctx.db.transportRoute.updateMany({
+    where: { id: route.id },
+    data: { ...(route.driverId === input.staffId ? { driverId: null } : {}), ...(route.attendantId === input.staffId ? { attendantId: null } : {}) },
+  });
+  await audit(ctx, "TRANSPORT_UPDATED", `Crew member removed from ${route.name}.`, route.id);
+}
+
+/**
+ * Move a driver or attendant from one route to another in one step: off the
+ * old route, onto the new one in the same seat. Both change together or not
+ * at all.
+ */
+export async function moveRouteCrew(ctx: TenantContext, input: { staffId: string; fromRouteId: string; toRouteId: string }): Promise<{ replaced: string | null }> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  if (input.fromRouteId === input.toRouteId) throw new AppError("VALIDATION", "Choose a different route.");
+  const [from, to] = await Promise.all([
+    ctx.db.transportRoute.findFirst({ where: { id: input.fromRouteId }, select: { id: true, name: true, driverId: true, attendantId: true } }),
+    ctx.db.transportRoute.findFirst({ where: { id: input.toRouteId }, select: { id: true, name: true, driver: { select: { id: true, firstName: true, lastName: true } }, attendant: { select: { id: true, firstName: true, lastName: true } } } }),
+  ]);
+  if (!from || !to) throw new NotFoundError("That route was not found.");
+  const as: RouteCrewRole | null = from.driverId === input.staffId ? "DRIVER" : from.attendantId === input.staffId ? "ATTENDANT" : null;
+  if (!as) throw new NotFoundError("They are not on the route they are being moved from.");
+  const staff = await crewMember(ctx, input.staffId, as);
+  const current = as === "DRIVER" ? to.driver : to.attendant;
+  await ctx.db.$transaction([
+    ctx.db.transportRoute.updateMany({ where: { id: from.id }, data: as === "DRIVER" ? { driverId: null } : { attendantId: null } }),
+    ctx.db.transportRoute.updateMany({ where: { id: to.id }, data: as === "DRIVER" ? { driverId: staff.id } : { attendantId: staff.id } }),
+  ]);
+  const replaced = current && current.id !== staff.id ? `${current.firstName} ${current.lastName}` : null;
+  await audit(ctx, "TRANSPORT_UPDATED", `${staff.firstName} ${staff.lastName} moved from ${from.name} to ${to.name}${replaced ? ` (replacing ${replaced})` : ""}.`, to.id);
+  return { replaced };
+}

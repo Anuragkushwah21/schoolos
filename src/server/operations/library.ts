@@ -90,7 +90,7 @@ async function syncCopies(tx: Tx, schoolId: string, bookId: string, quantity: nu
 }
 
 /** Anyone who may see the library: read-only staff and the librarian alike. */
-const LIBRARY_READERS = ["VIEW_LIBRARY", "MANAGE_LIBRARY"] as const;
+const LIBRARY_READERS = "library.view" as const;
 
 export async function listBooks(ctx: TenantContext, filters: { q?: string; category?: string; availableOnly?: boolean } = {}) {
   // The School Admin, or staff the admin has let see this (read-only).
@@ -125,7 +125,8 @@ export async function bookCategories(ctx: TenantContext): Promise<string[]> {
 }
 
 export async function saveBook(ctx: TenantContext, input: BookInput): Promise<string> {
-  await assertAdminOrStaffPermission(ctx, "MANAGE_LIBRARY");
+  // Adding a title and editing one are separate grants.
+  await assertAdminOrStaffPermission(ctx, input.bookId ? "library.books.edit" : "library.books.create");
   const { bookId, ...data } = input;
   try {
     // The book and its numbered copies change together.
@@ -157,12 +158,25 @@ async function resolveBorrower(ctx: TenantContext, kind: IssueBookInput["borrowe
   if (kind === "STUDENT") {
     const row = await ctx.db.student.findFirst({
       where: studentId ? { id: studentId } : { admissionNumber: { equals: code, mode: "insensitive" } },
-      select: { id: true, firstName: true, lastName: true, status: true },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        status: true,
+        enrollments: {
+          where: { academicSession: { isCurrent: true } },
+          take: 1,
+          select: { stream: { select: { name: true } }, section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } } },
+        },
+      },
     });
     if (row && !(CURRENT_STUDENT as readonly string[]).includes(row.status)) {
       throw new ConflictError(`${fullName(row)} is not a current student, so no book can be issued.`);
     }
-    return row ? { where: { studentId: row.id }, data: { studentId: row.id }, name: fullName(row) } : null;
+    // Their class on the day of issue goes on the loan, so the history still reads right after promotion.
+    const placement = row?.enrollments[0];
+    const borrowerGroup = placement ? groupLabel(placement.section, placement.stream) : null;
+    return row ? { where: { studentId: row.id }, data: { studentId: row.id, borrowerGroup }, name: fullName(row) } : null;
   }
   if (kind === "TEACHER") {
     const row = await ctx.db.teacher.findFirst({ where: { employeeId: { equals: code, mode: "insensitive" }, status: { in: ["ACTIVE", "ON_LEAVE"] } }, select: { id: true, firstName: true, lastName: true } });
@@ -210,7 +224,7 @@ export async function saveLibraryRules(ctx: TenantContext, input: { loanDays: nu
 export type IssueRequest = Omit<IssueBookInput, "copyId" | "studentId"> & { copyId?: string | null; studentId?: string | null };
 
 export async function issueBook(ctx: TenantContext, input: IssueRequest): Promise<{ id: string; copyCode: string }> {
-  await assertAdminOrStaffPermission(ctx, "MANAGE_LIBRARY");
+  await assertAdminOrStaffPermission(ctx, "library.circulation");
   const now = today();
   if (input.issuedOn > now) throw new AppError("VALIDATION", "A book cannot be issued on a future date.");
   if (input.issuedOn < addDays(now, -30)) throw new AppError("VALIDATION", "A loan can be back-dated at most 30 days.");
@@ -248,7 +262,7 @@ export async function issueBook(ctx: TenantContext, input: IssueRequest): Promis
 }
 
 export async function returnBook(ctx: TenantContext, input: { issueId: string; returnedOn: Date; finePaid: boolean }): Promise<{ fineMinor: number }> {
-  await assertAdminOrStaffPermission(ctx, "MANAGE_LIBRARY");
+  await assertAdminOrStaffPermission(ctx, "library.circulation");
   const issue = await ctx.db.bookIssue.findFirst({
     where: { id: input.issueId },
     select: { id: true, issuedOn: true, dueOn: true, returnedOn: true, copyId: true, book: { select: { title: true } } },
@@ -264,7 +278,7 @@ export async function returnBook(ctx: TenantContext, input: { issueId: string; r
 
   // The loan closes and its copy goes back on the shelf together.
   await ctx.db.$transaction(async (tx) => {
-    const { count } = await tx.bookIssue.updateMany({ where: { id: issue.id, returnedOn: null }, data: { returnedOn: input.returnedOn, fineMinor, finePaid: fineMinor === 0 ? false : input.finePaid } });
+    const { count } = await tx.bookIssue.updateMany({ where: { id: issue.id, returnedOn: null }, data: { returnedOn: input.returnedOn, returnedAt: new Date(), returnedById: ctx.user.id, fineMinor, finePaid: fineMinor === 0 ? false : input.finePaid } });
     if (!count) throw new ConflictError("That book has already been returned.");
     if (issue.copyId) await tx.bookCopy.updateMany({ where: { id: issue.copyId, status: "ISSUED" }, data: { status: "AVAILABLE" } });
   });
@@ -273,7 +287,7 @@ export async function returnBook(ctx: TenantContext, input: { issueId: string; r
 }
 
 export async function markFinePaid(ctx: TenantContext, issueId: string): Promise<void> {
-  await assertAdminOrStaffPermission(ctx, "MANAGE_LIBRARY");
+  await assertAdminOrStaffPermission(ctx, "library.fines");
   const { count } = await ctx.db.bookIssue.updateMany({ where: { id: issueId, fineMinor: { gt: 0 } }, data: { finePaid: true } });
   if (!count) throw new NotFoundError("That fine was not found.");
   await recordAudit({ action: "BOOK_FINE_PAID", entityType: "BookIssue", entityId: issueId, schoolId: ctx.schoolId, actorId: ctx.user.id, summary: "Library fine marked as paid." });
@@ -285,7 +299,7 @@ export async function markFinePaid(ctx: TenantContext, issueId: string): Promise
  * renewal is on the audit trail.
  */
 export async function renewLoan(ctx: TenantContext, input: { issueId: string; dueOn: Date }): Promise<void> {
-  await assertAdminOrStaffPermission(ctx, "MANAGE_LIBRARY");
+  await assertAdminOrStaffPermission(ctx, "library.circulation");
   const issue = await ctx.db.bookIssue.findFirst({
     where: { id: input.issueId },
     select: { id: true, issuedOn: true, dueOn: true, returnedOn: true, book: { select: { title: true } } },
@@ -315,7 +329,7 @@ export async function renewLoan(ctx: TenantContext, input: { issueId: string; du
  * parent's details, fees, marks or an address.
  */
 export async function searchBorrowers(ctx: TenantContext, raw: string) {
-  await assertAdminOrStaffPermission(ctx, "MANAGE_LIBRARY");
+  await assertAdminOrStaffPermission(ctx, "library.circulation");
   const q = raw.trim().slice(0, 60);
   if (q.length < 2) return [];
   const like = { contains: q, mode: "insensitive" as const };
@@ -383,7 +397,7 @@ export async function searchBorrowers(ctx: TenantContext, raw: string) {
 
 /** Books with a copy on the shelf, and those copies — for the issue form. */
 export async function issuableBooks(ctx: TenantContext) {
-  await assertAdminOrStaffPermission(ctx, "MANAGE_LIBRARY");
+  await assertAdminOrStaffPermission(ctx, "library.circulation");
   const books = await ctx.db.book.findMany({
     where: { isActive: true, copies: { some: { status: "AVAILABLE" } } },
     orderBy: { title: "asc" },
@@ -403,13 +417,14 @@ export async function bookCopies(ctx: TenantContext, bookId: string) {
       id: true,
       code: true,
       status: true,
+      conditionNote: true,
       issues: { where: { returnedOn: null }, take: 1, select: { dueOn: true, student: { select: { firstName: true, lastName: true } }, teacher: { select: { firstName: true, lastName: true } }, staffMember: { select: { firstName: true, lastName: true } } } },
     },
   });
   return copies.map((copy) => {
     const loan = copy.issues[0];
     const holder = loan?.student ?? loan?.teacher ?? loan?.staffMember ?? null;
-    return { id: copy.id, code: copy.code, status: copy.status, heldBy: holder ? fullName(holder) : null, dueOn: loan?.dueOn ?? null };
+    return { id: copy.id, code: copy.code, status: copy.status, conditionNote: copy.conditionNote, heldBy: holder ? fullName(holder) : null, dueOn: loan?.dueOn ?? null };
   });
 }
 
@@ -442,10 +457,19 @@ const LOAN_SELECT = {
   issuedOn: true,
   dueOn: true,
   returnedOn: true,
+  lostOn: true,
+  damagedOn: true,
   fineMinor: true,
   finePaid: true,
+  notes: true,
+  /** When the issue was recorded (the time of issue). */
+  createdAt: true,
+  returnedAt: true,
+  borrowerGroup: true,
+  issuedBy: { select: { firstName: true, lastName: true, email: true } },
+  returnedBy: { select: { firstName: true, lastName: true, email: true } },
   book: { select: { id: true, title: true, author: true } },
-  copy: { select: { code: true } },
+  copy: { select: { id: true, code: true } },
   student: {
     select: {
       firstName: true,
@@ -464,8 +488,12 @@ const LOAN_SELECT = {
 
 type LoanRow = Prisma.BookIssueGetPayload<{ select: typeof LOAN_SELECT }>;
 
-/** "Issued", "Overdue" (due date passed, not back) or "Returned" — a returned book is never overdue. */
-export function loanStatus(row: { returnedOn: Date | null; dueOn: Date }, now: Date = today()): "ISSUED" | "OVERDUE" | "RETURNED" {
+export type LoanStatus = "ISSUED" | "OVERDUE" | "RETURNED" | "LOST" | "DAMAGED";
+
+/** "Issued", "Overdue" (due date passed, not back), "Returned", "Lost" or "Damaged" — a closed loan is never overdue. */
+export function loanStatus(row: { returnedOn: Date | null; dueOn: Date; lostOn?: Date | null; damagedOn?: Date | null }, now: Date = today()): LoanStatus {
+  if (row.lostOn) return "LOST";
+  if (row.damagedOn) return "DAMAGED";
   if (row.returnedOn) return "RETURNED";
   return row.dueOn < now ? "OVERDUE" : "ISSUED";
 }
@@ -473,41 +501,79 @@ export function loanStatus(row: { returnedOn: Date | null; dueOn: Date }, now: D
 /** A loan as screens show it: borrower, their class, the copy, and its status. */
 function shapeLoan(row: LoanRow, now: Date = today()) {
   const status = loanStatus(row, now);
-  return { ...row, borrower: borrowerOf(row), copyCode: row.copy?.code ?? null, status, overdue: status === "OVERDUE" };
+  // Who did it, by name only — loans are also shown to parents and students, who never see a staff email.
+  const staffName = (user: { firstName: string; lastName: string } | null) => (user ? fullName(user).trim() || "School staff" : null);
+  const { issuedBy, returnedBy, ...rest } = row;
+  return {
+    ...rest,
+    borrower: borrowerOf(row),
+    copyCode: row.copy?.code ?? null,
+    status,
+    overdue: status === "OVERDUE",
+    issuedByName: staffName(issuedBy),
+    returnedByName: staffName(returnedBy),
+  };
 }
 
-function borrowerOf(row: Pick<LoanRow, "student" | "teacher" | "staffMember">) {
+function borrowerOf(row: Pick<LoanRow, "student" | "teacher" | "staffMember" | "borrowerGroup">) {
   if (row.student) {
+    // The class on the day of issue; for older loans without it, where they are now.
     const placement = row.student.enrollments[0];
-    return { name: fullName(row.student), code: row.student.admissionNumber, kind: "Student", group: placement ? groupLabel(placement.section, placement.stream) : null };
+    return { name: fullName(row.student), code: row.student.admissionNumber, kind: "Student", group: row.borrowerGroup ?? (placement ? groupLabel(placement.section, placement.stream) : null) };
   }
   if (row.teacher) return { name: fullName(row.teacher), code: row.teacher.employeeId, kind: "Teacher", group: null };
   if (row.staffMember) return { name: fullName(row.staffMember), code: row.staffMember.employeeId, kind: "Staff", group: null };
   return { name: "—", code: "", kind: "", group: null };
 }
 
-export async function listLoans(ctx: TenantContext, filters: { view?: "open" | "overdue" | "returned" | "fines"; bookId?: string; q?: string } = {}) {
+export const LOAN_VIEW_KEYS = ["open", "overdue", "returned", "lost", "damaged", "fines", "all"] as const;
+export type LoanViewKey = (typeof LOAN_VIEW_KEYS)[number];
+
+/**
+ * Loans, current and past. Every issue is its own row and a return only
+ * fills in its return fields, so "all" is the library's complete history.
+ * Search matches the book, the borrower (name, admission no. or employee ID)
+ * and the copy code; a book, a copy or a student narrows it further.
+ */
+export async function listLoans(
+  ctx: TenantContext,
+  filters: { view?: LoanViewKey; bookId?: string; copyId?: string; studentId?: string; q?: string; take?: number } = {},
+) {
   // The School Admin, or staff the admin has let see this (read-only).
   await assertAdminOrStaffPermission(ctx, LIBRARY_READERS);
   const now = today();
+  const contains = (value: string) => ({ contains: value, mode: "insensitive" as const });
+  const person = (code: "admissionNumber" | "employeeId", q: string) => ({ OR: [{ firstName: contains(q) }, { lastName: contains(q) }, { [code]: contains(q) }] });
   const where: Prisma.BookIssueWhereInput = {
     ...(filters.bookId ? { bookId: filters.bookId } : {}),
+    ...(filters.copyId ? { copyId: filters.copyId } : {}),
+    ...(filters.studentId ? { studentId: filters.studentId } : {}),
     ...(filters.view === "open" ? { returnedOn: null } : {}),
     ...(filters.view === "overdue" ? { returnedOn: null, dueOn: { lt: now } } : {}),
-    ...(filters.view === "returned" ? { returnedOn: { not: null } } : {}),
+    ...(filters.view === "returned" ? { returnedOn: { not: null }, lostOn: null, damagedOn: null } : {}),
+    ...(filters.view === "lost" ? { lostOn: { not: null } } : {}),
+    ...(filters.view === "damaged" ? { damagedOn: { not: null } } : {}),
     ...(filters.view === "fines" ? { fineMinor: { gt: 0 }, finePaid: false } : {}),
     ...(filters.q
       ? {
           OR: [
-            { book: { title: { contains: filters.q, mode: "insensitive" } } },
-            { student: { OR: [{ firstName: { contains: filters.q, mode: "insensitive" } }, { admissionNumber: { contains: filters.q, mode: "insensitive" } }] } },
-            { teacher: { OR: [{ firstName: { contains: filters.q, mode: "insensitive" } }, { employeeId: { contains: filters.q, mode: "insensitive" } }] } },
-            { staffMember: { OR: [{ firstName: { contains: filters.q, mode: "insensitive" } }, { employeeId: { contains: filters.q, mode: "insensitive" } }] } },
+            { book: { OR: [{ title: contains(filters.q) }, { author: contains(filters.q) }, { isbn: contains(filters.q) }] } },
+            { copy: { code: contains(filters.q) } },
+            { student: person("admissionNumber", filters.q) },
+            { teacher: person("employeeId", filters.q) },
+            { staffMember: person("employeeId", filters.q) },
           ],
         }
       : {}),
   };
-  const rows = await ctx.db.bookIssue.findMany({ where, orderBy: [{ returnedOn: "asc" }, { dueOn: "asc" }], take: 500, select: LOAN_SELECT });
+  // Books still out: soonest due first. History: newest issue first.
+  const current = filters.view === "open" || filters.view === "overdue";
+  const rows = await ctx.db.bookIssue.findMany({
+    where,
+    orderBy: current ? [{ dueOn: "asc" }, { createdAt: "asc" }] : [{ issuedOn: "desc" }, { createdAt: "desc" }],
+    take: Math.min(filters.take ?? 500, 500),
+    select: LOAN_SELECT,
+  });
   return rows.map((row) => shapeLoan(row, now));
 }
 
@@ -618,4 +684,95 @@ export async function loansTable(ctx: TenantContext, view: "open" | "overdue" | 
       row.fineMinor ? (row.finePaid ? "Yes" : "No") : "",
     ]),
   };
+}
+
+// -----------------------------------------------------------------------------
+// Lost and damaged copies
+// -----------------------------------------------------------------------------
+
+/**
+ * Take one copy out of stock because it was lost or damaged. Nothing is
+ * deleted: the copy keeps its code and every loan it ever had. If it was out
+ * on loan, that loan closes on the day it was reported (marked lost), with an
+ * optional replacement charge, so it stops showing as overdue.
+ */
+export async function markCopyCondition(
+  ctx: TenantContext,
+  input: { copyId: string; condition: "LOST" | "DAMAGED"; note: string; chargeMinor?: number | null },
+): Promise<void> {
+  await assertAdminOrStaffPermission(ctx, "library.copies");
+  const copy = await ctx.db.bookCopy.findFirst({
+    where: { id: input.copyId },
+    select: { id: true, code: true, status: true, bookId: true, book: { select: { title: true, quantity: true } }, issues: { where: { returnedOn: null }, take: 1, select: { id: true } } },
+  });
+  if (!copy) throw new NotFoundError("That copy was not found.");
+  if (copy.status !== "AVAILABLE" && copy.status !== "ISSUED") throw new ConflictError(`Copy ${copy.code} is already out of stock.`);
+  if (input.chargeMinor && input.chargeMinor < 0) throw new AppError("VALIDATION", "A charge cannot be negative.");
+  const loan = copy.issues[0] ?? null;
+  const now = today();
+
+  await ctx.db.$transaction(async (tx) => {
+    const { count } = await tx.bookCopy.updateMany({
+      where: { id: copy.id, status: { in: ["AVAILABLE", "ISSUED"] } },
+      data: { status: input.condition, conditionNote: input.note, statusChangedAt: new Date() },
+    });
+    if (!count) throw new ConflictError(`Copy ${copy.code} was changed a moment ago. Refresh and try again.`);
+    if (loan) {
+      await tx.bookIssue.updateMany({
+        where: { id: loan.id, returnedOn: null },
+        data: {
+          returnedOn: now,
+          returnedAt: new Date(),
+          returnedById: ctx.user.id,
+          ...(input.condition === "LOST" ? { lostOn: now } : { damagedOn: now }),
+          notes: `${input.condition === "LOST" ? "Reported lost" : "Returned damaged"}: ${input.note}`,
+          ...(input.chargeMinor ? { fineMinor: input.chargeMinor, finePaid: false } : {}),
+        },
+      });
+    }
+    // One fewer copy in stock: keeps the book's quantity equal to its usable copies.
+    await tx.book.updateMany({ where: { id: copy.bookId, quantity: { gt: 0 } }, data: { quantity: { decrement: 1 } } });
+  });
+  await recordAudit({
+    action: input.condition === "LOST" ? "BOOK_COPY_LOST" : "BOOK_COPY_DAMAGED",
+    entityType: "BookCopy",
+    entityId: copy.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Copy ${copy.code} of "${copy.book.title}" marked ${input.condition.toLowerCase()}${loan ? " (its loan closed)" : ""}: ${input.note}`,
+  });
+}
+
+/** A lost copy found, or a damaged one repaired: back on the shelf. */
+export async function restoreCopy(ctx: TenantContext, copyId: string): Promise<void> {
+  await assertAdminOrStaffPermission(ctx, "library.copies");
+  const copy = await ctx.db.bookCopy.findFirst({ where: { id: copyId }, select: { id: true, code: true, status: true, bookId: true, book: { select: { title: true } } } });
+  if (!copy) throw new NotFoundError("That copy was not found.");
+  if (copy.status !== "LOST" && copy.status !== "DAMAGED") throw new ConflictError(`Copy ${copy.code} is not marked lost or damaged.`);
+  await ctx.db.$transaction([
+    ctx.db.bookCopy.updateMany({ where: { id: copy.id }, data: { status: "AVAILABLE", conditionNote: null, statusChangedAt: new Date() } }),
+    ctx.db.book.updateMany({ where: { id: copy.bookId }, data: { quantity: { increment: 1 } } }),
+  ]);
+  await recordAudit({ action: "BOOK_COPY_RESTORED", entityType: "BookCopy", entityId: copy.id, schoolId: ctx.schoolId, actorId: ctx.user.id, summary: `Copy ${copy.code} of "${copy.book.title}" back in stock.` });
+}
+
+// -----------------------------------------------------------------------------
+// Overdue alerts (for the derived feeds)
+// -----------------------------------------------------------------------------
+
+/** Each of these students' overdue books, for a student's or parent's alerts. */
+export async function overdueLoansFor(ctx: TenantContext, studentIds: string[]) {
+  if (!studentIds.length) return [];
+  const rows = await ctx.db.bookIssue.findMany({
+    where: { studentId: { in: studentIds }, returnedOn: null, dueOn: { lt: today() } },
+    orderBy: { dueOn: "asc" },
+    take: 20,
+    select: { id: true, dueOn: true, studentId: true, book: { select: { title: true } } },
+  });
+  return rows.map((row) => ({ id: row.id, studentId: row.studentId!, title: row.book.title, dueOn: row.dueOn, daysLate: spanDays(row.dueOn, today()) - 1 }));
+}
+
+/** How many books are overdue across the school — the librarian's and office's alert. */
+export async function overdueLoanCount(ctx: TenantContext): Promise<number> {
+  return ctx.db.bookIssue.count({ where: { returnedOn: null, dueOn: { lt: today() } } });
 }

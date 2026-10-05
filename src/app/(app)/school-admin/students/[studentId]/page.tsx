@@ -2,6 +2,7 @@ import type { Metadata, Route } from "next";
 import Link from "next/link";
 
 import { ActionButton } from "@/components/forms/action-button";
+import { StudentAttentionCard } from "@/features/exams/student-attention";
 import { PageHeader } from "@/components/shared/page-header";
 import { LifecyclePanel } from "@/features/people/lifecycle-panel";
 import { supportForStudent } from "@/server/support/service";
@@ -24,6 +25,8 @@ import { requireTenant } from "@/server/auth/current-user";
 import { photoUrlFor } from "@/server/people/photos";
 import { listAcademicSessions, sectionLabel } from "@/server/academics/structure";
 import { orNotFound } from "@/server/page-helpers";
+import { LoansList } from "@/features/operations/library-desk";
+import { listLoans } from "@/server/operations/library";
 import { getStudentProfile, searchParents } from "@/server/people/students";
 import { activationEmailStatuses } from "@/server/auth/account-links";
 import { groupLabel, seatOptionsFor } from "@/server/academics/streams";
@@ -48,6 +51,8 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
     listAcademicSessions(ctx),
     searchParents(ctx),
   ]);
+  // Every book ever issued to this student, newest first.
+  const loans = await listLoans(ctx, { studentId: student.id, view: "all" });
 
   // Whether each pending login's activation email went, and if not, why.
   const invites = await activationEmailStatuses(ctx, [student.user?.id, ...student.parents.map((link) => link.parent.user?.id)]);
@@ -115,6 +120,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
           </>
         }
       />
+      <StudentAttentionCard ctx={ctx} studentId={studentId} supportBase="/school-admin/support" />
       <div className="mb-6">
         <PersonPhoto name={`${student.firstName} ${student.lastName}`} photoUrl={photoUrl} who="The student" />
       </div>
@@ -137,6 +143,18 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
                   </div>
                 ))}
               </dl>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+              <CardTitle>Library</CardTitle>
+              <span className="text-muted-foreground text-xs">
+                {loans.filter((loan) => !loan.returnedOn).length} out now · {loans.length} issued in all
+              </span>
+            </CardHeader>
+            <CardContent>
+              {loans.length ? <LoansList loans={loans} canManage={false} /> : <p className="text-muted-foreground text-sm">No books issued yet.</p>}
             </CardContent>
           </Card>
 
@@ -233,6 +251,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
                           email: link.parent.email,
                           occupation: link.parent.occupation,
                           addressLine: link.parent.addressLine,
+                          contact: { alternatePhone: link.parent.alternatePhone, city: link.parent.city, state: link.parent.state, postalCode: link.parent.postalCode },
                           idProof: { type: link.parent.idProofType, number: link.parent.idProofNumber },
                         }}
                       />

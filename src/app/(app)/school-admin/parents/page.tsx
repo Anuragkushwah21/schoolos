@@ -20,7 +20,9 @@ import { ParentDetailsDialog } from "@/features/school/parent-dialog";
 import { humanize, pluralize } from "@/lib/format";
 import { pageParam, param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
-import { listParents } from "@/server/people/parents";
+import { listParents, parentsAwaitingActivation } from "@/server/people/parents";
+import { ActionButton } from "@/components/forms/action-button";
+import { resendParentActivationsAction } from "@/features/school/people-actions";
 
 export const metadata: Metadata = { title: "Parents" };
 
@@ -39,9 +41,10 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
   // Families with a current child by default; those whose children have all
   // left stay one filter away rather than cluttering the list.
   const standingParam = param(search.standing);
-  const standing = standingParam === "ALL" ? undefined : standingParam === "NO_ACTIVE_CHILDREN" ? "NO_ACTIVE_CHILDREN" : "ACTIVE";
+  const standing =
+    standingParam === "ALL" ? undefined : standingParam === "NO_ACTIVE_CHILDREN" ? "NO_ACTIVE_CHILDREN" : standingParam === "ARCHIVED" ? "ARCHIVED" : "ACTIVE";
 
-  const { rows, total, page, pageCount } = await listParents(ctx, { q, standing, page: pageParam(search.page) });
+  const [{ rows, total, page, pageCount }, awaiting] = await Promise.all([listParents(ctx, { q, standing, page: pageParam(search.page) }), parentsAwaitingActivation(ctx)]);
 
   const multiChild = rows.filter((row) => row.childCount > 1).length;
   const withLogin = rows.filter((row) => row.hasLogin).length;
@@ -51,6 +54,23 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
       <PageHeader icon={HeartHandshakeIcon} tone="blue"
         title="Parents"
         description="One account per family. Link a sibling to the existing parent rather than adding a second."
+        actions={
+          awaiting.length ? (
+            <ActionButton
+              action={resendParentActivationsAction}
+              fields={{}}
+              variant="outline"
+              size="default"
+              confirm={{
+                title: `Resend activation links to ${awaiting.length} parent${awaiting.length === 1 ? "" : "s"}?`,
+                description: "Each parent who has not activated their login gets a fresh link by email. Earlier links stop working.",
+                confirmLabel: "Resend links",
+              }}
+            >
+              Resend activation ({awaiting.length})
+            </ActionButton>
+          ) : null
+        }
       />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3">
@@ -74,6 +94,7 @@ export default async function ParentsPage(props: PageProps<"/school-admin/parent
               { value: "ACTIVE", label: "With a current child" },
               { value: "NO_ACTIVE_CHILDREN", label: "No active children" },
               { value: "ALL", label: "All families" },
+              { value: "ARCHIVED", label: "Archived" },
             ],
           },
         ]}

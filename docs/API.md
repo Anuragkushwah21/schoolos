@@ -292,7 +292,18 @@ as React elements and never as HTML, so markup in them is shown, not executed.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` `POST` | `/staff` | Non-teaching staff (no documents). `permissions` is optional; leaving it out keeps the current grants. Logins are issued from the staff page |
+| `GET` `POST` | `/staff` | Non-teaching staff (no documents). Give `roleProfileId` (or the older `role`). `grants` is optional: a new person starts with their role's defaults, an existing one keeps theirs. The old `permissions` names (`VIEW_STUDENTS`, `COLLECT_FEES`, …) are still accepted and converted. Logins are issued from the staff page |
+| `GET` `PUT` | `/staff/{id}` | One staff member. `PUT` with `status` (`INACTIVE`, `RESIGNED`, …) deactivates or archives them through the usual status change — recorded, login closed, history kept; staff are never deleted |
+| `GET` `PUT` | `/staff/{id}/permissions` | `PUT { grants: ["library.view", …] }` replaces their grants; a grant their role can never hold answers 422. `GET` also lists today's temporary grants from substitutions |
+| `GET` `POST` | `/staff/roles` | Roles (built-in and custom) with default grants and staff counts. `POST { name, baseRole, description, defaultGrants }` adds a custom role |
+| `GET` `PUT` | `/staff/roles/{id}` | `PUT { …, defaultGrants, applyToStaff }` — `applyToStaff: true` gives everyone in the role exactly those grants |
+| `GET` `POST` | `/staff/substitutions` | History (`?staffId=` or `?status=SCHEDULED|ACTIVE|EXPIRED|ENDED`). `POST { originalStaffId, substituteStaffId, startDate, endDate, reason, notes, grants, coverRoutes }`. Status comes from the dates: access starts and expires by itself |
+| `PUT` | `/staff/substitutions/{id}` | Change one that has not finished (409 once expired or ended) |
+| `POST` | `/staff/substitutions/{id}/end` | End now: the temporary access stops at once; the record is kept |
+| `GET` | `/transport/my-route` | Staff token: the driver's or attendant's routes today (own, or covered as a substitute) with stops and rider counts. Needs `transport.myroute` |
+| `GET` | `/transport/my-route/{routeId}/students` | Staff token: students on that route (`?stopId=`) with today's pickup/drop status. 403 for a route that is not theirs. Guardian contact only with `transport.contacts` |
+| `POST` | `/transport/trips` | Staff token: `{ routeId, studentId, trip: "PICKUP"|"DROP", status: "PICKED_UP"|"NOT_PRESENT"|"DROPPED"|"ISSUE", note }` — today only, own routes only |
+| `POST` | `/transport/issues` | Staff token: `{ routeId, note }` — report a problem on own route today |
 | `GET` `POST` | `/transport/routes` | Routes with stops, vehicle, driver and riders |
 | `POST` | `/transport/assign` | `{ routeId, stopId?, studentIds, startDate }` — vehicle capacity checked |
 | `GET` `POST` | `/library/books` | Copies available are counted from open loans |
@@ -303,6 +314,12 @@ as React elements and never as HTML, so markup in them is shown, not executed.
 
 All of these are school-scoped: the school always comes from the token's
 user, and another school's ids answer 404.
+
+Staff grants are module × action keys (`library.view`, `library.circulation`,
+`transport.riders`, `fees.collect`, `expenses.create`, `payroll.view`,
+`inventory.manage`, …); the full list with labels is `STAFF_GRANTS` in
+`src/lib/staff-access.ts`. A grant opens a module; the server still narrows
+what it returns (a driver's students are only those on their route).
 
 ### Tokens
 

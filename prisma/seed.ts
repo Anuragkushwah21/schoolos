@@ -111,6 +111,8 @@ async function wipe() {
   await prisma.teacherSubjectAssignment.deleteMany();
   await prisma.parentStudent.deleteMany();
   await prisma.studentEnrollment.deleteMany();
+  await prisma.enquiry.deleteMany();
+  await prisma.admissionPortal.deleteMany();
   await prisma.admissionApplication.deleteMany();
   await prisma.student.deleteMany();
   await prisma.parent.deleteMany();

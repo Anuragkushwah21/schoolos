@@ -6,19 +6,24 @@ import { z } from "zod";
 import { type ActionResult, errorResult, parseFormData, successResult } from "@/lib/action-result";
 import { ValidationError } from "@/lib/errors";
 import { id } from "@/lib/validation/common";
-import { classTestSchema, createExamSchema, examIdsSchema, type MarkEntry, updateExamSchema } from "@/lib/validation/exams";
+import { classTestSchema, createExamSchema, examIdsSchema, type MarkEntry, reopenMarksSchema, updateClassTestSchema, updateExamSchema } from "@/lib/validation/exams";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import {
   createClassTest,
   createExams,
+  deleteClassTest,
   deleteExam,
   type ImportError,
   importMarksCsv,
   publishExams,
+  reopenMarks,
   saveMarks,
+  submitMarks,
   unpublishExam,
+  updateClassTest,
   updateExam,
 } from "@/server/exams/service";
+import { saveAttentionSettings } from "@/server/exams/attention";
 import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
@@ -35,7 +40,7 @@ export async function createExamAction(_p: Result, formData: FormData): Promise<
       const { ids } = await createExams(ctx, parseFormData(createExamSchema, formData));
       return successResult(`Exam created for ${ids.length} section${ids.length === 1 ? "" : "s"}.`);
     },
-    { revalidate: EXAM_PAGES, redirectTo: "/school-admin/exams" },
+    { revalidate: EXAM_PAGES, redirectTo: "/school-admin/exams/term" },
   );
 }
 
@@ -58,7 +63,7 @@ export async function deleteExamAction(_p: Result, formData: FormData): Promise<
       await deleteExam(ctx, examId);
       return successResult("Exam deleted.");
     },
-    { revalidate: EXAM_PAGES, redirectTo: "/school-admin/exams" },
+    { revalidate: EXAM_PAGES, redirectTo: "/school-admin/exams/term" },
   );
 }
 
@@ -111,8 +116,17 @@ export async function saveMarksAction(_p: Result, formData: FormData): Promise<R
     async () => {
       const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER");
       const { assessmentId } = parseFormData(z.object({ assessmentId: id }), formData);
+      // "Submit results" saves what is on screen first, then hands it in.
+      if (formData.get("intent") === "submit") {
+        const entries = readMarks(formData);
+        if (entries.length) await saveMarks(ctx, assessmentId, entries);
+        const { visibleNow } = await submitMarks(ctx, assessmentId);
+        return successResult(
+          visibleNow ? "Results submitted. Students and parents can see them now." : "Marks submitted. The school office publishes the exam results.",
+        );
+      }
       const { saved, cleared } = await saveMarks(ctx, assessmentId, readMarks(formData));
-      return successResult(`Marks saved for ${saved} student${saved === 1 ? "" : "s"}${cleared ? `, ${cleared} cleared` : ""}.`);
+      return successResult(`Draft saved — marks for ${saved} student${saved === 1 ? "" : "s"}${cleared ? `, ${cleared} cleared` : ""}. Submit when everyone is marked.`);
     },
     { revalidate: EXAM_PAGES },
   );
@@ -151,11 +165,74 @@ export async function createClassTestAction(
     async () => {
       const ctx = await requireTenantForAction("TEACHER");
       const { id: testId } = await createClassTest(ctx, parseFormData(classTestSchema, formData));
-      return successResult("Test created. Enter the marks below.", { id: testId });
+      return successResult("Test created. Enter the marks once it is held.", { id: testId });
     },
     {
       revalidate: EXAM_PAGES,
       redirectTo: (data) => (data ? (`/teacher/exams/${data.id}` as Route) : null),
     },
+  );
+}
+
+export async function reopenMarksAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const { assessmentId, reason } = parseFormData(reopenMarksSchema, formData);
+      await reopenMarks(ctx, assessmentId, reason);
+      return successResult("Marks reopened for correction. Families no longer see them until they are submitted again.");
+    },
+    { revalidate: EXAM_PAGES },
+  );
+}
+
+export async function updateClassTestAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER");
+      await updateClassTest(ctx, parseFormData(updateClassTestSchema, formData));
+      return successResult("Test updated.");
+    },
+    { revalidate: EXAM_PAGES },
+  );
+}
+
+export async function deleteClassTestAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("TEACHER");
+      const { assessmentId } = parseFormData(z.object({ assessmentId: id }), formData);
+      await deleteClassTest(ctx, assessmentId);
+      return successResult("Test deleted.");
+    },
+    { revalidate: EXAM_PAGES, redirectTo: "/teacher/exams" },
+  );
+}
+
+export async function adminDeleteClassTestAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const { assessmentId } = parseFormData(z.object({ assessmentId: id }), formData);
+      await deleteClassTest(ctx, assessmentId);
+      return successResult("Test deleted.");
+    },
+    { revalidate: EXAM_PAGES, redirectTo: "/school-admin/exams" },
+  );
+}
+
+const attentionSettingsSchema = z.object({
+  percent: z.coerce.number().int("Enter a whole number").min(1, "At least 1%").max(99, "At most 99%"),
+  repeat: z.coerce.number().int().min(1).max(3),
+});
+
+export async function saveAttentionSettingsAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      await saveAttentionSettings(ctx, parseFormData(attentionSettingsSchema, formData));
+      return successResult("Needs Attention rule saved.");
+    },
+    { revalidate: EXAM_PAGES },
   );
 }

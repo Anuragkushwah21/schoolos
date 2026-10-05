@@ -127,11 +127,12 @@ export async function admissionsFunnel(ctx: TenantContext, academicSessionId: st
     stages: [
       { key: "RECEIVED", label: "Received", value: received },
       { key: "UNDER_REVIEW", label: "Under review", value: count("UNDER_REVIEW") },
-      { key: "WAITLISTED", label: "Waitlisted", value: count("WAITLISTED") },
-      { key: "ACCEPTED", label: "Admitted", value: count("ACCEPTED") },
+      { key: "SHORTLISTED", label: "Shortlisted", value: count("SHORTLISTED") },
+      { key: "APPROVED", label: "Approved", value: count("APPROVED") },
+      { key: "CONVERTED", label: "Admitted", value: count("CONVERTED") },
     ],
     rejected: count("REJECTED"),
-    waiting: count("SUBMITTED") + count("UNDER_REVIEW"),
+    waiting: count("SUBMITTED") + count("UNDER_REVIEW") + count("SHORTLISTED") + count("APPROVED"),
   };
 }
 

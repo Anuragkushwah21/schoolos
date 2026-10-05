@@ -52,8 +52,14 @@ export default async function TransportPage() {
                   <li key={route.id} className="flex flex-wrap items-center gap-3 py-3">
                     <span className="min-w-0 flex-1">
                       <Link href={`/school-admin/transport/${route.id}` as Route} className="font-medium hover:underline">
+                        {route.code ? `${route.code} · ` : ""}
                         {route.name}
                       </Link>
+                      {route.startPoint || route.endPoint ? (
+                        <span className="text-muted-foreground block text-xs">
+                          {route.startPoint ?? "—"} → {route.endPoint ?? "—"}
+                        </span>
+                      ) : null}
                       <span className="text-muted-foreground block text-xs">
                         {route.vehicle ? route.vehicle.registrationNo : "No vehicle"} · {route.driver ? fullName(route.driver) : "No driver"} ·{" "}
                         {route.stops.length} stops
@@ -68,7 +74,7 @@ export default async function TransportPage() {
                 ))}
               </ul>
             ) : (
-              <EmptyState title="No bus routes yet.">Add a vehicle, then a route with its stops — students can then be assigned to it.</EmptyState>
+              <EmptyState title="No bus routes yet.">Create a route with its start and end points, then add a vehicle, a driver and (optionally) stops — students can then be assigned to it.</EmptyState>
             )}
           </CardContent>
         </Card>

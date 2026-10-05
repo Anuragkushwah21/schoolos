@@ -40,6 +40,13 @@ beforeAll(async () => {
 
 beforeEach(() => __resetAllRateLimits());
 
+/** Submitted → under review → shortlisted → approved: only then can a child be admitted. */
+async function approve(applicationId: string) {
+  for (const status of ["UNDER_REVIEW", "SHORTLISTED", "APPROVED"] as const) {
+    await setApplicationStatus(adminOf(schoolA), { applicationId, status, reviewNotes: null });
+  }
+}
+
 afterAll(async () => {
   await destroyIsolationFixture();
   await prisma.$disconnect();
@@ -48,7 +55,7 @@ afterAll(async () => {
 describe("public submission", () => {
   it("stores an application against the school in the slug, with a number", async () => {
     const { applicationNumber } = await submitApplication(slugA, application(), { ipAddress: "1.1.1.1" });
-    expect(applicationNumber).toMatch(/^APP-\d{4}-\d{4}$/);
+    expect(applicationNumber).toMatch(/^APP-\d{4}-\d{5}$/);
 
     const row = await prisma.admissionApplication.findFirstOrThrow({ where: { applicationNumber } });
     expect(row.schoolId).toBe(schoolA.schoolId);
@@ -92,6 +99,12 @@ describe("review", () => {
     );
     const app = await prisma.admissionApplication.findFirstOrThrow({ where: { applicationNumber } });
 
+    // Not before it is approved.
+    await expect(
+      acceptApplication(adminOf(schoolA), { applicationId: app.id, sectionId: schoolA.sectionId, rollNumber: null, admissionNumber: null, reviewNotes: null }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    await approve(app.id);
+
     const { studentId } = await acceptApplication(adminOf(schoolA), {
       applicationId: app.id,
       sectionId: schoolA.sectionId,
@@ -107,10 +120,11 @@ describe("review", () => {
     expect(student.firstName).toBe("Kiran");
     expect(student.schoolId).toBe(schoolA.schoolId);
     expect(student.enrollments[0]?.sectionId).toBe(schoolA.sectionId);
-    expect(student.parents[0]?.parent.phone).toBe("+91 93333 44444");
+    // Typed as "+91 93333 44444"; stored in the one standard form.
+    expect(student.parents[0]?.parent.phone).toBe("+91 9333344444");
 
     const decided = await prisma.admissionApplication.findUniqueOrThrow({ where: { id: app.id } });
-    expect(decided.status).toBe("ACCEPTED");
+    expect(decided.status).toBe("CONVERTED");
     expect(decided.createdStudentId).toBe(studentId);
 
     // A second decision on the same application is refused.
@@ -126,6 +140,7 @@ describe("review", () => {
       { ipAddress: "1.1.2.2" },
     );
     const app = await prisma.admissionApplication.findFirstOrThrow({ where: { applicationNumber } });
+    await approve(app.id);
 
     const { studentId } = await acceptApplication(adminOf(schoolA), {
       applicationId: app.id,
@@ -136,7 +151,7 @@ describe("review", () => {
     });
 
     const parents = await prisma.parent.findMany({
-      where: { schoolId: schoolA.schoolId, phone: "+91 93333 44444" },
+      where: { schoolId: schoolA.schoolId, phone: "+91 9333344444" },
       include: { children: true },
     });
     expect(parents).toHaveLength(1);
@@ -165,6 +180,7 @@ describe("review", () => {
       ipAddress: "1.1.2.3",
     });
     const app = await prisma.admissionApplication.findFirstOrThrow({ where: { applicationNumber } });
+    await approve(app.id);
 
     await expect(
       acceptApplication(adminOf(schoolA), {

@@ -5,7 +5,7 @@ import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
 import type { TenantContext } from "@/server/auth/current-user";
 import { addDays, today } from "@/lib/dates";
-import { assertAdminOrStaffPermission, requireStaffSelf } from "@/server/auth/staff-access";
+import { assertAdminOrStaffPermission, requireStaffSelf, staffHolds } from "@/server/auth/staff-access";
 
 /**
  * Read-only views for non-teaching staff who have been granted a module.
@@ -18,7 +18,9 @@ import { assertAdminOrStaffPermission, requireStaffSelf } from "@/server/auth/st
 export const DIRECTORY_PAGE_SIZE = 50;
 
 export async function staffStudentDirectory(ctx: TenantContext, filters: { q?: string; sectionId?: string; page?: number } = {}) {
-  await assertAdminOrStaffPermission(ctx, "VIEW_STUDENTS");
+  await assertAdminOrStaffPermission(ctx, "students.directory");
+  // Guardian name and phone need their own permission; basic details do not.
+  const withContacts = ctx.user.role === "SCHOOL_ADMIN" || (await staffHolds(ctx, "students.contact"));
   const page = Math.max(1, filters.page ?? 1);
   const where: Prisma.StudentWhereInput = {
     status: "ACTIVE",
@@ -50,7 +52,7 @@ export async function staffStudentDirectory(ctx: TenantContext, filters: { q?: s
         },
         parents: {
           orderBy: { isPrimary: "desc" },
-          take: 1,
+          take: withContacts ? 1 : 0,
           select: { relationship: true, parent: { select: { firstName: true, lastName: true, phone: true } } },
         },
       },
@@ -72,6 +74,7 @@ export async function staffStudentDirectory(ctx: TenantContext, filters: { q?: s
     }),
     total,
     page,
+    withContacts,
     pageCount: Math.max(1, Math.ceil(total / DIRECTORY_PAGE_SIZE)),
   };
 }
@@ -89,4 +92,31 @@ export async function myStaffAttendance(ctx: TenantContext) {
   const counts = { PRESENT: 0, LATE: 0, ABSENT: 0, ON_LEAVE: 0 };
   for (const row of rows) counts[row.status] += 1;
   return { from, to, rows, counts };
+}
+
+/**
+ * The fee desk's day for a staff member with fees.view or fees.collect: receipts taken
+ * today across the school and by this person, voided receipts left out.
+ */
+export async function feeDeskToday(ctx: TenantContext) {
+  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect"]);
+  const date = today();
+  const where = { paidOn: date, voidedAt: null };
+  const [all, mine, recent] = await Promise.all([
+    ctx.db.feePayment.aggregate({ where, _sum: { amountMinor: true }, _count: true }),
+    ctx.db.feePayment.aggregate({ where: { ...where, recordedById: ctx.user.id }, _sum: { amountMinor: true }, _count: true }),
+    ctx.db.feePayment.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: { id: true, receiptNo: true, amountMinor: true, method: true, student: { select: { firstName: true, lastName: true } } },
+    }),
+  ]);
+  return {
+    receipts: all._count,
+    totalMinor: all._sum.amountMinor ?? 0,
+    myReceipts: mine._count,
+    myTotalMinor: mine._sum.amountMinor ?? 0,
+    recent: recent.map((row) => ({ id: row.id, receiptNo: row.receiptNo, amountMinor: row.amountMinor, method: row.method, student: fullName(row.student) })),
+  };
 }

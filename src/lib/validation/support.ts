@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { id, optionalId, optionalText, requiredText } from "@/lib/validation/common";
+import { id, optionalId, optionalText, requiredDate, requiredText, requiredTime } from "@/lib/validation/common";
 
 /**
  * Student support — shared by forms, Server Actions and the API.
@@ -70,8 +70,10 @@ export const supportFollowUpSchema = z
     status: z.enum(SUPPORT_STATUSES).optional(),
     priority: z.enum(SUPPORT_PRIORITIES).optional(),
     action: z.enum(SUPPORT_ACTIONS).optional(),
+    /** A remark shared with the family. Blank leaves the current one as it is. */
+    parentRemark: optionalText(500),
   })
-  .refine((data) => Boolean(data.note || data.status || data.priority || data.action), { message: "Write a follow-up or choose a change", path: ["note"] });
+  .refine((data) => Boolean(data.note || data.status || data.priority || data.action || data.parentRemark), { message: "Write a follow-up or choose a change", path: ["note"] });
 export type SupportFollowUpInput = z.infer<typeof supportFollowUpSchema>;
 
 /**
@@ -121,3 +123,15 @@ export const concernAssignSchema = z.object({
   teacherId: id,
 });
 export type ConcernAssignInput = z.infer<typeof concernAssignSchema>;
+
+/** A teacher (or the office) books an extra class for one support record. */
+export const extraClassSchema = z
+  .object({
+    supportId: id,
+    date: requiredDate("the date of the extra class"),
+    startMinute: requiredTime("a start time"),
+    endMinute: requiredTime("an end time"),
+    location: optionalText(120),
+  })
+  .refine((data) => data.endMinute > data.startMinute, { message: "The class must end after it starts", path: ["endMinute"] });
+export type ExtraClassInput = z.infer<typeof extraClassSchema>;

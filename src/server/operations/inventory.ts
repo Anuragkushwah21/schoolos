@@ -8,6 +8,7 @@ import { humanize } from "@/lib/format";
 import { ASSET_CATEGORIES, ASSET_CONDITIONS, ASSET_STATUSES, type AssetInput } from "@/lib/validation/operations";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { isUniqueViolation } from "@/server/db/errors";
 import type { ReportTable } from "@/server/reports/exports";
@@ -38,7 +39,7 @@ export async function listAssets(
   ctx: TenantContext,
   filters: { q?: string; category?: AssetCategory; status?: AssetStatus; location?: string } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "inventory.view");
   const where: Prisma.AssetWhereInput = {
     ...(filters.category ? { category: filters.category } : {}),
     ...(filters.status ? { status: filters.status } : {}),
@@ -62,7 +63,7 @@ export async function assetLocations(ctx: TenantContext): Promise<string[]> {
 }
 
 export async function getAsset(ctx: TenantContext, assetId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "inventory.view");
   const asset = await ctx.db.asset.findFirst({
     where: { id: assetId },
     select: {
@@ -80,7 +81,7 @@ export async function getAsset(ctx: TenantContext, assetId: string) {
 
 /** Create or update an asset, writing a history event for what changed. */
 export async function saveAsset(ctx: TenantContext, input: AssetInput): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "inventory.manage");
   const { assetId, ...data } = input;
   const before = assetId
     ? await ctx.db.asset.findFirst({ where: { id: assetId }, select: { status: true, assignedTo: true, location: true, condition: true } })
@@ -128,7 +129,7 @@ export async function saveAsset(ctx: TenantContext, input: AssetInput): Promise<
 
 /** Set the status of many assets at once, with a history event for each. */
 export async function bulkAssetStatus(ctx: TenantContext, input: { assetIds: string[]; status: AssetStatus; note: string | null }): Promise<{ updated: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "inventory.manage");
   const ids = [...new Set(input.assetIds)];
   const assets = await ctx.db.asset.findMany({ where: { id: { in: ids } }, select: { id: true, status: true } });
   if (assets.length !== ids.length) throw new NotFoundError("An asset was not found.");
@@ -248,7 +249,7 @@ export async function assetsTable(ctx: TenantContext): Promise<ReportTable> {
 
 /** Counts by status and by category, for the inventory summary. */
 export async function assetSummary(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "inventory.view");
   const [byStatus, byCategory] = await Promise.all([
     ctx.db.asset.groupBy({ by: ["status"], _sum: { quantity: true } }),
     ctx.db.asset.groupBy({ by: ["category"], where: { status: { notIn: ["DISPOSED", "LOST"] } }, _sum: { quantity: true } }),

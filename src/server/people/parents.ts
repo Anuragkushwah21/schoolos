@@ -1,7 +1,11 @@
 import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
-import { NotFoundError } from "@/lib/errors";
+import { ConflictError, NotFoundError } from "@/lib/errors";
+import { today } from "@/lib/dates";
+import { recordAudit } from "@/server/audit/log";
+import { invalidateAllSessionsForUser } from "@/server/auth/session";
+import { resendAccountEmail } from "@/server/auth/account-links";
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
 import { CURRENT_STUDENT, loginState } from "@/lib/validation/lifecycle";
@@ -32,7 +36,7 @@ export const PARENT_PAGE_SIZE = 25;
  */
 export async function listParents(
   ctx: TenantContext,
-  filters: { q?: string; page?: number; standing?: "ACTIVE" | "NO_ACTIVE_CHILDREN" } = {},
+  filters: { q?: string; page?: number; standing?: "ACTIVE" | "NO_ACTIVE_CHILDREN" | "ARCHIVED" } = {},
 ) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const page = Math.max(1, filters.page ?? 1);
@@ -72,7 +76,9 @@ export async function listParents(
         ],
       }
     : {};
-  const where: Prisma.ParentWhereInput = { AND: [standing, search] };
+  // Archived parents are off the list unless asked for.
+  const archived: Prisma.ParentWhereInput = filters.standing === "ARCHIVED" ? { archivedAt: { not: null } } : { archivedAt: null };
+  const where: Prisma.ParentWhereInput = { AND: [standing, search, archived] };
 
   const [rows, total] = await Promise.all([
     ctx.db.parent.findMany({
@@ -148,6 +154,12 @@ export async function getParentWithChildren(ctx: TenantContext, parentId: string
       email: true,
       occupation: true,
       addressLine: true,
+      alternatePhone: true,
+      city: true,
+      state: true,
+      postalCode: true,
+      selfUpdatedAt: true,
+      archivedAt: true,
       user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, activatedAt: true } },
       children: {
         orderBy: { isPrimary: "desc" },
@@ -188,6 +200,13 @@ export async function getParentWithChildren(ctx: TenantContext, parentId: string
     ...shapeParent(parent),
     occupation: parent.occupation,
     addressLine: parent.addressLine,
+    alternatePhone: parent.alternatePhone,
+    city: parent.city,
+    state: parent.state,
+    postalCode: parent.postalCode,
+    /** When the parent last corrected their own details from My account. */
+    selfUpdatedAt: parent.selfUpdatedAt,
+    archivedAt: parent.archivedAt,
     loginEmail: parent.user?.email ?? null,
     /** The link row id, so the dialog can offer to unlink one child. */
     links: parent.children.map((link) => ({
@@ -264,15 +283,19 @@ export async function parentOptions(ctx: TenantContext, q?: string) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
   const rows = await ctx.db.parent.findMany({
-    where: q
-      ? {
-          OR: [
-            { firstName: { contains: q, mode: "insensitive" } },
-            { lastName: { contains: q, mode: "insensitive" } },
-            { phone: { contains: q } },
-          ],
-        }
-      : {},
+    where: {
+      // An archived parent is history, not someone to link a child to.
+      archivedAt: null,
+      ...(q
+        ? {
+            OR: [
+              { firstName: { contains: q, mode: "insensitive" } },
+              { lastName: { contains: q, mode: "insensitive" } },
+              { phone: { contains: q } },
+            ],
+          }
+        : {}),
+    },
     orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     take: 200,
     select: {
@@ -292,4 +315,98 @@ export async function parentOptions(ctx: TenantContext, q?: string) {
         ? ` · ${row._count.children} ${row._count.children === 1 ? "child" : "children"}`
         : ""),
   }));
+}
+
+// -----------------------------------------------------------------------------
+// Archive
+// -----------------------------------------------------------------------------
+
+/**
+ * Archive a parent whose children have all left: the record stays (their
+ * children's history points at it), their login closes, and they drop off
+ * the lists. A parent of a current student cannot be archived — that child
+ * would lose their guardian. Restoring brings them back to the list; the
+ * login is reopened separately, by choice.
+ */
+export async function setParentArchived(ctx: TenantContext, parentId: string, archived: boolean, reason: string | null): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const parent = await ctx.db.parent.findFirst({
+    where: { id: parentId },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      archivedAt: true,
+      user: { select: { id: true, isActive: true } },
+      children: { select: { student: { select: { firstName: true, status: true } } } },
+    },
+  });
+  if (!parent) throw new NotFoundError("That parent was not found.");
+  if (archived === Boolean(parent.archivedAt)) return;
+  const current = parent.children.filter((link) => (CURRENT_STUDENT as readonly string[]).includes(link.student.status));
+  if (archived && current.length) {
+    throw new ConflictError(`${fullName(parent)} is the guardian of ${current.map((link) => link.student.firstName).join(", ")}, still at the school. Unlink or update them first.`);
+  }
+  await ctx.db.$transaction(async (tx) => {
+    await tx.parent.updateMany({ where: { id: parent.id }, data: { archivedAt: archived ? new Date() : null } });
+    const base = { schoolId: ctx.schoolId, person: "PARENT" as const, parentId: parent.id, effectiveDate: today(), changedById: ctx.user.id };
+    await tx.statusChange.create({ data: { ...base, kind: "STATUS", fromValue: archived ? "ACTIVE" : "ARCHIVED", toValue: archived ? "ARCHIVED" : "ACTIVE", reason } });
+    if (archived && parent.user?.isActive) {
+      await tx.user.updateMany({ where: { id: parent.user.id }, data: { isActive: false, disabledReason: "STATUS", disabledAt: new Date() } });
+      await tx.statusChange.create({ data: { ...base, kind: "LOGIN", fromValue: "ACTIVE", toValue: "LOCKED", reason: "Parent archived" } });
+    }
+  });
+  if (archived && parent.user?.isActive) await invalidateAllSessionsForUser(parent.user.id);
+  await recordAudit({
+    action: archived ? "PARENT_ARCHIVED" : "PARENT_RESTORED",
+    entityType: "Parent",
+    entityId: parent.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `${fullName(parent)} ${archived ? "archived" : "restored"}${reason ? `: ${reason}` : ""}.`,
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Bulk: resend activation links
+// -----------------------------------------------------------------------------
+
+/** Parents whose login was made but never activated — the ones a resend is for. */
+export async function parentsAwaitingActivation(ctx: TenantContext) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  return ctx.db.parent.findMany({
+    where: { archivedAt: null, user: { activatedAt: null, isActive: true } },
+    select: { id: true, firstName: true, lastName: true, user: { select: { id: true, email: true } } },
+  });
+}
+
+/**
+ * Resend the activation link to every parent who has not activated yet
+ * (at most 200 at a time). Each goes through the same single resend the
+ * parent's page uses — one fresh link each, the old one stops working.
+ */
+export async function resendParentActivations(ctx: TenantContext): Promise<{ sent: number; failed: string[] }> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const parents = (await parentsAwaitingActivation(ctx)).slice(0, 200);
+  let sent = 0;
+  const failed: string[] = [];
+  for (const parent of parents) {
+    if (!parent.user) continue;
+    try {
+      const result = await resendAccountEmail(ctx, parent.user.id);
+      if (result.delivered) sent += 1;
+      else failed.push(fullName(parent));
+    } catch {
+      failed.push(fullName(parent));
+    }
+  }
+  await recordAudit({
+    action: "ACTIVATION_RESENT",
+    entityType: "School",
+    entityId: ctx.schoolId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Activation links resent to ${sent} parent${sent === 1 ? "" : "s"}${failed.length ? `; ${failed.length} could not be sent` : ""}.`,
+  });
+  return { sent, failed };
 }

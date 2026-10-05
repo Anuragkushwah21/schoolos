@@ -15,7 +15,7 @@ export const metadata: Metadata = { title: "Transport" };
 /** Read-only routes and stops for staff granted VIEW_TRANSPORT. */
 export default async function StaffTransportPage() {
   const ctx = await requireTenant("NON_TEACHING_STAFF");
-  await requireStaffModule(ctx, "VIEW_TRANSPORT");
+  await requireStaffModule(ctx, "transport.routes");
   const routes = await listRoutes(ctx);
 
   return (

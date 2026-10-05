@@ -32,7 +32,7 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
   return (
     <>
       <PageHeader
-        back={{ href: "/school-admin/exams", label: "Examinations" }}
+        back={{ href: "/school-admin/exams/term", label: "Term exams" }}
         title={`${exam.name} · ${exam.sectionLabel}`}
         description={
           <span className="flex flex-wrap items-center gap-2">

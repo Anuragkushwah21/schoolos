@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { spanDays } from "@/lib/calendar";
-import { id, optionalDate, optionalText, requiredDate, requiredInt, requiredText } from "@/lib/validation/common";
+import { id, optionalDate, optionalId, optionalText, requiredDate, requiredInt, requiredText } from "@/lib/validation/common";
 
 /**
  * Exams and marks. Shared by the forms, the server actions and the API.
@@ -98,6 +98,9 @@ export const classTestSchema = z
   .object({
     sectionId: id,
     subjectId: id,
+    /** Blank = the whole section; otherwise the stream the teacher is assigned to teach. */
+    streamId: optionalId,
+    description: optionalText(500),
     name: requiredText("a name, e.g. Unit Test 2", 80),
     date: requiredDate("the date of the test"),
     maxMarks: requiredInt(1, 1000),
@@ -112,6 +115,21 @@ export const classTestSchema = z
   });
 
 export type ClassTestInput = z.infer<typeof classTestSchema>;
+
+/** Editing a test: its subject, class, section and stream stay as set. */
+export const updateClassTestSchema = z.object({
+  assessmentId: id,
+  name: requiredText("a name, e.g. Unit Test 2", 80),
+  date: requiredDate("the date of the test"),
+  maxMarks: requiredInt(1, 1000),
+  description: optionalText(500),
+});
+export type UpdateClassTestInput = z.infer<typeof updateClassTestSchema>;
+
+export const reopenMarksSchema = z.object({
+  assessmentId: id,
+  reason: requiredText("why the marks need correcting", 300),
+});
 
 export type MarkEntry = { studentId: string; marks: number | null; absent: boolean; remark: string | null };
 

@@ -3,23 +3,31 @@ import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/shared/page-header";
 import { SetupNotice } from "@/components/shared/setup-notice";
+import Link from "next/link";
+
+import { Button } from "@/components/ui/button";
 import { FeeDesk } from "@/features/finance/fee-desk";
+import { StudentFeeAccount } from "@/features/finance/family-views";
+import { previousDues } from "@/server/finance/carry-forward";
 import { param } from "@/lib/search-params";
 import { getCurrentSession } from "@/server/academics/structure";
 import { requireTenant } from "@/server/auth/current-user";
-import { requireStaffModule } from "@/server/auth/staff-access";
+import { requireStaffModule, staffHolds } from "@/server/auth/staff-access";
 import { listFeePositions, readStudentFees, suggestReceiptNo } from "@/server/finance/fees";
 
 export const metadata: Metadata = { title: "Collect fees" };
 
 /**
- * The fee desk for a staff member the School Admin allowed to collect fees.
+ * The fee desk for staff with "Collect fees" — or, with "Fee dashboard" only,
+ * the same screen read-only.
  * Taking payments and printing receipts only — charging fees, voiding
  * receipts, expenses and salaries stay with the School Admin.
  */
 export default async function StaffFeesPage(props: PageProps<"/staff/fees">) {
   const ctx = await requireTenant("NON_TEACHING_STAFF");
-  await requireStaffModule(ctx, "COLLECT_FEES");
+  await requireStaffModule(ctx, ["fees.view", "fees.collect"]);
+  // "fees.view" alone: the same desk, read-only — find a student, see what they owe.
+  const canCollect = await staffHolds(ctx, "fees.collect");
   const session = await getCurrentSession(ctx);
   if (!session) return <SetupNotice title="Collect fees" need="session" />;
 
@@ -30,7 +38,7 @@ export default async function StaffFeesPage(props: PageProps<"/staff/fees">) {
 
   const [positions, receiptNo, justRecorded] = await Promise.all([
     listFeePositions(ctx, { q }),
-    suggestReceiptNo(ctx),
+    canCollect ? suggestReceiptNo(ctx) : Promise.resolve(""),
     receiptId
       ? ctx.db.feePayment.findFirst({ where: { id: receiptId }, select: { id: true, receiptNo: true, amountMinor: true } })
       : Promise.resolve(null),
@@ -41,8 +49,20 @@ export default async function StaffFeesPage(props: PageProps<"/staff/fees">) {
 
   return (
     <>
-      <PageHeader icon={WalletIcon} tone="orange" title="Collect fees" description={`${session.name} · take a payment and print the receipt`} />
-      <div className="max-w-2xl">
+      <PageHeader
+        icon={WalletIcon}
+        tone="orange"
+        title={canCollect ? "Collect fees" : "Fees"}
+        description={canCollect ? `${session.name} · take a payment and print the receipt` : `${session.name} · pending fees and payment history`}
+        actions={
+          canCollect ? (
+            <Button asChild variant="outline">
+              <Link href="/staff/fees/family">Family payment</Link>
+            </Button>
+          ) : undefined
+        }
+      />
+      <div className="flex max-w-2xl flex-col gap-6">
         <FeeDesk
           basePath="/staff/fees"
           q={q}
@@ -51,7 +71,9 @@ export default async function StaffFeesPage(props: PageProps<"/staff/fees">) {
           account={account}
           receiptNo={receiptNo}
           justRecorded={justRecorded}
+          canCollect={canCollect}
         />
+        {selected && account ? <StudentFeeAccount studentId={selected.studentId} account={account} previous={await previousDues(ctx, selected.studentId)} canManage={false} /> : null}
       </div>
     </>
   );

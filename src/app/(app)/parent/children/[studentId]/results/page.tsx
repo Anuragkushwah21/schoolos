@@ -57,7 +57,7 @@ export default async function ChildResultsPage(
     <>
       <PageHeader
         back={{ href: "/parent/dashboard", label: "Dashboard" }}
-        title={`${child.student.name} — tests & results`}
+        title={`${child.student.name} — results`}
         description={`${child.placement.sectionLabel} · ${child.placement.sessionName}`}
       />
       <ChildTabs studentId={studentId} active="results" />
@@ -139,39 +139,35 @@ export default async function ChildResultsPage(
 
             <Card>
               <CardHeader>
-                <CardTitle>Every test</CardTitle>
-                <CardDescription>Newest first.</CardDescription>
+                <CardTitle>Results</CardTitle>
+                <CardDescription>Submitted tests and published exams, newest first.</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Test</TableHead>
                         <TableHead>Subject</TableHead>
+                        <TableHead>Test</TableHead>
+                        <TableHead className="w-20 text-right">Marks</TableHead>
+                        <TableHead className="w-24 text-right">Max marks</TableHead>
+                        <TableHead className="w-24 text-right">Percentage</TableHead>
                         <TableHead className="w-28">Date</TableHead>
-                        <TableHead className="w-24 text-right">Marks</TableHead>
-                        <TableHead className="w-20 text-right">Percent</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {entries.map((entry) => (
                         <TableRow key={entry.id}>
-                          <TableCell className="font-medium">{entry.name}</TableCell>
-                          <TableCell>{entry.subject}</TableCell>
-                          <TableCell className="text-muted-foreground tabular-nums">
-                            {formatDate(entry.date)}
-                          </TableCell>
+                          <TableCell className="font-medium">{entry.subject}</TableCell>
+                          <TableCell>{entry.name}</TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {entry.sat ? (
-                              `${entry.marksObtained}/${entry.maxMarks}`
-                            ) : (
-                              <span className="text-muted-foreground">Not sat</span>
-                            )}
+                            {entry.sat ? entry.marksObtained : <span className="text-muted-foreground">Absent</span>}
                           </TableCell>
+                          <TableCell className="text-right tabular-nums">{entry.maxMarks}</TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {entry.share === null ? "—" : `${Math.round(entry.share * 100)}%`}
+                            {entry.share === null ? "—" : `${Math.round(entry.share * 1000) / 10}%`}
                           </TableCell>
+                          <TableCell className="text-muted-foreground tabular-nums">{formatDate(entry.date)}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

@@ -22,13 +22,16 @@ import {
 import { portalAccessSchema } from "@/lib/validation/school";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import { bulkAssetStatus, importAssets, saveAsset } from "@/server/operations/inventory";
-import { importBooks, issueBook, markFinePaid, renewLoan, returnBook, saveBook, saveLibraryRules } from "@/server/operations/library";
+import { importBooks, issueBook, markCopyCondition, markFinePaid, renewLoan, restoreCopy, returnBook, saveBook, saveLibraryRules } from "@/server/operations/library";
 import { grantStaffPortal, importStaff, saveStaffDetails } from "@/server/operations/staff";
 import { inviteMessage } from "@/server/auth/account-links";
 import { emailMoveMessage } from "@/server/people/accounts";
 import {
   addStop,
+  assignRouteCrew,
   assignTransport,
+  moveRouteCrew,
+  removeRouteCrew,
   importTransport,
   removeStop,
   removeTransport,
@@ -112,14 +115,40 @@ export async function saveRouteAction(_p: Result, formData: FormData): Promise<R
   return performAction(async () => {
     await saveRoute(await admin(), parseFormData(routeSchema, formData));
     return successResult("Route saved.");
-  }, { revalidate: PAGES });
+  }, { revalidate: [...PAGES, "/staff"] });
 }
 
 export async function addStopAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    await addStop(await admin(), parseFormData(stopSchema, formData));
-    return successResult("Stop added.");
-  }, { revalidate: PAGES });
+    const input = parseFormData(stopSchema, formData);
+    await addStop(await admin(), input);
+    return successResult(input.stopId ? "Stop saved." : "Stop added.");
+  }, { revalidate: [...PAGES, "/staff"] });
+}
+
+const crewSchema = z.object({ routeId: id, staffId: id, as: z.enum(["DRIVER", "ATTENDANT"]) });
+
+/** From a driver's or attendant's profile: put them on a route (replacing whoever had that seat). */
+export async function assignRouteCrewAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(async () => {
+    const { replaced } = await assignRouteCrew(await admin(), parseFormData(crewSchema, formData));
+    return successResult(replaced ? `Assigned. ${replaced} is no longer on that route.` : "Assigned to the route.");
+  }, { revalidate: [...PAGES, "/staff"] });
+}
+
+export async function removeRouteCrewAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(async () => {
+    await removeRouteCrew(await admin(), parseFormData(z.object({ routeId: id, staffId: id }), formData));
+    return successResult("Taken off the route.");
+  }, { revalidate: [...PAGES, "/staff"] });
+}
+
+/** Move a driver or attendant to another route in one step. */
+export async function moveRouteCrewAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(async () => {
+    const { replaced } = await moveRouteCrew(await admin(), parseFormData(z.object({ staffId: id, fromRouteId: id, toRouteId: id }), formData));
+    return successResult(replaced ? `Moved. ${replaced} is no longer on the new route.` : "Moved to the new route.");
+  }, { revalidate: [...PAGES, "/staff"] });
 }
 
 export async function removeStopAction(_p: Result, formData: FormData): Promise<Result> {
@@ -215,16 +244,17 @@ export async function importBooksAction(_p: ImportResult, formData: FormData): P
 
 export async function saveAssetAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    await saveAsset(await admin(), parseFormData(assetSchema, formData));
+    // The service checks "Manage inventory" for staff.
+    await saveAsset(await requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF"), parseFormData(assetSchema, formData));
     return successResult("Asset saved.");
-  }, { revalidate: PAGES });
+  }, { revalidate: [...PAGES, "/staff"] });
 }
 
 export async function bulkAssetStatusAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    const { updated } = await bulkAssetStatus(await admin(), parseFormData(assetStatusSchema, formData));
+    const { updated } = await bulkAssetStatus(await requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF"), parseFormData(assetStatusSchema, formData));
     return successResult(`${updated} asset${updated === 1 ? "" : "s"} updated.`);
-  }, { revalidate: PAGES });
+  }, { revalidate: [...PAGES, "/staff"] });
 }
 
 export async function importAssetsAction(_p: ImportResult, formData: FormData): Promise<ImportResult> {
@@ -235,4 +265,28 @@ export async function importAssetsAction(_p: ImportResult, formData: FormData): 
       return { errors: result.errors, message: `${result.created} assets added.` };
     });
   }, { revalidate: PAGES });
+}
+
+const copyConditionSchema = z.object({
+  copyId: id,
+  condition: z.enum(["LOST", "DAMAGED"], { error: "Choose lost or damaged" }),
+  note: z.string().trim().min(3, "Say what happened").max(300),
+  /** Optional replacement charge in rupees, for a lost book on loan. */
+  chargeRupees: z.preprocess((value) => (value === "" || value === null ? undefined : value), z.coerce.number().int().min(0).max(100000).optional()),
+});
+
+export async function markCopyConditionAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(async () => {
+    const input = parseFormData(copyConditionSchema, formData);
+    await markCopyCondition(await librarian(), { copyId: input.copyId, condition: input.condition, note: input.note, chargeMinor: input.chargeRupees ? input.chargeRupees * 100 : null });
+    return successResult(input.condition === "LOST" ? "Copy marked lost and taken out of stock." : "Copy marked damaged and taken out of stock.");
+  }, { revalidate: [...PAGES, "/staff"] });
+}
+
+export async function restoreCopyAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(async () => {
+    const { copyId } = parseFormData(z.object({ copyId: id }), formData);
+    await restoreCopy(await librarian(), copyId);
+    return successResult("Copy back in stock.");
+  }, { revalidate: [...PAGES, "/staff"] });
 }

@@ -21,7 +21,7 @@ import { listExams } from "@/server/exams/service";
 
 export const metadata: Metadata = { title: "Examinations" };
 
-export default async function ExamsPage(props: PageProps<"/school-admin/exams">) {
+export default async function ExamsPage(props: PageProps<"/school-admin/exams/term">) {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const session = await getCurrentSession(ctx);
   if (!session) return <SetupNotice title="Examinations" need="session" />;
@@ -40,7 +40,7 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams">)
   return (
     <>
       <PageHeader icon={GraduationCapIcon} tone="purple"
-        title="Examinations"
+        title="Term exams"
         description={`${session.name} · results stay hidden from students and parents until published.`}
         actions={
           <Button asChild>
@@ -49,7 +49,7 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams">)
         }
       />
       <FilterBar
-        action="/school-admin/exams"
+        action="/school-admin/exams/term"
         selects={[
           { name: "section", label: "Section", defaultValue: sectionId, allLabel: "All sections", options: sections },
           {

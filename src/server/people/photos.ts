@@ -4,10 +4,11 @@ import type { PhotoOwner } from "@/generated/prisma/enums";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { recordAudit } from "@/server/audit/log";
 import type { TenantContext } from "@/server/auth/current-user";
-import { staffPermissions } from "@/server/auth/staff-access";
+import { staffHolds } from "@/server/auth/staff-access";
 import type { SessionUser } from "@/server/auth/session";
 import { canAccessSection } from "@/server/auth/teacher-access";
 import { forSchool } from "@/server/tenancy/scope";
+import { studentOnMyRoutes } from "@/server/transport/driver";
 import { deleteStoredFile, readStoredFile, storeImage, validateImage } from "@/server/storage/files";
 
 /**
@@ -142,8 +143,9 @@ async function canViewPhoto(ctx: TenantContext, owner: PhotoTarget): Promise<boo
     return placement ? canAccessSection(ctx, placement.sectionId) : false;
   }
   if (ctx.user.role === "NON_TEACHING_STAFF") {
-    const held = await staffPermissions(ctx);
-    return held.includes("VIEW_STUDENTS") || held.includes("MANAGE_LIBRARY");
+    // The directory, or the issue desk confirming a borrower; a driver only for students on their route.
+    if (await staffHolds(ctx, ["students.directory", "library.circulation"])) return true;
+    return (await staffHolds(ctx, "transport.riders")) && (await studentOnMyRoutes(ctx, owner.id));
   }
   return false;
 }

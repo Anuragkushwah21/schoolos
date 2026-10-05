@@ -134,6 +134,8 @@ beforeAll(async () => {
       name: "Unit test 1",
       date: addDays(today(), -3),
       maxMarks: 25,
+      // Submitted by the teacher, so families see it.
+      marksStatus: "SUBMITTED",
     },
   });
   assessmentId = assessment.id;

@@ -3,23 +3,21 @@
 import { useState } from "react";
 
 import { ActionForm } from "@/components/forms/action-form";
-import { CheckboxField, FieldRow, SelectField, SubmitButton, TextareaField, TextField } from "@/components/forms/fields";
+import { CheckboxField, FieldRow, PhoneField, SelectField, SubmitButton, TextField, TextareaField } from "@/components/forms/fields";
 import { humanize } from "@/lib/format";
 import {
   ASSET_CATEGORIES,
   ASSET_CONDITIONS,
   ASSET_STATUSES,
   BORROWER_KINDS,
-  STAFF_PERMISSION_LABEL,
-  STAFF_PERMISSIONS,
-  STAFF_ROLE_DEFAULTS,
-  STAFF_ROLES,
   VEHICLE_STATUSES,
   VEHICLE_TYPES,
 } from "@/lib/validation/operations";
 
 import {
   addStopAction,
+  assignRouteCrewAction,
+  moveRouteCrewAction,
   grantStaffPortalAction,
   issueBookAction,
   renewLoanAction,
@@ -37,15 +35,21 @@ const opts = (values: readonly string[]) => values.map((value) => ({ value, labe
 
 // --- staff -----------------------------------------------------------------------
 
+/**
+ * A staff member's details and role. What they may do starts from the role's
+ * default permissions and is changed on their profile's Access tab — not
+ * here, so this form stays short.
+ */
 export function StaffForm({
   staff,
+  roles,
 }: {
   staff?: {
     id: string;
     employeeId: string;
     firstName: string;
     lastName: string;
-    role: string;
+    roleProfileId: string | null;
     designation: string | null;
     department: string | null;
     phone: string | null;
@@ -53,17 +57,10 @@ export function StaffForm({
     joiningDate: string;
     status: string;
     notes: string | null;
-    permissions: string[];
   };
+  /** Role profiles: built-in and the school's own. */
+  roles: Array<{ value: string; label: string }>;
 }) {
-  const [granted, setGranted] = useState<string[]>(staff?.permissions ?? []);
-  // A new staff member's boxes follow the designation until someone ticks by
-  // hand; an existing one's are never changed by switching the designation.
-  const [touched, setTouched] = useState(Boolean(staff));
-  function onRole(role: string) {
-    if (touched) return;
-    setGranted([...(STAFF_ROLE_DEFAULTS[role as (typeof STAFF_ROLES)[number]] ?? [])]);
-  }
   return (
     <ActionForm action={saveStaffAction} resetOnSuccess={!staff} className="max-w-3xl">
       {staff ? <input type="hidden" name="staffId" value={staff.id} /> : null}
@@ -74,13 +71,12 @@ export function StaffForm({
       <FieldRow>
         <TextField name="employeeId" label="Employee ID" defaultValue={staff?.employeeId} required />
         <SelectField
-          name="role"
-          label="Designation"
-          options={opts(STAFF_ROLES)}
-          defaultValue={staff?.role}
+          name="roleProfileId"
+          label="Role"
+          options={roles}
+          defaultValue={staff?.roleProfileId ?? undefined}
           placeholder="Choose"
-          hint="A designation grants no access by itself — the ticks below do."
-          onChange={(event) => onRole(event.target.value)}
+          hint={staff ? "Changing role keeps their permissions, minus anything the new role can never have." : "They start with this role's default permissions."}
           required
         />
       </FieldRow>
@@ -89,7 +85,7 @@ export function StaffForm({
         <TextField name="department" label="Department" placeholder="Accounts" defaultValue={staff?.department ?? ""} />
       </FieldRow>
       <FieldRow>
-        <TextField name="phone" label="Mobile" defaultValue={staff?.phone ?? ""} />
+        <PhoneField name="phone" label="Mobile" defaultValue={staff?.phone ?? ""} />
         <TextField name="email" label="Email" type="email" defaultValue={staff?.email ?? ""} />
       </FieldRow>
       <FieldRow>
@@ -98,37 +94,6 @@ export function StaffForm({
         <div />
       </FieldRow>
       <TextareaField name="notes" label="Notes" rows={2} defaultValue={staff?.notes ?? ""} />
-      <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium">Portal access</legend>
-        <p className="text-muted-foreground text-xs">
-          With a login, every staff member sees their profile, leave, staff notices and meetings they are invited to. Tick anything else they may open. The usual ones for the designation are suggested.
-        </p>
-        {/* Sent even with nothing ticked, so removing the last permission is saved. */}
-        <input type="hidden" name="permissions" value="" />
-        <div className="flex flex-col gap-2 rounded-lg border p-3">
-          {STAFF_PERMISSIONS.map((permission) => (
-            <label key={permission} className="flex items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                name="permissions"
-                value={permission}
-                checked={granted.includes(permission)}
-                onChange={(event) => {
-                  setTouched(true);
-                  setGranted((current) =>
-                    event.target.checked ? [...current, permission] : current.filter((p) => p !== permission),
-                  );
-                }}
-                className="accent-primary mt-0.5 size-4 shrink-0"
-              />
-              <span>
-                {STAFF_PERMISSION_LABEL[permission].label}
-                <span className="text-muted-foreground block text-xs">{STAFF_PERMISSION_LABEL[permission].hint}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
       <div>
         <SubmitButton>{staff ? "Save" : "Add staff member"}</SubmitButton>
       </div>
@@ -176,8 +141,22 @@ export function RouteForm({
   vehicles,
   drivers,
   attendants,
+  defaults,
 }: {
-  route?: { id: string; name: string; vehicleId: string | null; driverId: string | null; attendantId: string | null; isActive: boolean; notes: string | null };
+  /** A new route started from someone's profile: they are already in the driver's or attendant's seat. */
+  defaults?: { driverId?: string; attendantId?: string };
+  route?: {
+    id: string;
+    name: string;
+    code: string | null;
+    startPoint: string | null;
+    endPoint: string | null;
+    vehicleId: string | null;
+    driverId: string | null;
+    attendantId: string | null;
+    isActive: boolean;
+    notes: string | null;
+  };
   vehicles: Option[];
   drivers: Option[];
   attendants: Option[];
@@ -185,12 +164,20 @@ export function RouteForm({
   return (
     <ActionForm action={saveRouteAction} resetOnSuccess={!route} className="gap-3">
       {route ? <input type="hidden" name="routeId" value={route.id} /> : null}
-      <TextField name="name" label="Route name" defaultValue={route?.name} placeholder="Route 3 — Vijay Nagar" required />
+      <FieldRow>
+        <TextField name="name" label="Route name" defaultValue={route?.name} placeholder="Vijay Nagar" required />
+        <TextField name="code" label="Route number" defaultValue={route?.code ?? ""} placeholder="R-3" hint="Optional — as painted on the bus." />
+      </FieldRow>
+      <FieldRow>
+        <TextField name="startPoint" label="Start point" defaultValue={route?.startPoint ?? ""} placeholder="Vijay Nagar depot" />
+        <TextField name="endPoint" label="End point" defaultValue={route?.endPoint ?? ""} placeholder="School main gate" />
+      </FieldRow>
       <SelectField name="vehicleId" label="Vehicle" options={vehicles} defaultValue={route?.vehicleId ?? undefined} placeholder="None" />
       <FieldRow>
-        <SelectField name="driverId" label="Driver" options={drivers} defaultValue={route?.driverId ?? undefined} placeholder="None" />
-        <SelectField name="attendantId" label="Attendant" options={attendants} defaultValue={route?.attendantId ?? undefined} placeholder="None" />
+        <SelectField name="driverId" label="Driver" options={drivers} defaultValue={route?.driverId ?? defaults?.driverId} placeholder="None" hint="Staff with the Driver designation." />
+        <SelectField name="attendantId" label="Attendant" options={attendants} defaultValue={route?.attendantId ?? defaults?.attendantId} placeholder="None" />
       </FieldRow>
+      <TextareaField name="notes" label="Notes for the driver" rows={2} defaultValue={route?.notes ?? ""} />
       <CheckboxField name="isActive" label="Running" defaultChecked={route?.isActive ?? true} />
       <div>
         <SubmitButton size="sm">{route ? "Save route" : "Create route"}</SubmitButton>
@@ -199,20 +186,59 @@ export function RouteForm({
   );
 }
 
-export function StopForm({ routeId, nextSequence }: { routeId: string; nextSequence: number }) {
+/** Put this driver or attendant on a route (whoever had the seat is replaced). */
+export function AssignCrewForm({ staffId, as, routes }: { staffId: string; as: "DRIVER" | "ATTENDANT"; routes: Option[] }) {
   return (
-    <ActionForm action={addStopAction} resetOnSuccess className="gap-3">
+    <ActionForm action={assignRouteCrewAction} className="gap-3">
+      <input type="hidden" name="staffId" value={staffId} />
+      <input type="hidden" name="as" value={as} />
+      <SelectField name="routeId" label="Route" options={routes} placeholder="Choose a route" required hint="If the route already has a driver, they are replaced." />
+      <div>
+        <SubmitButton size="sm">Assign to route</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** Move this driver or attendant from one route to another in one step. */
+export function MoveCrewForm({ staffId, fromRouteId, routes }: { staffId: string; fromRouteId: string; routes: Option[] }) {
+  return (
+    <ActionForm action={moveRouteCrewAction} className="flex-row flex-wrap items-end gap-2">
+      <input type="hidden" name="staffId" value={staffId} />
+      <input type="hidden" name="fromRouteId" value={fromRouteId} />
+      <SelectField name="toRouteId" label="Move to another route" options={routes} placeholder="Choose a route" required className="min-w-56 flex-1" />
+      <SubmitButton size="sm" variant="outline" pendingLabel="Moving…">
+        Move
+      </SubmitButton>
+    </ActionForm>
+  );
+}
+
+/** Add a stop, or edit one when `stop` is given. Stops are optional. */
+export function StopForm({
+  routeId,
+  nextSequence,
+  stop,
+}: {
+  routeId: string;
+  nextSequence: number;
+  stop?: { id: string; name: string; location: string | null; sequence: number; pickupTime: string; dropTime: string };
+}) {
+  return (
+    <ActionForm action={addStopAction} resetOnSuccess={!stop} className="gap-3">
       <input type="hidden" name="routeId" value={routeId} />
+      {stop ? <input type="hidden" name="stopId" value={stop.id} /> : null}
       <FieldRow>
-        <TextField name="name" label="Stop" required />
-        <TextField name="sequence" label="Order" type="number" min={1} defaultValue={nextSequence} required />
+        <TextField name="name" label="Stop name" defaultValue={stop?.name} required />
+        <TextField name="sequence" label="Order" type="number" min={1} defaultValue={stop?.sequence ?? nextSequence} required />
       </FieldRow>
+      <TextField name="location" label="Landmark / location" defaultValue={stop?.location ?? ""} placeholder="Near the post office, Sector 4" />
       <FieldRow>
-        <TextField name="pickupMinute" label="Pickup" type="time" />
-        <TextField name="dropMinute" label="Drop" type="time" />
+        <TextField name="pickupMinute" label="Pickup" type="time" defaultValue={stop?.pickupTime ?? ""} />
+        <TextField name="dropMinute" label="Drop" type="time" defaultValue={stop?.dropTime ?? ""} />
       </FieldRow>
       <div>
-        <SubmitButton size="sm">Add stop</SubmitButton>
+        <SubmitButton size="sm">{stop ? "Save stop" : "Add stop"}</SubmitButton>
       </div>
     </ActionForm>
   );

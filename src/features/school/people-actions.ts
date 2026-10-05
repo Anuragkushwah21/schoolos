@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { type ActionResult, errorResult, parseFormData, successResult } from "@/lib/action-result";
-import { id } from "@/lib/validation/common";
+import { checkbox, id, optionalText } from "@/lib/validation/common";
 import {
   assignmentSchema,
   createStudentSchema,
@@ -41,6 +41,7 @@ import {
 } from "@/server/people/teachers";
 import type { PreviewImportResult } from "@/features/imports/preview-import-form";
 import { importTeachers } from "@/server/people/teacher-import";
+import { resendParentActivations, setParentArchived } from "@/server/people/parents";
 import { performAction } from "@/server/perform-action";
 import { inviteMessage } from "@/server/auth/account-links";
 import { emailMoveMessage } from "@/server/people/accounts";
@@ -302,6 +303,35 @@ export async function importTeachersAction(_p: PreviewImportResult, formData: Fo
           ? `${report.created} teacher${report.created === 1 ? "" : "s"} added. ${report.invites.filter((i) => i.delivered).length} activation email${report.invites.filter((i) => i.delivered).length === 1 ? "" : "s"} sent${report.invites.some((i) => !i.delivered) ? `; ${report.invites.filter((i) => !i.delivered).length} could not be sent — use "Send login email" on each teacher's page` : ""}.${report.total - report.created ? ` ${report.total - report.created} row(s) were left out.` : ""}`
           : undefined;
       return successResult(message, { ...report, mode });
+    },
+    { revalidate: REVALIDATE },
+  );
+}
+
+const parentArchiveSchema = z.object({
+  parentId: id,
+  archived: checkbox,
+  reason: optionalText(300),
+});
+
+/** Archive a parent whose children have all left, or restore one. Nothing is deleted. */
+export async function setParentArchivedAction(_p: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const { parentId, archived, reason } = parseFormData(parentArchiveSchema, formData);
+      await setParentArchived(await admin(), parentId, archived, reason);
+      return successResult(archived ? "Parent archived. Their record and history stay; their login is closed." : "Parent restored to the list.");
+    },
+    { revalidate: REVALIDATE },
+  );
+}
+
+/** Resend activation links to every parent who has not activated their login yet. */
+export async function resendParentActivationsAction(): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const { sent, failed } = await resendParentActivations(await admin());
+      return successResult(`Activation links sent to ${sent} parent${sent === 1 ? "" : "s"}.${failed.length ? ` Not sent to: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}. Check their email addresses.` : ""}`);
     },
     { revalidate: REVALIDATE },
   );

@@ -263,7 +263,7 @@ async function lockSection(tx: TenantTx, sectionId: string, adding: number) {
 }
 
 /** Lock one stream's share of a section and check it has room for `adding` more. */
-async function claimShare(tx: TenantTx, sectionId: string, streamId: string, adding: number, label: string) {
+export async function claimShare(tx: TenantTx, sectionId: string, streamId: string, adding: number, label: string) {
   const share = await tx.sectionStream.updateMany({ where: { sectionId, streamId }, data: { updatedAt: new Date() } });
   if (!share.count) throw new ValidationError("Please correct the highlighted fields.", { streamId: [`That stream / group is not offered in ${label}.`] });
   const [row, occupied] = await Promise.all([

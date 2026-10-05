@@ -196,9 +196,12 @@ export function HomeworkForm({
   sections,
   today,
   homework,
+  defaultSectionId,
 }: {
   sections: HomeworkSectionOption[];
   today: string;
+  /** Pre-selects a class (from the dashboard's class switcher). */
+  defaultSectionId?: string;
   homework?: {
     id: string;
     sectionId: string;
@@ -211,7 +214,7 @@ export function HomeworkForm({
     status: string;
   };
 }) {
-  const [sectionId, setSectionId] = useState(homework?.sectionId ?? sections[0]?.value ?? "");
+  const [sectionId, setSectionId] = useState(homework?.sectionId ?? sections.find((section) => section.value === defaultSectionId)?.value ?? sections[0]?.value ?? "");
   const [hasUpload, setHasUpload] = useState(false);
   // Work cannot be due before it is set; the server enforces the same rule.
   const [assignedOn, setAssignedOn] = useState(homework?.assignedOn ?? today);

@@ -58,10 +58,16 @@ const STATUS_TONE: Record<string, Tone> = {
   REMOTE: "info",
   MISSED: "negative",
   SCHEDULED: "neutral",
-  // admissions
+  // admissions — applications, then family enquiries
   SUBMITTED: "warning",
-  ACCEPTED: "positive",
-  WAITLISTED: "info",
+  SHORTLISTED: "info",
+  CONVERTED: "positive",
+  CONTACTED: "info",
+  FOLLOW_UP: "warning",
+  ADMITTED: "positive",
+  NOT_STARTED: "neutral",
+  DISCUSSING: "info",
+  AGREED: "positive",
   // notices
   PUBLISHED: "positive",
   DRAFT: "neutral",

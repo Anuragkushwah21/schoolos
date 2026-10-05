@@ -587,3 +587,151 @@ export async function promotionHistory(ctx: TenantContext, limit = 12) {
     toName: run.toSessionId ? sessions.get(run.toSessionId) ?? null : null,
   }));
 }
+
+// -----------------------------------------------------------------------------
+// Undoing a promotion run
+// -----------------------------------------------------------------------------
+
+export type ReversalStudent = {
+  studentId: string;
+  name: string;
+  kind: "PROMOTED" | "GRADUATED";
+  /** Why it cannot be undone automatically; null when it can. */
+  blocker: string | null;
+};
+
+/** Every student a run moved, with the session pair, from its audit entries. */
+async function runStudents(ctx: TenantContext, runId: string) {
+  const rows = await prisma.auditLog.findMany({
+    where: { schoolId: ctx.schoolId, action: "STUDENTS_PROMOTED" },
+    select: { id: true, metadata: true },
+  });
+  const mine = rows.filter((row) => {
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    return (typeof meta.runId === "string" ? meta.runId : row.id) === runId;
+  });
+  if (!mine.length) throw new NotFoundError("That promotion run was not found.");
+  const meta = (mine[0]!.metadata ?? {}) as Record<string, unknown>;
+  const studentIds = [...new Set(mine.flatMap((row) => {
+    const ids = ((row.metadata ?? {}) as Record<string, unknown>).studentIds;
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+  }))];
+  const reversed = await prisma.auditLog.findMany({ where: { schoolId: ctx.schoolId, action: "PROMOTION_REVERSED" }, select: { metadata: true } });
+  const alreadyUndone = new Set(
+    reversed.flatMap((row) => {
+      const m = (row.metadata ?? {}) as Record<string, unknown>;
+      return m.runId === runId && Array.isArray(m.studentIds) ? m.studentIds.filter((id): id is string => typeof id === "string") : [];
+    }),
+  );
+  return {
+    fromSessionId: typeof meta.fromSessionId === "string" ? meta.fromSessionId : null,
+    toSessionId: typeof meta.toSessionId === "string" ? meta.toSessionId : null,
+    studentIds: studentIds.filter((id) => !alreadyUndone.has(id)),
+    undone: alreadyUndone.size,
+  };
+}
+
+/**
+ * Who a run's reversal would put back, and who it cannot: anyone who already
+ * has attendance, marks, fees, support or remarks in the new session keeps
+ * their new placement — those records are history and are never destroyed.
+ */
+export async function previewPromotionReversal(ctx: TenantContext, runId: string) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const run = await runStudents(ctx, runId);
+  if (!run.fromSessionId || !run.toSessionId) throw new AppError("VALIDATION", "This run was recorded without its sessions, so it cannot be undone automatically.");
+  const to = run.toSessionId;
+  const students = await ctx.db.student.findMany({
+    where: { id: { in: run.studentIds } },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      status: true,
+      enrollments: { where: { academicSessionId: { in: [run.fromSessionId, to] } }, select: { id: true, academicSessionId: true, status: true } },
+    },
+  });
+
+  const counts = async (studentId: string) => {
+    const [attendance, marks, charges, payments, support, remarks] = await Promise.all([
+      ctx.db.studentAttendance.count({ where: { studentId, section: { academicSessionId: to } } }),
+      ctx.db.assessmentResult.count({ where: { studentId, assessment: { academicSessionId: to } } }),
+      ctx.db.feeCharge.count({ where: { studentId, academicSessionId: to } }),
+      ctx.db.feePayment.count({ where: { studentId, academicSessionId: to } }),
+      ctx.db.studentSupport.count({ where: { studentId, academicSessionId: to } }),
+      ctx.db.studentRemark.count({ where: { studentId, academicSessionId: to } }),
+    ]);
+    const found = [
+      attendance ? "attendance" : null,
+      marks ? "marks" : null,
+      charges || payments ? "fees" : null,
+      support ? "support" : null,
+      remarks ? "remarks" : null,
+    ].filter(Boolean);
+    return found.length ? `Already has ${found.join(", ")} in the new session` : null;
+  };
+
+  const list: ReversalStudent[] = [];
+  for (const student of students) {
+    const name = fullName(student);
+    const newPlacement = student.enrollments.find((row) => row.academicSessionId === to);
+    const oldPlacement = student.enrollments.find((row) => row.academicSessionId === run.fromSessionId);
+    if (!oldPlacement) {
+      list.push({ studentId: student.id, name, kind: "PROMOTED", blocker: "Last session's placement is missing" });
+      continue;
+    }
+    if (newPlacement) {
+      list.push({ studentId: student.id, name, kind: "PROMOTED", blocker: newPlacement.status !== "ACTIVE" ? "Has left the new class since" : await counts(student.id) });
+    } else if (student.status === "GRADUATED") {
+      list.push({ studentId: student.id, name, kind: "GRADUATED", blocker: null });
+    } else {
+      list.push({ studentId: student.id, name, kind: "PROMOTED", blocker: "Has moved or left since the promotion" });
+    }
+  }
+  return {
+    runId,
+    students: list.sort((a, b) => Number(Boolean(a.blocker)) - Number(Boolean(b.blocker)) || a.name.localeCompare(b.name)),
+    canUndo: list.filter((row) => !row.blocker).length,
+    blocked: list.filter((row) => row.blocker).length,
+    alreadyUndone: run.undone,
+  };
+}
+
+/**
+ * Undo a promotion run for every student it can: the new session's placement
+ * (which has no records yet) is removed, last session's is reopened, and a
+ * graduate becomes a current student again through the lifecycle. Students
+ * with records in the new session are left as they are and listed.
+ */
+export async function reversePromotionRun(ctx: TenantContext, runId: string, reason: string) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const preview = await previewPromotionReversal(ctx, runId);
+  const run = await runStudents(ctx, runId);
+  const eligible = preview.students.filter((row) => !row.blocker);
+  if (!eligible.length) throw new ConflictError("Nobody in this run can be undone automatically. Students with records in the new session must be moved by hand.");
+
+  const promoted = eligible.filter((row) => row.kind === "PROMOTED").map((row) => row.studentId);
+  const graduated = eligible.filter((row) => row.kind === "GRADUATED").map((row) => row.studentId);
+  await ctx.db.$transaction(async (tx) => {
+    if (promoted.length) {
+      await tx.studentEnrollment.deleteMany({ where: { studentId: { in: promoted }, academicSessionId: run.toSessionId!, status: "ACTIVE" } });
+    }
+    await tx.studentEnrollment.updateMany({
+      where: { studentId: { in: [...promoted, ...graduated] }, academicSessionId: run.fromSessionId!, status: { not: "ACTIVE" } },
+      data: { status: "ACTIVE" },
+    });
+  });
+  for (const studentId of graduated) {
+    await changeStudentStatus(ctx, studentId, "ACTIVE", { effectiveDate: today(), reason: `Graduation undone: ${reason}`, remarks: null, confirmReturn: true });
+  }
+  await recordAudit({
+    action: "PROMOTION_REVERSED",
+    entityType: "AcademicSession",
+    entityId: run.toSessionId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Promotion undone for ${eligible.length} student${eligible.length === 1 ? "" : "s"}${preview.blocked ? ` (${preview.blocked} kept: they already have records in the new session)` : ""}. Reason: ${reason}`,
+    metadata: { runId, studentIds: eligible.map((row) => row.studentId) },
+  });
+  return { undone: eligible.length, kept: preview.students.filter((row) => row.blocker) };
+}

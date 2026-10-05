@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { ActionButton } from "@/components/forms/action-button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { NoSessionNotice } from "@/components/shared/no-session-notice";
+import { StudentAttentionCard } from "@/features/exams/student-attention";
 import { PageHeader } from "@/components/shared/page-header";
 import { PersonAvatar } from "@/components/shared/person-avatar";
 import { StatCard } from "@/components/shared/stat-card";
@@ -90,6 +91,7 @@ export default async function TeacherStudentPage(
           </>
         }
       />
+      <StudentAttentionCard ctx={ctx} studentId={studentId} supportBase="/teacher/support" />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard

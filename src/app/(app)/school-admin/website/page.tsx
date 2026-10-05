@@ -11,15 +11,19 @@ import { deleteMediaAction } from "@/features/website/actions";
 import { MediaForm, WebsiteProfileForm } from "@/features/website/forms";
 import { requireTenant } from "@/server/auth/current-user";
 import { getWebsiteProfile, listMedia, listPages } from "@/server/website/admin";
+import { publicPortal } from "@/server/admissions/portal";
+import { CopyLink } from "@/components/shared/copy-link";
+import { env } from "@/lib/env";
 
 export const metadata: Metadata = { title: "Website" };
 
 export default async function WebsitePage() {
   const ctx = await requireTenant("SCHOOL_ADMIN");
-  const [profile, pages, media] = await Promise.all([
+  const [profile, pages, media, portal] = await Promise.all([
     getWebsiteProfile(ctx),
     listPages(ctx),
     listMedia(ctx),
+    publicPortal(ctx.schoolId),
   ]);
 
   const base = `/schools/${profile.slug}`;
@@ -28,7 +32,7 @@ export default async function WebsitePage() {
     <>
       <PageHeader
         title="Website"
-        description={`Your public site lives at ${base}. Everything here is visible to anyone.`}
+        description="Your school's public website and online admission form, in one place. Everything here is visible to anyone."
         actions={
           <Button asChild variant="outline">
             <Link href={base as Route} target="_blank">
@@ -50,6 +54,28 @@ export default async function WebsitePage() {
         </Card>
 
         <div className="flex flex-col gap-6">
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex flex-wrap items-center gap-2">
+                  Online admission form
+                  <StatusBadge
+                    status={portal.isPublished ? "PUBLISHED" : "DRAFT"}
+                    tone={portal.window.state === "OPEN" ? "positive" : portal.isPublished ? "warning" : "neutral"}
+                    label={portal.window.state === "OPEN" ? "Taking applications" : portal.isPublished ? "Published · outside its dates" : "Unpublished"}
+                  />
+                </CardTitle>
+                <CardDescription>Dates, classes, instructions, questions, preview and publish.</CardDescription>
+              </div>
+              <Button asChild size="sm">
+                <Link href="/school-admin/website/admission">Set up</Link>
+              </Button>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <CopyLink label="Website" url={`${env.APP_URL}${base}`} />
+              <CopyLink label="Admission form" url={`${env.APP_URL}${base}/admissions`} />
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-3">
               <div>

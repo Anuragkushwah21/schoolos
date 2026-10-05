@@ -163,7 +163,7 @@ export default async function StudentDashboardPage() {
               <CardTitle>{t("dashboard.student.todaysClasses")}</CardTitle>
               <CardDescription>
                 {day.tally.scheduled
-                  ? `${day.tally.completed + day.tally.substitute} of ${pluralize(day.tally.scheduled, "class")} written up so far.`
+                  ? `${day.tally.completed + day.tally.substitute} of ${pluralize(day.tally.scheduled, "class", "classes")} written up so far.`
                   : "Nothing on the timetable today."}
               </CardDescription>
             </CardHeader>

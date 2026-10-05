@@ -6,18 +6,18 @@ import { requireTenant } from "@/server/auth/current-user";
 import { getMarksSheet } from "@/server/exams/service";
 import { orHidden } from "@/server/page-helpers";
 
-export const metadata: Metadata = { title: "Marks" };
+export const metadata: Metadata = { title: "Enter marks" };
 
+/** Exams & Tests → Enter Marks → Submit Results. Another teacher's test is refused inside. */
 export default async function TeacherMarksPage(props: PageProps<"/teacher/exams/[assessmentId]">) {
   const ctx = await requireTenant("TEACHER");
   const { assessmentId } = await props.params;
-  // A paper for a subject this teacher does not teach is refused inside.
   const sheet = await orHidden(getMarksSheet(ctx, assessmentId));
 
   return (
     <>
-      <PageHeader back={{ href: "/teacher/exams", label: "Exams & marks" }} title={`${sheet.paper.subject} · ${sheet.paper.section}`} />
-      <MarksSheetScreen sheet={sheet} />
+      <PageHeader back={{ href: "/teacher/exams", label: "My tests" }} title={`Enter marks · ${sheet.paper.subject} · ${sheet.paper.section}`} />
+      <MarksSheetScreen sheet={sheet} role="TEACHER" />
     </>
   );
 }

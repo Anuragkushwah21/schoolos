@@ -1,8 +1,8 @@
 "use server";
 
-import type { z } from "zod";
+import { z } from "zod";
 
-import { type ActionResult, runAction, successResult } from "@/lib/action-result";
+import { type ActionResult, parseFormData, runAction, successResult } from "@/lib/action-result";
 import { AppError, ValidationError } from "@/lib/errors";
 import { promotionBatchSchema, promotionPreviewSchema } from "@/lib/validation/bulk-students";
 import {
@@ -10,6 +10,7 @@ import {
   type PromotionPreview,
   decodeDestination,
   previewPromotion,
+  reversePromotionRun,
   runPromotionBatch,
 } from "@/server/academics/promotion";
 import { requireTenantForAction } from "@/server/auth/current-user";
@@ -47,5 +48,23 @@ export async function promotionBatchAction(input: unknown): Promise<ActionResult
       return successResult(undefined, await runPromotionBatch(ctx, { ...rest, destination: decoded }));
     },
     { revalidate: ["/school-admin", "/teacher", "/student", "/parent"] },
+  );
+}
+
+const reversalSchema = z.object({
+  runId: z.string().trim().min(1).max(200),
+  reason: z.string().trim().min(3, "Say why the promotion is being undone").max(300),
+});
+
+/** Undo a promotion run for every student it safely can. */
+export async function reversePromotionAction(_p: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const { runId, reason } = parseFormData(reversalSchema, formData);
+      const { undone, kept } = await reversePromotionRun(ctx, runId, reason);
+      return successResult(`Promotion undone for ${undone} student${undone === 1 ? "" : "s"}.${kept.length ? ` ${kept.length} kept in the new class because they already have records there.` : ""}`);
+    },
+    { revalidate: ["/school-admin", "/teacher", "/student", "/parent"], redirectTo: "/school-admin/academics/promotion" },
   );
 }

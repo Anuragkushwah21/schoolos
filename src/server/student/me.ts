@@ -6,7 +6,7 @@ import { fullName } from "@/lib/format";
 import { monthlyAttendance } from "@/server/analytics/student";
 import { homeworkStatus, schoolNow } from "@/lib/time-status";
 import { schoolClosureOn } from "@/server/calendar/holidays";
-import { VISIBLE_PAPER } from "@/server/exams/service";
+import { studentStreamWhere, VISIBLE_PAPER } from "@/server/exams/service";
 import { RESOURCE_SELECT } from "@/server/classwork/homework";
 import { type AttendanceCounts, attendedShare, emptyCounts } from "@/server/attendance/service";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -608,12 +608,14 @@ export async function getMyResults(ctx: TenantContext) {
   const me = await requireStudentSelf(ctx);
   const now = today();
 
+  const streamWhere = await studentStreamWhere(ctx, me.student.id, me.placement.sessionId);
+  const mine = { sectionId: me.placement.sectionId, academicSessionId: me.placement.sessionId };
   const assessments = await ctx.db.assessment.findMany({
     where: {
-      sectionId: me.placement.sectionId,
-      academicSessionId: me.placement.sessionId,
-      // An exam's papers stay hidden until the school publishes its results.
-      ...VISIBLE_PAPER,
+      // Results: submitted tests and published exams only. Upcoming tests are
+      // listed so the student can prepare, without marks. Only tests for
+      // their own stream, or the whole section.
+      AND: [mine, streamWhere, { OR: [VISIBLE_PAPER, { examId: null, date: { gt: now } }] }],
     },
     orderBy: { date: "desc" },
     select: {

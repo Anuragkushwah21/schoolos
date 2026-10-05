@@ -13,7 +13,7 @@ import { staffSchema } from "@/lib/validation/operations";
 import { schoolToday } from "@/server/analytics/today";
 import { getRegister } from "@/server/attendance/service";
 import { createSession, validateSessionToken } from "@/server/auth/session";
-import { staffPermissions } from "@/server/auth/staff-access";
+import { staffGrants } from "@/server/auth/staff-access";
 import { prisma } from "@/server/db/prisma";
 import { grantStaffPortal, saveStaff } from "@/server/operations/staff";
 import { findChild, listMyChildren } from "@/server/parent/access";
@@ -200,7 +200,7 @@ describe("non-teaching staff who leave", () => {
 
     const result = await changeEmployeeStatus(ctx, "STAFF", staffId, "RESIGNED", change());
     expect(result).toMatchObject({ login: "closed", handover: { routesCleared: 1 } });
-    expect(await staffPermissions(staffCtx)).toEqual([]);
+    expect(await staffGrants(staffCtx)).toEqual([]);
     expect((await prisma.transportRoute.findUniqueOrThrow({ where: { id: route.id } })).driverId).toBeNull();
     expect(await prisma.staffMember.count({ where: { id: staffId } })).toBe(1);
     // Counts describe the school today, not everyone ever employed.

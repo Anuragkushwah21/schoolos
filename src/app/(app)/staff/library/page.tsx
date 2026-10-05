@@ -1,5 +1,6 @@
 import { LibraryIcon } from "lucide-react";
-import type { Metadata } from "next";
+import Link from "next/link";
+import type { Metadata, Route } from "next";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar } from "@/components/shared/filter-bar";
@@ -11,7 +12,7 @@ import { BookForm } from "@/features/operations/forms";
 import { LibraryDesk, LibraryTodayPanel, LOAN_VIEWS } from "@/features/operations/library-desk";
 import { enumParam, param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
-import { requireStaffModule, staffPermissions } from "@/server/auth/staff-access";
+import { requireStaffModule, staffGrants } from "@/server/auth/staff-access";
 import { issuableBooks, libraryRules, libraryToday, listBooks, listLoans } from "@/server/operations/library";
 
 export const metadata: Metadata = { title: "Library" };
@@ -24,8 +25,13 @@ export const metadata: Metadata = { title: "Library" };
  */
 export default async function StaffLibraryPage(props: PageProps<"/staff/library">) {
   const ctx = await requireTenant("NON_TEACHING_STAFF");
-  await requireStaffModule(ctx, ["VIEW_LIBRARY", "MANAGE_LIBRARY"]);
-  const canManage = (await staffPermissions(ctx)).includes("MANAGE_LIBRARY");
+  await requireStaffModule(ctx, "library.view");
+  // Each part of the desk follows its own permission; the server checks each again.
+  const grants: string[] = await staffGrants(ctx);
+  const canManage = grants.includes("library.circulation");
+  const canAdd = grants.includes("library.books.create");
+  const canEdit = grants.includes("library.books.edit");
+  const canFines = grants.includes("library.fines");
   const search = await props.searchParams;
   const view = enumParam(search.view, LOAN_VIEWS) ?? "open";
   const q = param(search.q);
@@ -52,15 +58,15 @@ export default async function StaffLibraryPage(props: PageProps<"/staff/library"
         }
       />
 
-      <LibraryTodayPanel today={stats} basePath="/staff/library" canManage={canManage} addBookHref="/staff/library#add-book" />
-      <LibraryDesk basePath="/staff/library" view={view} q={q} loans={loans} available={available} canManage={canManage} loanDays={rules.loanDays} />
+      <LibraryTodayPanel today={stats} basePath="/staff/library" canManage={canManage} addBookHref={canAdd ? "/staff/library#add-book" : undefined} />
+      <LibraryDesk basePath="/staff/library" view={view} q={q} loans={loans} available={available} canManage={canManage} canFines={canFines} loanDays={rules.loanDays} />
 
       <section aria-labelledby="catalogue" className="mt-8 flex flex-col gap-4">
         <h2 id="catalogue" className="text-base font-semibold">
           Books
         </h2>
         <FilterBar action="/staff/library" search={{ name: "book", defaultValue: bookQ, placeholder: "Title, author or ISBN" }} hidden={{ view, q }} />
-        <div className={canManage ? "grid gap-6 xl:grid-cols-[1.5fr_1fr]" : ""}>
+        <div className={canAdd ? "grid gap-6 xl:grid-cols-[1.5fr_1fr]" : ""}>
           {books.length ? (
             <div className="rounded-xl border">
               <Table>
@@ -75,12 +81,12 @@ export default async function StaffLibraryPage(props: PageProps<"/staff/library"
                   {books.map((book) => (
                     <TableRow key={book.id}>
                       <TableCell className="max-w-xs whitespace-normal">
-                        <span className="font-medium">{book.title}</span>
+                        <Link href={`/staff/library/${book.id}` as Route} className="font-medium hover:underline">{book.title}</Link>
                         {book.isActive ? null : <StatusBadge status="INACTIVE" label="Not lent" className="ml-2" />}
                         <span className="text-muted-foreground block text-xs">
                           {[book.author, book.category, book.isbn].filter(Boolean).join(" · ") || "—"}
                         </span>
-                        {canManage ? (
+                        {canEdit ? (
                           <details className="mt-2 text-sm">
                             <summary className="text-muted-foreground cursor-pointer text-xs">Edit book</summary>
                             <div className="mt-3">
@@ -101,7 +107,7 @@ export default async function StaffLibraryPage(props: PageProps<"/staff/library"
           ) : (
             <EmptyState title="No books match" />
           )}
-          {canManage ? (
+          {canAdd ? (
             <Card id="add-book" className="h-fit scroll-mt-24">
               <CardHeader>
                 <CardTitle>+ Add book</CardTitle>

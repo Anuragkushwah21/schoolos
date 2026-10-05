@@ -163,9 +163,10 @@ describe("receipt contents", () => {
     const receipt = await getReceipt(adminOf(schoolA), ids.aSecond);
 
     expect(receipt.fees.breakdown).toEqual([
-      { head: "Exam Fee", amountMinor: rs(1_000) },
-      { head: "Transport Fee", amountMinor: rs(5_000) },
-      { head: "Tuition Fee", amountMinor: rs(20_000) },
+      // No concessions here, so the net is the original.
+      { head: "Exam Fee", amountMinor: rs(1_000), originalMinor: rs(1_000), discountMinor: 0 },
+      { head: "Transport Fee", amountMinor: rs(5_000), originalMinor: rs(5_000), discountMinor: 0 },
+      { head: "Tuition Fee", amountMinor: rs(20_000), originalMinor: rs(20_000), discountMinor: 0 },
     ]);
     expect(receipt.fees).toMatchObject({
       totalMinor: rs(26_000),

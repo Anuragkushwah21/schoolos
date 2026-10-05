@@ -15,6 +15,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { grantsFrom } from "@/lib/staff-access";
+
 import { ConflictError, ForbiddenError, NotFoundError } from "@/lib/errors";
 import { addDays, dayOfWeek, toDateInput, today } from "@/lib/dates";
 import { leaveRequestSchema } from "@/lib/validation/leave";
@@ -45,7 +47,7 @@ async function addStaff(school: SeededSchool, key: string, permissions: Array<"C
     data: { email: `${key}@iso-test-a.test`, passwordHash: "not-a-real-hash", role: "NON_TEACHING_STAFF", firstName: key, lastName: "Staff", schoolId: school.schoolId },
   });
   const staff = await prisma.staffMember.create({
-    data: { schoolId: school.schoolId, userId: user.id, employeeId: key.toUpperCase(), firstName: key, lastName: "Staff", role: "OTHER", permissions },
+    data: { schoolId: school.schoolId, userId: user.id, employeeId: key.toUpperCase(), firstName: key, lastName: "Staff", role: "OTHER", grants: grantsFrom(permissions) },
   });
   return { id: staff.id, ctx: contextFor(school, user.id, "NON_TEACHING_STAFF") };
 }

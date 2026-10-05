@@ -19,11 +19,11 @@ export default async function AdminMarksPage(props: PageProps<"/school-admin/exa
         back={
           sheet.paper.exam
             ? { href: `/school-admin/exams/${sheet.paper.exam.id}` as Route, label: sheet.paper.exam.name }
-            : { href: "/school-admin/exams", label: "Examinations" }
+            : { href: "/school-admin/exams", label: "All tests" }
         }
         title={`${sheet.paper.subject} · ${sheet.paper.section}`}
       />
-      <MarksSheetScreen sheet={sheet} />
+      <MarksSheetScreen sheet={sheet} role="SCHOOL_ADMIN" />
     </>
   );
 }

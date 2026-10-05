@@ -8,12 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { MessageKey } from "@/lib/i18n/translate";
-import { formatDate, formatDateTime, formatMinutes } from "@/lib/dates";
+import { formatDate, formatDateTime, formatMinutes, today, toDateInput } from "@/lib/dates";
 import { telHref } from "@/server/attendance/absentees";
 import { getIntlLocale, getT } from "@/server/i18n";
 import type { SupportRow, getSupport } from "@/server/support/service";
 
-import { FollowUpForm } from "./forms";
+import { CompleteSupportForm, ExtraClassForm, FollowUpForm } from "./forms";
 
 const k = (key: string) => key as MessageKey;
 
@@ -111,6 +111,7 @@ export async function SupportDetailView({
     [t("support.priorityLabel"), <StatusBadge key="p" status={support.priority} />],
     [t("support.teacher"), support.teacher ?? "—"],
     [t("support.source"), t(k(`support.sourceLabel.${support.source}`))],
+    ["Shared with family", support.parentRemark ?? "—"],
     ["", t("support.since", { date: formatDate(support.createdAt, intl) })],
   ];
   return (
@@ -138,7 +139,7 @@ export async function SupportDetailView({
           </CardContent>
         </Card>
 
-        {support.action === "EXTRA_CLASS" || support.extraClass ? (
+        {support.action === "EXTRA_CLASS" || support.extraClass || (support.mayEdit && support.status !== "RESOLVED") ? (
           <Card>
             <CardHeader>
               <CardTitle>{t("support.extraClass")}</CardTitle>
@@ -149,16 +150,22 @@ export async function SupportDetailView({
                   {support.extraClass.title} · {t("support.extraClassOn", { date: formatDate(support.extraClass.date, intl), time: formatMinutes(support.extraClass.startMinute) })}
                   {support.extraClass.status === "CANCELLED" ? <StatusBadge status="CANCELLED" /> : null}
                 </p>
-              ) : extraClassHref ? (
-                <Button asChild>
-                  <Link href={extraClassHref}>
-                    <CalendarPlusIcon aria-hidden />
-                    {t("support.scheduleExtraClass")}
-                  </Link>
-                </Button>
-              ) : (
+              ) : null}
+              {support.mayEdit && support.status !== "RESOLVED" && !(support.extraClass && support.extraClass.status === "SCHEDULED" && support.extraClass.date >= today()) ? (
+                <div className="w-full">
+                  <ExtraClassForm supportId={support.id} today={toDateInput(today())} />
+                  {extraClassHref ? (
+                    <Button asChild variant="link" className="mt-1 px-0">
+                      <Link href={extraClassHref}>
+                        <CalendarPlusIcon aria-hidden />
+                        {t("support.scheduleExtraClass")} (full meeting form)
+                      </Link>
+                    </Button>
+                  ) : null}
+                </div>
+              ) : !support.extraClass ? (
                 <p className="text-muted-foreground">{t("status.SUPPORT_PLANNED")}</p>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         ) : null}
@@ -202,6 +209,11 @@ export async function SupportDetailView({
             </CardHeader>
             <CardContent>
               <FollowUpForm supportId={support.id} current={support.status} />
+              {support.status !== "RESOLVED" ? (
+                <div className="mt-4 border-t pt-4">
+                  <CompleteSupportForm supportId={support.id} />
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         ) : null}

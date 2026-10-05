@@ -17,7 +17,7 @@ import { staffSchema } from "@/lib/validation/operations";
 import { getStaffAlerts } from "@/server/alerts/feeds";
 import { authenticate } from "@/server/auth/login";
 import { createSession, validateSessionToken } from "@/server/auth/session";
-import { assertAdminOrStaffPermission, requireStaffSelf, staffPermissions } from "@/server/auth/staff-access";
+import { assertAdminOrStaffPermission, requireStaffSelf, staffGrants } from "@/server/auth/staff-access";
 import {
   cancelMeeting,
   deleteMeeting,
@@ -135,7 +135,8 @@ describe("non-teaching staff", () => {
       adminOf(schoolA),
       staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF", permissions: ["", "VIEW_STUDENTS"] }),
     );
-    expect(await staffPermissions(staffOf(schoolA))).toEqual(["VIEW_STUDENTS"]);
+    // The old permission names are still understood, and stored as grants.
+    expect(await staffGrants(staffOf(schoolA))).toEqual(["students.directory", "students.contact"]);
 
     const directory = await staffStudentDirectory(staffOf(schoolA));
     expect(directory.rows.map((row) => row.admissionNumber).sort()).toEqual(["ADM1", "ADM2", "ADM3"]);
@@ -148,10 +149,11 @@ describe("non-teaching staff", () => {
 
     // Saving without a permissions field (CSV/API style) leaves them alone…
     await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF" }));
-    expect(await staffPermissions(staffOf(schoolA))).toEqual(["VIEW_STUDENTS"]);
+    // The old permission names are still understood, and stored as grants.
+    expect(await staffGrants(staffOf(schoolA))).toEqual(["students.directory", "students.contact"]);
     // …and the form's empty marker revokes them all.
     await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF", permissions: "" }));
-    await expect(assertAdminOrStaffPermission(staffOf(schoolA), "VIEW_STUDENTS")).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(assertAdminOrStaffPermission(staffOf(schoolA), "students.directory")).rejects.toBeInstanceOf(ForbiddenError);
 
     await saveStaff(adminOf(schoolA), staffSchema.parse({ staffId: staff.A.staffId, employeeId: "NT-A", firstName: "Sunita", lastName: "A", role: "OFFICE_STAFF", permissions: ["VIEW_LIBRARY", "VIEW_TRANSPORT"] }));
     await expect(listBooks(staffOf(schoolA))).resolves.toEqual([]);
@@ -164,7 +166,7 @@ describe("non-teaching staff", () => {
     await saveStaff(adminOf(schoolA), staffSchema.parse({ ...base, status: "INACTIVE" }));
     expect(await validateSessionToken(token)).toBeNull();
     expect(await authenticate(staff.A.email, staff.A.password)).toMatchObject({ ok: false, reason: "ACCOUNT_DISABLED" });
-    expect(await staffPermissions(staffOf(schoolA))).toEqual([]);
+    expect(await staffGrants(staffOf(schoolA))).toEqual([]);
 
     await saveStaff(adminOf(schoolA), staffSchema.parse({ ...base, status: "ACTIVE" }));
     expect(await authenticate(staff.A.email, staff.A.password)).toMatchObject({ ok: true });

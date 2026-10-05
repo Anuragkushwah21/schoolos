@@ -24,7 +24,7 @@ import { orNotFound } from "@/server/page-helpers";
 import { publishedExamsFor } from "@/server/exams/results";
 import { getMyResults } from "@/server/student/me";
 
-export const metadata: Metadata = { title: "Tests & results" };
+export const metadata: Metadata = { title: "My results" };
 
 const DIRECTION = { up: "Improving", down: "Slipping", flat: "Steady" } as const;
 
@@ -48,7 +48,7 @@ export default async function StudentResultsPage() {
   return (
     <>
       <PageHeader
-        title="Tests & results"
+        title="My results"
         description={`${me.placement.sectionLabel} · ${me.placement.sessionName}`}
       />
       <StudentTabs active="results" />
@@ -66,6 +66,50 @@ export default async function StudentResultsPage() {
       </div>
 
       <div className="flex flex-col gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>My results</CardTitle>
+            <CardDescription>Results your teachers have submitted, and published exams. Newest first.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {past.length ? (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Subject</TableHead>
+                      <TableHead>Test</TableHead>
+                      <TableHead className="w-20 text-right">Marks</TableHead>
+                      <TableHead className="w-24 text-right">Max marks</TableHead>
+                      <TableHead className="w-24 text-right">Percentage</TableHead>
+                      <TableHead className="w-28">Date</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {past.map((entry) => (
+                      <TableRow key={entry.id}>
+                        <TableCell className="font-medium">{entry.subject}</TableCell>
+                        <TableCell>{entry.name}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {entry.sat ? entry.marksObtained : <span className="text-muted-foreground">Absent</span>}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{entry.maxMarks}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {entry.share === null ? "—" : `${Math.round(entry.share * 1000) / 10}%`}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground tabular-nums">{formatDate(entry.date)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <EmptyState title="No marks recorded yet">
+                Results appear here once your teachers submit them.
+              </EmptyState>
+            )}
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>Coming up</CardTitle>
@@ -151,54 +195,6 @@ export default async function StudentResultsPage() {
           </div>
         ) : null}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Every test</CardTitle>
-            <CardDescription>Newest first.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {past.length ? (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Test</TableHead>
-                      <TableHead>Subject</TableHead>
-                      <TableHead className="w-28">Date</TableHead>
-                      <TableHead className="w-24 text-right">Marks</TableHead>
-                      <TableHead className="w-20 text-right">Percent</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {past.map((entry) => (
-                      <TableRow key={entry.id}>
-                        <TableCell className="font-medium">{entry.name}</TableCell>
-                        <TableCell>{entry.subject}</TableCell>
-                        <TableCell className="text-muted-foreground tabular-nums">
-                          {formatDate(entry.date)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {entry.sat ? (
-                            `${entry.marksObtained}/${entry.maxMarks}`
-                          ) : (
-                            <span className="text-muted-foreground">Not sat</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {entry.share === null ? "—" : `${Math.round(entry.share * 100)}%`}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            ) : (
-              <EmptyState title="No marks recorded yet">
-                Results appear here once your teachers enter them.
-              </EmptyState>
-            )}
-          </CardContent>
-        </Card>
       </div>
     </>
   );

@@ -1,5 +1,5 @@
 import { ArrowUpRightIcon } from "lucide-react";
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 
 import { FilterBar } from "@/components/shared/filter-bar";
@@ -105,10 +105,15 @@ export default async function PromotionPage(props: PageProps<"/school-admin/acad
                         .join(" · ")}
                     </p>
                   </div>
-                  <p className="text-muted-foreground text-xs">
-                    {formatDate(run.at)}
-                    {run.by ? ` · by ${run.by}` : ""}
-                  </p>
+                  <div className="flex items-center gap-3">
+                    <p className="text-muted-foreground text-xs">
+                      {formatDate(run.at)}
+                      {run.by ? ` · by ${run.by}` : ""}
+                    </p>
+                    <Link href={`/school-admin/academics/promotion/undo/${encodeURIComponent(run.id)}` as Route} className="text-primary text-xs font-medium hover:underline">
+                      Undo…
+                    </Link>
+                  </div>
                 </li>
               ))}
             </ul>

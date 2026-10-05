@@ -7,7 +7,7 @@ import { LOCALES, isLocale } from "@/lib/i18n/config";
 import { MESSAGES } from "@/lib/i18n/messages";
 import { en } from "@/lib/i18n/messages/en";
 import { createTranslator, translateDynamic } from "@/lib/i18n/translate";
-import { AREA_TABS, MOBILE_PRIMARY, NAV_BY_ROLE, STAFF_PERMISSION_NAV, isNavActive, staffNav, tabsFor } from "@/lib/nav";
+import { AREA_TABS, MOBILE_PRIMARY, NAV_BY_ROLE, STAFF_MODULE_NAV, isNavActive, staffNav, tabsFor } from "@/lib/nav";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { formatDate } from "@/lib/dates";
 
@@ -62,17 +62,19 @@ describe("navigation", () => {
   const t = createTranslator(en);
 
   it("gives every sidebar entry and tab a real label", () => {
-    const items = [...Object.values(NAV_BY_ROLE).flat(), ...Object.values(STAFF_PERMISSION_NAV)];
+    const items = [...Object.values(NAV_BY_ROLE).flat(), ...STAFF_MODULE_NAV.map((entry) => entry.item)];
     for (const item of items) expect(t(item.labelKey)).not.toBe(item.labelKey);
     for (const tab of Object.values(AREA_TABS).flat(2)) expect(t(tab!.labelKey)).not.toBe(tab!.labelKey);
   });
 
   it("keeps the School Admin sidebar short, with setup screens folded away", () => {
     const admin = NAV_BY_ROLE.SCHOOL_ADMIN.map((item) => item.href);
-    expect(admin.length).toBeLessThanOrEqual(16);
-    for (const buried of ["/school-admin/academics", "/school-admin/parents", "/school-admin/admissions", "/school-admin/audit", "/school-admin/website"]) {
+    expect(admin.length).toBeLessThanOrEqual(17);
+    for (const buried of ["/school-admin/academics", "/school-admin/parents", "/school-admin/admissions", "/school-admin/audit"]) {
       expect(admin).not.toContain(buried);
     }
+    // Website has its own entry (5 Oct 2026): the public site and admission form are managed there.
+    expect(admin).toContain("/school-admin/website");
   });
 
   it("highlights the owning entry for folded screens, and only one of them", () => {
@@ -91,6 +93,7 @@ describe("navigation", () => {
     expect(activeOn("/school-admin/homework")).toEqual(["nav.academics"]);
     expect(activeOn("/school-admin/reports")).toEqual(["nav.attendance"]);
     expect(activeOn("/school-admin/inventory")).toEqual(["nav.library"]);
+    expect(activeOn("/school-admin/website/admission")).toEqual(["nav.website"]);
   });
 
   it("gives Events, Calendar, Notices, Meetings and Leave each their own entry, for every role", () => {
@@ -132,8 +135,11 @@ describe("navigation", () => {
   it("never shows a student fees, and shows staff only what they were granted", () => {
     expect(NAV_BY_ROLE.STUDENT.some((item) => item.href.includes("fee"))).toBe(false);
     expect(staffNav([]).map((item) => item.href)).toEqual(NAV_BY_ROLE.NON_TEACHING_STAFF.map((item) => item.href));
-    expect(staffNav(["VIEW_LIBRARY"]).map((item) => item.href)).toContain("/staff/library");
-    expect(staffNav(["VIEW_LIBRARY"]).map((item) => item.href)).not.toContain("/staff/students");
+    expect(staffNav(["library.view"]).map((item) => item.href)).toContain("/staff/library");
+    expect(staffNav(["library.view"]).map((item) => item.href)).not.toContain("/staff/students");
+    // "My route" needs the grant and a route to show.
+    expect(staffNav(["transport.myroute"]).map((item) => item.href)).not.toContain("/staff/my-route");
+    expect(staffNav(["transport.myroute"], { assignedRoute: true }).map((item) => item.href)).toContain("/staff/my-route");
   });
 
   it("puts only real sidebar destinations in the phone's bottom bar", () => {

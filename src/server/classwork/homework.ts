@@ -511,7 +511,7 @@ export async function pendingHomeworkCount(ctx: TenantContext): Promise<number> 
  */
 export async function homeworkDueForMySections(
   ctx: TenantContext,
-  options: { from: Date; to: Date; take?: number },
+  options: { from: Date; to: Date; take?: number; /** One of my sections only; any other id is ignored. */ sectionId?: string | null },
 ) {
   assertRole(ctx.user, "TEACHER");
   const session = await requireCurrentSession(ctx);
@@ -520,10 +520,11 @@ export async function homeworkDueForMySections(
   // "ALL" belongs to admins; a teacher with no sections sees nothing.
   const mine = sectionIds === "ALL" ? [] : sectionIds;
   if (mine.length === 0) return [];
+  const scope = options.sectionId && mine.includes(options.sectionId) ? [options.sectionId] : mine;
 
   const rows = await ctx.db.homework.findMany({
     where: {
-      sectionId: { in: mine },
+      sectionId: { in: scope },
       status: "PUBLISHED",
       dueOn: { gte: options.from, lte: options.to },
     },

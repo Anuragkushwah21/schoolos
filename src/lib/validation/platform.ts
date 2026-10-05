@@ -67,7 +67,7 @@ export const createSchoolAdminSchema = z.object({
   firstName: requiredText("a first name", 60),
   lastName: requiredText("a last name", 60),
   email: requiredEmail,
-  phone: z.string().trim().max(20).optional(),
+  phone: optionalPhone,
 });
 
 export const SUBSCRIPTION_STATUSES = [

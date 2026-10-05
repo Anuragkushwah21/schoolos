@@ -1,12 +1,13 @@
 import "server-only";
 
 import type { PaymentMethod } from "@/generated/prisma/enums";
+import { ACTIVE_CONCESSION, netOf } from "@/server/finance/net";
 import { NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import type { ReceiptSettingsInput } from "@/lib/validation/school";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
-import { staffPermissions } from "@/server/auth/staff-access";
+import { staffHolds } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { findChild } from "@/server/parent/access";
 
@@ -23,7 +24,7 @@ import { findChild } from "@/server/parent/access";
  * Who may open one:
  *   * School Admin — any payment of their school.
  *   * Parent       — payments of a child they are linked to.
- *   * Fee-desk staff (COLLECT_FEES) — what they collect.
+ *   * Fee-desk staff (fees.view / fees.collect) — what they collect.
  * Students never see fees or receipts — fees are for parents only.
  * Everyone else, and anyone asking for a payment outside those, gets the same
  * "not found", so an id reveals nothing about whether it exists.
@@ -65,7 +66,10 @@ export type Receipt = {
   };
   guardian: { name: string; relationship: string; phone: string } | null;
   fees: {
-    breakdown: Array<{ head: string; amountMinor: number }>;
+    /** Each head at its net amount, with the original and any concession shown. */
+    breakdown: Array<{ head: string; amountMinor: number; originalMinor: number; discountMinor: number }>;
+    /** Moved to a later session as "Previous outstanding". */
+    carriedForwardMinor: number;
     totalMinor: number;
     /** Paid in this session before this receipt. */
     previouslyPaidMinor: number;
@@ -86,7 +90,7 @@ async function assertCanSeeStudentReceipts(ctx: TenantContext, studentId: string
       return;
     case "NON_TEACHING_STAFF":
       // The fee desk prints what it collects.
-      if ((await staffPermissions(ctx)).includes("COLLECT_FEES")) return;
+      if (await staffHolds(ctx, ["fees.view", "fees.collect"])) return;
       break;
     case "PARENT": {
       const child = await findChild(ctx, studentId).catch(() => null);
@@ -160,7 +164,7 @@ export async function getReceipt(ctx: TenantContext, paymentId: string): Promise
     ctx.db.feeCharge.findMany({
       where: { studentId: payment.studentId, academicSessionId: payment.academicSessionId },
       orderBy: { feeHead: { name: "asc" } },
-      select: { amountMinor: true, feeHead: { select: { name: true } } },
+      select: { amountMinor: true, feeHead: { select: { name: true } }, concessions: ACTIVE_CONCESSION },
     }),
     // "Previously paid" is everything in the same session taken before this
     // receipt: an earlier date, or the same date but entered first.
@@ -180,7 +184,10 @@ export async function getReceipt(ctx: TenantContext, paymentId: string): Promise
   ]);
   if (!school) throw new NotFoundError(NOT_FOUND);
 
-  const totalMinor = charges.reduce((sum, row) => sum + row.amountMinor, 0);
+  // Net of concessions, and less anything carried forward to a later session.
+  const lines = charges.map((row) => ({ head: row.feeHead.name, ...netOf(row) }));
+  const carried = await ctx.db.feeCarryForward.aggregate({ where: { studentId: payment.studentId, fromSessionId: payment.academicSessionId }, _sum: { amountMinor: true } });
+  const totalMinor = lines.reduce((sum, row) => sum + row.netMinor, 0) - (carried._sum.amountMinor ?? 0);
   const previouslyPaidMinor = earlier._sum.amountMinor ?? 0;
   const afterMinor = totalMinor - previouslyPaidMinor - payment.amountMinor;
   const guardian = payment.student.parents[0] ?? null;
@@ -223,7 +230,8 @@ export async function getReceipt(ctx: TenantContext, paymentId: string): Promise
       ? { name: fullName(guardian.parent), relationship: guardian.relationship, phone: guardian.parent.phone }
       : null,
     fees: {
-      breakdown: charges.map((row) => ({ head: row.feeHead.name, amountMinor: row.amountMinor })),
+      breakdown: lines.map((row) => ({ head: row.head, amountMinor: row.netMinor, originalMinor: row.originalMinor, discountMinor: row.discountMinor })),
+      carriedForwardMinor: carried._sum.amountMinor ?? 0,
       totalMinor,
       previouslyPaidMinor,
       currentMinor: payment.amountMinor,

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { normalizePhone, phoneErrorFor } from "@/lib/phone";
 import type { Gender } from "@/generated/prisma/enums";
 import { CsvFormatError, readCsvRecords } from "@/lib/csv";
 import { parseDateInput } from "@/lib/dates";
@@ -80,8 +81,10 @@ export async function importTeachers(
     else usedEmails.add(email);
     let employeeId = (v["employee id"] ?? "").trim();
     if (employeeId && ids.has(employeeId.toLowerCase())) problems.push(`employee ID ${employeeId} is already used`);
-    const phone = (v["phone"] ?? "").trim() || null;
-    if (phone && !/^\+?[0-9][0-9\s-]{6,18}$/.test(phone)) problems.push("phone is invalid");
+    const phoneRaw = (v["phone"] ?? "").trim() || null;
+    // Same rule as the forms: +91 by default, at most 10 digits; stored as "+91 9876543210".
+    const phone = phoneRaw ? normalizePhone(phoneRaw) : null;
+    if (phoneRaw && !phone) problems.push(`phone is invalid — ${phoneErrorFor(phoneRaw).toLowerCase()}`);
     const genderRaw = (v["gender"] ?? "").trim().toLowerCase();
     const gender = genderRaw ? (GENDERS[genderRaw] ?? null) : null;
     if (genderRaw && !gender) problems.push(`gender "${v["gender"]}" is not Male, Female or Other`);

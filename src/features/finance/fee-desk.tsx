@@ -30,7 +30,10 @@ export function FeeDesk({
   account,
   receiptNo,
   justRecorded,
+  canCollect = true,
 }: {
+  /** Off for staff who may only look (fees.view): no payment form. */
+  canCollect?: boolean;
   basePath: string;
   q: string | undefined;
   positions: Position[];
@@ -65,8 +68,8 @@ export function FeeDesk({
       ) : null}
       <Card>
         <CardHeader>
-          <CardTitle>Record a payment</CardTitle>
-          <CardDescription>Find the student first, then enter what was received.</CardDescription>
+          <CardTitle>{canCollect ? "Record a payment" : "Find a student's fees"}</CardTitle>
+          <CardDescription>{canCollect ? "Find the student first, then enter what was received." : "What a student owes and has paid. Payments are taken by fee-desk staff."}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           <FilterBar
@@ -97,11 +100,13 @@ export function FeeDesk({
                   </div>
                 </dl>
               </div>
-              <PaymentForm
-                studentId={selected.studentId}
-                today={toDateInput(today())}
-                suggestedReceiptNo={receiptNo}
-              />
+              {canCollect ? (
+                <PaymentForm
+                  studentId={selected.studentId}
+                  today={toDateInput(today())}
+                  suggestedReceiptNo={receiptNo}
+                />
+              ) : null}
             </>
           ) : positions.length && q ? (
             <div className="flex flex-col gap-2">

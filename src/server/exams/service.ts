@@ -6,11 +6,11 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { ExamStatus } from "@/generated/prisma/enums";
 import { CsvFormatError, readCsvRecords } from "@/lib/csv";
 import { formatDate, today } from "@/lib/dates";
-import { AppError, ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { examOutcome, gradeFor, paperOutcome, type PaperOutcome, passMarkFor, percentage } from "@/lib/grades";
 import { spanStatus } from "@/lib/time-status";
-import type { ClassTestInput, CreateExamInput, MarkEntry, UpdateExamInput } from "@/lib/validation/exams";
+import type { ClassTestInput, CreateExamInput, MarkEntry, UpdateClassTestInput, UpdateExamInput } from "@/lib/validation/exams";
 import { requireCurrentSession, sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
@@ -23,8 +23,15 @@ import { requireSubjectAssignment, requireTeacherSelf } from "@/server/auth/teac
  * One marks table for both: every paper is an `Assessment` and every mark an
  * `AssessmentResult`. An exam groups a section's papers for one term, adds
  * pass marks and a publish switch, and produces a report card. A class test
- * is an `Assessment` with no exam, set by its own teacher, and its marks are
- * visible as soon as they are entered — as they always have been.
+ * ("test" on screen) is an `Assessment` with no exam, set by its own teacher
+ * for a subject, section — and stream, where the section is shared — they
+ * are assigned to.
+ *
+ * Marks are entered as a draft and then submitted (`marksStatus`). A
+ * submitted test's results reach students and parents; a submitted exam paper
+ * waits for the exam to be published. Once submitted, marks are locked: the
+ * School Admin reopens a paper for correction (recorded), which is the same
+ * idea as unpublishing an exam.
  *
  * Who does what:
  *   * School Admin — creates, edits and deletes exams, enters or corrects any
@@ -38,10 +45,34 @@ import { requireSubjectAssignment, requireTeacherSelf } from "@/server/auth/teac
  * which is recorded, so a published report card never shifts silently.
  */
 
-/** Papers whose results students and parents may see. */
+/** Papers whose results students and parents may see: submitted tests and published exams. */
 export const VISIBLE_PAPER: Prisma.AssessmentWhereInput = {
-  OR: [{ examId: null }, { exam: { status: "PUBLISHED" } }],
+  OR: [{ examId: null, marksStatus: "SUBMITTED" }, { exam: { status: "PUBLISHED" } }],
 };
+
+/** Held papers whose marks are still a draft — what the office chases. */
+export const PENDING_PAPER = (now: Date): Prisma.AssessmentWhereInput => ({
+  date: { lte: now },
+  marksStatus: "DRAFT",
+  OR: [{ examId: null }, { exam: { status: "DRAFT" } }],
+});
+
+/**
+ * Tests that concern one student by stream: whole-section tests, and tests
+ * for their own stream. A Science test is not an Arts student's business.
+ */
+export async function studentStreamWhere(
+  ctx: TenantContext,
+  studentId: string,
+  academicSessionId: string,
+): Promise<Prisma.AssessmentWhereInput> {
+  const enrollment = await ctx.db.studentEnrollment.findFirst({
+    where: { studentId, academicSessionId, status: "ACTIVE" },
+    select: { streamId: true, section: { select: { streamId: true } } },
+  });
+  const stream = enrollment?.streamId ?? enrollment?.section.streamId ?? null;
+  return stream ? { OR: [{ streamId: null }, { streamId: stream }] } : { streamId: null };
+}
 
 const SECTION_LABEL_SELECT = {
   name: true,
@@ -230,10 +261,19 @@ export async function deleteExam(ctx: TenantContext, examId: string): Promise<vo
   });
 }
 
-/** Active students of a section in a session, in roll order. */
-async function sectionRoster(ctx: TenantContext, sectionId: string, academicSessionId: string) {
+/**
+ * Active students of a section in a session, in roll order — only one
+ * stream's students when the test is for that stream.
+ */
+async function sectionRoster(ctx: TenantContext, sectionId: string, academicSessionId: string, streamId: string | null = null) {
   const rows = await ctx.db.studentEnrollment.findMany({
-    where: { sectionId, academicSessionId, status: "ACTIVE", student: { status: "ACTIVE" } },
+    where: {
+      sectionId,
+      academicSessionId,
+      status: "ACTIVE",
+      student: { status: "ACTIVE" },
+      ...(streamId ? { OR: [{ streamId }, { streamId: null, section: { streamId } }] } : {}),
+    },
     select: {
       rollNumber: true,
       student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true } },
@@ -486,10 +526,18 @@ export async function publishExams(ctx: TenantContext, examIds: string[]): Promi
   }
 
   const toPublish = exams.filter((exam) => exam.status !== "PUBLISHED");
-  await ctx.db.exam.updateMany({
-    where: { id: { in: toPublish.map((exam) => exam.id) } },
-    data: { status: "PUBLISHED", publishedAt: new Date() },
-  });
+  const now = new Date();
+  await ctx.db.$transaction([
+    ctx.db.exam.updateMany({
+      where: { id: { in: toPublish.map((exam) => exam.id) } },
+      data: { status: "PUBLISHED", publishedAt: now },
+    }),
+    // Published papers are final: their marks lock with the exam.
+    ctx.db.assessment.updateMany({
+      where: { examId: { in: toPublish.map((exam) => exam.id) }, marksStatus: "DRAFT" },
+      data: { marksStatus: "SUBMITTED", submittedAt: now, submittedById: ctx.user.id },
+    }),
+  ]);
 
   for (const exam of toPublish) {
     await recordAudit({
@@ -508,7 +556,11 @@ export async function unpublishExam(ctx: TenantContext, examId: string): Promise
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const exam = await requireExam(ctx, examId);
   if (exam.status !== "PUBLISHED") return;
-  await ctx.db.exam.updateMany({ where: { id: exam.id }, data: { status: "DRAFT", publishedAt: null } });
+  // Withdrawn for correction: the papers open again too.
+  await ctx.db.$transaction([
+    ctx.db.exam.updateMany({ where: { id: exam.id }, data: { status: "DRAFT", publishedAt: null } }),
+    ctx.db.assessment.updateMany({ where: { examId: exam.id }, data: { marksStatus: "DRAFT", submittedAt: null, submittedById: null } }),
+  ]);
   await recordAudit({
     action: "RESULTS_UNPUBLISHED",
     entityType: "Exam",
@@ -525,8 +577,9 @@ export async function unpublishExam(ctx: TenantContext, examId: string): Promise
 
 /**
  * A paper this user may enter marks for, or a refusal. The admin may reach
- * any of their school's papers; a teacher only a paper of a subject they teach
- * that section this session — or a class test they set themselves.
+ * any of their school's papers. A teacher reaches an exam paper of a subject
+ * they teach that section this session, and a test only if they set it and
+ * still teach that subject (and stream) there — never another teacher's test.
  */
 async function requirePaper(ctx: TenantContext, assessmentId: string) {
   assertRole(ctx.user, "SCHOOL_ADMIN", "TEACHER");
@@ -542,8 +595,14 @@ async function requirePaper(ctx: TenantContext, assessmentId: string) {
       subjectId: true,
       academicSessionId: true,
       teacherId: true,
+      streamId: true,
+      description: true,
+      marksStatus: true,
+      submittedAt: true,
       subject: { select: { name: true } },
       section: { select: SECTION_LABEL_SELECT },
+      stream: { select: { name: true } },
+      teacher: { select: { firstName: true, lastName: true } },
       exam: { select: { id: true, name: true, status: true } },
     },
   });
@@ -551,9 +610,11 @@ async function requirePaper(ctx: TenantContext, assessmentId: string) {
 
   if (ctx.user.role === "TEACHER") {
     const me = await requireTeacherSelf(ctx);
-    if (paper.teacherId !== me.id || paper.exam) {
-      await requireSubjectAssignment(ctx, paper.sectionId, paper.subjectId, paper.academicSessionId);
+    if (!paper.exam && paper.teacherId !== me.id) {
+      throw new ForbiddenError("This test belongs to another teacher. Only the teacher who set it, or the school office, can change its marks.");
     }
+    if (paper.exam) await requireSubjectAssignment(ctx, paper.sectionId, paper.subjectId, paper.academicSessionId);
+    else await requireTeachingAssignment(ctx, paper.sectionId, paper.subjectId, paper.streamId, paper.academicSessionId);
   }
   return paper;
 }
@@ -561,7 +622,7 @@ async function requirePaper(ctx: TenantContext, assessmentId: string) {
 export async function getMarksSheet(ctx: TenantContext, assessmentId: string) {
   const paper = await requirePaper(ctx, assessmentId);
   const [roster, results] = await Promise.all([
-    sectionRoster(ctx, paper.sectionId, paper.academicSessionId),
+    sectionRoster(ctx, paper.sectionId, paper.academicSessionId, paper.streamId),
     ctx.db.assessmentResult.findMany({
       where: { assessmentId: paper.id },
       select: { studentId: true, marksObtained: true, absent: true, remarks: true },
@@ -569,6 +630,23 @@ export async function getMarksSheet(ctx: TenantContext, assessmentId: string) {
   ]);
   const byStudent = new Map(results.map((row) => [row.studentId, row]));
   const passMark = passMarkFor(paper.maxMarks, paper.passMarks);
+  const held = paper.date <= today();
+  const published = paper.exam?.status === "PUBLISHED";
+  const submitted = paper.marksStatus === "SUBMITTED";
+  const rows = roster.map((student) => {
+    const result = byStudent.get(student.studentId) ?? null;
+    const marks = result?.marksObtained ?? null;
+    return {
+      ...student,
+      marksObtained: marks,
+      absent: result?.absent ?? false,
+      remark: result?.remarks ?? null,
+      percent: marks === null ? null : percentage(marks, paper.maxMarks),
+      /** Entered, absent, or still missing — what the teacher must finish. */
+      entry: result?.absent ? ("ABSENT" as const) : marks !== null ? ("ENTERED" as const) : ("MISSING" as const),
+      outcome: paperOutcome(paper, result),
+    };
+  });
 
   return {
     paper: {
@@ -576,24 +654,26 @@ export async function getMarksSheet(ctx: TenantContext, assessmentId: string) {
       name: paper.name,
       subject: paper.subject.name,
       section: sectionLabel(paper.section),
+      stream: paper.stream?.name ?? null,
+      description: paper.description,
+      teacher: paper.teacher ? fullName(paper.teacher) : null,
       date: paper.date,
       maxMarks: paper.maxMarks,
       passMarks: passMark,
       exam: paper.exam,
+      marksStatus: paper.marksStatus,
+      submittedAt: paper.submittedAt,
     },
-    /** Marks open on the paper's date and close when results are published. */
-    editable: paper.exam?.status !== "PUBLISHED" && paper.date <= today(),
-    held: paper.date <= today(),
-    rows: roster.map((student) => {
-      const result = byStudent.get(student.studentId) ?? null;
-      return {
-        ...student,
-        marksObtained: result?.marksObtained ?? null,
-        absent: result?.absent ?? false,
-        remark: result?.remarks ?? null,
-        outcome: paperOutcome(paper, result),
-      };
-    }),
+    stage: testStage({ held, kind: paper.exam ? "EXAM" : "TEST", marksStatus: paper.marksStatus, published, entered: rows.filter((row) => row.entry !== "MISSING").length }),
+    /** Marks open on the paper's date, as a draft, until they are submitted. */
+    editable: !published && !submitted && held,
+    held,
+    /** Every student has a mark or is marked absent. */
+    complete: rows.every((row) => row.entry !== "MISSING"),
+    canSubmit: !published && !submitted && held,
+    /** The office reopens a submitted paper for correction (an exam: by unpublishing). */
+    canReopen: ctx.user.role === "SCHOOL_ADMIN" && submitted && !published,
+    rows,
   };
 }
 
@@ -612,12 +692,15 @@ export async function saveMarks(
   if (paper.exam?.status === "PUBLISHED") {
     throw new AppError("VALIDATION", "These results are published. The school office must unpublish them before marks can change.");
   }
+  if (paper.marksStatus === "SUBMITTED") {
+    throw new AppError("VALIDATION", "These marks were submitted, so they are locked. The school office can reopen them for a correction.");
+  }
   if (paper.date > today()) {
     throw new AppError("VALIDATION", `This paper is on ${formatDate(paper.date)}. Marks can be entered from that day.`);
   }
   if (!entries.length) throw new ValidationError("Enter at least one mark.");
 
-  const roster = new Set((await sectionRoster(ctx, paper.sectionId, paper.academicSessionId)).map((row) => row.studentId));
+  const roster = new Set((await sectionRoster(ctx, paper.sectionId, paper.academicSessionId, paper.streamId)).map((row) => row.studentId));
   const errors: Record<string, string[]> = {};
   const seen = new Set<string>();
   for (const entry of entries) {
@@ -707,7 +790,7 @@ export async function importMarksCsv(
     throw new AppError(
       "VALIDATION",
       sheet.held
-        ? "These results are published. The school office must unpublish them before marks can change."
+        ? "These marks are submitted or published, so they are locked. The school office can reopen them for a correction."
         : `This paper is on ${formatDate(sheet.paper.date)}. Marks can be entered from that day.`,
     );
   }
@@ -773,11 +856,71 @@ export async function importMarksCsv(
 // Teachers
 // -----------------------------------------------------------------------------
 
-/** A class test the teacher sets for a subject they teach. Visible once marked. */
-export async function createClassTest(ctx: TenantContext, input: ClassTestInput): Promise<{ id: string }> {
+/**
+ * May this teacher set a test for this subject, section and stream? Their
+ * assignment must match exactly: a teacher of Science-stream Physics may set a
+ * Science test, not a whole-section one, and nobody may pick a subject, class
+ * or stream they are not assigned.
+ */
+export async function requireTeachingAssignment(
+  ctx: TenantContext,
+  sectionId: string,
+  subjectId: string,
+  streamId: string | null,
+  academicSessionId: string,
+): Promise<{ teacherId: string }> {
+  const teacher = await requireTeacherSelf(ctx);
+  const assignment = await ctx.db.teacherSubjectAssignment.findFirst({
+    where: { teacherId: teacher.id, sectionId, subjectId, academicSessionId, streamId },
+    select: { id: true },
+  });
+  if (!assignment) throw new ForbiddenError("You can only set tests for the subjects, classes and streams you are assigned to teach.");
+  return { teacherId: teacher.id };
+}
+
+/** What a teacher may set a test for: their own assignments, each with the class size it reaches. */
+export async function myTestOptions(ctx: TenantContext) {
+  assertRole(ctx.user, "TEACHER");
+  const teacher = await requireTeacherSelf(ctx);
+  const session = await requireCurrentSession(ctx);
+  const rows = await ctx.db.teacherSubjectAssignment.findMany({
+    where: { teacherId: teacher.id, academicSessionId: session.id, subject: { isActive: true } },
+    select: {
+      sectionId: true,
+      subjectId: true,
+      streamId: true,
+      subject: { select: { name: true } },
+      stream: { select: { name: true } },
+      section: { select: { name: true, class: { select: { name: true, level: true } }, stream: { select: { name: true } } } },
+    },
+  });
+  const options = await Promise.all(
+    rows.map(async (row) => ({
+      value: `${row.sectionId}|${row.subjectId}|${row.streamId ?? ""}`,
+      sectionId: row.sectionId,
+      subjectId: row.subjectId,
+      streamId: row.streamId,
+      subject: row.subject.name,
+      className: row.section.class.name,
+      section: row.section.name,
+      stream: row.stream?.name ?? row.section.stream?.name ?? null,
+      level: row.section.class.level,
+      students: (await sectionRoster(ctx, row.sectionId, session.id, row.streamId)).length,
+      label: `${row.subject.name} — ${row.section.class.name} ${row.section.name}${row.stream ? ` (${row.stream.name})` : ""}`,
+    })),
+  );
+  return options.sort((a, b) => a.level - b.level || a.section.localeCompare(b.section) || a.subject.localeCompare(b.subject));
+}
+
+/** A test the teacher sets for a subject they teach. Families see it once marks are submitted. */
+export async function createClassTest(
+  ctx: TenantContext,
+  input: Omit<ClassTestInput, "streamId" | "description"> & { streamId?: string | null; description?: string | null },
+): Promise<{ id: string }> {
   assertRole(ctx.user, "TEACHER");
   const session = await requireCurrentSession(ctx);
-  const { teacherId } = await requireSubjectAssignment(ctx, input.sectionId, input.subjectId, session.id);
+  const streamId = input.streamId ?? null;
+  const { teacherId } = await requireTeachingAssignment(ctx, input.sectionId, input.subjectId, streamId, session.id);
 
   const created = await ctx.db.assessment.create({
     data: {
@@ -785,8 +928,10 @@ export async function createClassTest(ctx: TenantContext, input: ClassTestInput)
       academicSessionId: session.id,
       sectionId: input.sectionId,
       subjectId: input.subjectId,
+      streamId,
       teacherId,
       name: input.name,
+      description: input.description ?? null,
       date: input.date,
       maxMarks: input.maxMarks,
       passMarks: input.passMarks ?? null,
@@ -803,6 +948,280 @@ export async function createClassTest(ctx: TenantContext, input: ClassTestInput)
     summary: `${created.subject.name} test "${input.name}" set for ${sectionLabel(created.section)} on ${formatDate(input.date)}.`,
   });
   return { id: created.id };
+}
+
+/** A test (not an exam paper) that this user may change: its own teacher, or the School Admin. */
+async function requireOwnTest(ctx: TenantContext, assessmentId: string) {
+  const paper = await requirePaper(ctx, assessmentId);
+  if (paper.exam) throw new AppError("VALIDATION", "Exam papers are changed from the exam itself.");
+  return paper;
+}
+
+/** Change a test's details while its marks are still a draft. */
+export async function updateClassTest(ctx: TenantContext, input: UpdateClassTestInput): Promise<void> {
+  const paper = await requireOwnTest(ctx, input.assessmentId);
+  if (paper.marksStatus === "SUBMITTED") {
+    throw new AppError("VALIDATION", "This test's marks are submitted, so it is locked. The school office can reopen it for a correction.");
+  }
+  const highest = await ctx.db.assessmentResult.aggregate({ where: { assessmentId: paper.id }, _max: { marksObtained: true } });
+  if ((highest._max.marksObtained ?? 0) > input.maxMarks) {
+    throw new ValidationError("Please correct the highlighted fields.", {
+      maxMarks: [`A student already has ${highest._max.marksObtained} marks. The maximum cannot be lower than that.`],
+    });
+  }
+  await ctx.db.assessment.updateMany({
+    where: { id: paper.id },
+    data: { name: input.name, date: input.date, maxMarks: input.maxMarks, description: input.description ?? null },
+  });
+  await recordAudit({
+    action: "CLASS_TEST_UPDATED",
+    entityType: "Assessment",
+    entityId: paper.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `${paper.subject.name} test "${input.name}" for ${sectionLabel(paper.section)} updated.`,
+  });
+}
+
+/** Delete a test only while no marks have been entered — anything else is a record. */
+export async function deleteClassTest(ctx: TenantContext, assessmentId: string): Promise<void> {
+  const paper = await requireOwnTest(ctx, assessmentId);
+  const marked = await ctx.db.assessmentResult.count({ where: { assessmentId: paper.id } });
+  if (marked || paper.marksStatus === "SUBMITTED") {
+    throw new ConflictError("Marks have been entered for this test, so it is kept as a record. Clear the marks first if it was set by mistake.");
+  }
+  await ctx.db.assessment.deleteMany({ where: { id: paper.id } });
+  await recordAudit({
+    action: "CLASS_TEST_DELETED",
+    entityType: "Assessment",
+    entityId: paper.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `${paper.subject.name} test "${paper.name}" for ${sectionLabel(paper.section)} deleted (no marks).`,
+  });
+}
+
+/**
+ * Hand in a paper's marks. Every student needs a mark or "absent" first. A
+ * test's results then reach students and parents; an exam paper's wait for
+ * the exam to be published. Either way the marks lock.
+ */
+export async function submitMarks(ctx: TenantContext, assessmentId: string): Promise<{ visibleNow: boolean }> {
+  const sheet = await getMarksSheet(ctx, assessmentId);
+  if (sheet.paper.marksStatus === "SUBMITTED") throw new AppError("VALIDATION", "These marks are already submitted.");
+  if (sheet.paper.exam?.status === "PUBLISHED") throw new AppError("VALIDATION", "These results are already published.");
+  if (!sheet.held) throw new AppError("VALIDATION", `This test is on ${formatDate(sheet.paper.date)}. Marks can be submitted after it is held.`);
+  if (!sheet.rows.length) throw new AppError("VALIDATION", "There are no students to submit marks for.");
+  const missing = sheet.rows.filter((row) => row.entry === "MISSING");
+  if (missing.length) {
+    throw new AppError(
+      "VALIDATION",
+      `${missing.length} student${missing.length === 1 ? " has" : "s have"} no marks yet (${missing.slice(0, 3).map((row) => row.name).join(", ")}${missing.length > 3 ? "…" : ""}). Enter marks or tick Absent, save, then submit.`,
+    );
+  }
+  const { count } = await ctx.db.assessment.updateMany({
+    where: { id: assessmentId, marksStatus: "DRAFT" },
+    data: { marksStatus: "SUBMITTED", submittedAt: new Date(), submittedById: ctx.user.id },
+  });
+  if (!count) throw new AppError("VALIDATION", "These marks are already submitted.");
+  await recordAudit({
+    action: "MARKS_SUBMITTED",
+    entityType: "Assessment",
+    entityId: assessmentId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Marks submitted for ${sheet.paper.subject} — ${sheet.paper.name} (${sheet.paper.section}).`,
+  });
+  return { visibleNow: !sheet.paper.exam };
+}
+
+/** School Admin: reopen submitted marks for a correction. The reason is recorded. */
+export async function reopenMarks(ctx: TenantContext, assessmentId: string, reason: string): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const paper = await requirePaper(ctx, assessmentId);
+  if (paper.exam?.status === "PUBLISHED") {
+    throw new AppError("VALIDATION", "This exam's results are published. Unpublish the exam to correct its marks.");
+  }
+  if (paper.marksStatus !== "SUBMITTED") return;
+  await ctx.db.assessment.updateMany({ where: { id: paper.id }, data: { marksStatus: "DRAFT", submittedAt: null, submittedById: null } });
+  await recordAudit({
+    action: "MARKS_REOPENED",
+    entityType: "Assessment",
+    entityId: paper.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Marks for ${paper.subject.name} — ${paper.name} (${sectionLabel(paper.section)}) reopened for correction: ${reason}`,
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Where a test stands — one vocabulary for every screen
+// -----------------------------------------------------------------------------
+
+export type TestStage = "UPCOMING" | "ENTER_MARKS" | "DRAFT" | "SUBMITTED" | "PUBLISHED";
+
+export const TEST_STAGE_LABEL: Record<TestStage, string> = {
+  UPCOMING: "Upcoming",
+  ENTER_MARKS: "Enter marks",
+  DRAFT: "Draft saved",
+  SUBMITTED: "Submitted — awaiting publication",
+  PUBLISHED: "Published",
+};
+
+/**
+ * Upcoming (not held yet) → Enter marks (held, none entered) → Draft saved →
+ * Submitted (an exam paper waiting for the exam to be published) → Published
+ * (a submitted test, or a published exam's paper).
+ */
+export function testStage(input: { held: boolean; kind: "EXAM" | "TEST"; marksStatus: "DRAFT" | "SUBMITTED"; published: boolean; entered: number }): TestStage {
+  if (input.published) return "PUBLISHED";
+  if (input.marksStatus === "SUBMITTED") return input.kind === "TEST" ? "PUBLISHED" : "SUBMITTED";
+  if (!input.held) return "UPCOMING";
+  return input.entered ? "DRAFT" : "ENTER_MARKS";
+}
+
+const TEST_ROW_SELECT = {
+  id: true,
+  name: true,
+  date: true,
+  maxMarks: true,
+  sectionId: true,
+  streamId: true,
+  academicSessionId: true,
+  marksStatus: true,
+  submittedAt: true,
+  teacherId: true,
+  subject: { select: { id: true, name: true } },
+  section: { select: { ...SECTION_LABEL_SELECT, classId: true, class: { select: { name: true, level: true } } } },
+  stream: { select: { name: true } },
+  teacher: { select: { firstName: true, lastName: true } },
+  exam: { select: { id: true, name: true, status: true } },
+  _count: { select: { results: { where: { OR: [{ marksObtained: { not: null } }, { absent: true }] } } } },
+} satisfies Prisma.AssessmentSelect;
+
+/** Class sizes for a set of tests, counting only the stream a stream test is for. */
+async function expectedCounts(ctx: TenantContext, rows: Array<{ id: string; sectionId: string; streamId: string | null; academicSessionId: string }>) {
+  const keys = [...new Set(rows.map((row) => `${row.academicSessionId}|${row.sectionId}|${row.streamId ?? ""}`))];
+  const sizes = new Map<string, number>();
+  await Promise.all(
+    keys.map(async (key) => {
+      const [sessionId, sectionId, streamId] = key.split("|");
+      sizes.set(key, (await sectionRoster(ctx, sectionId!, sessionId!, streamId || null)).length);
+    }),
+  );
+  return (row: { sectionId: string; streamId: string | null; academicSessionId: string }) => sizes.get(`${row.academicSessionId}|${row.sectionId}|${row.streamId ?? ""}`) ?? 0;
+}
+
+function shapeTest(row: Prisma.AssessmentGetPayload<{ select: typeof TEST_ROW_SELECT }>, expected: number) {
+  const held = row.date <= today();
+  const kind = row.exam ? ("EXAM" as const) : ("TEST" as const);
+  const published = row.exam?.status === "PUBLISHED";
+  const stage = testStage({ held, kind, marksStatus: row.marksStatus, published, entered: row._count.results });
+  return {
+    id: row.id,
+    name: row.exam ? row.exam.name : row.name,
+    kind,
+    examId: row.exam?.id ?? null,
+    date: row.date,
+    maxMarks: row.maxMarks,
+    subject: row.subject.name,
+    subjectId: row.subject.id,
+    className: row.section.class.name,
+    classId: row.section.classId,
+    level: row.section.class.level,
+    section: sectionLabel(row.section),
+    sectionId: row.sectionId,
+    stream: row.stream?.name ?? row.section.stream?.name ?? null,
+    streamId: row.streamId,
+    teacher: row.teacher ? fullName(row.teacher) : null,
+    teacherId: row.teacherId,
+    entered: row._count.results,
+    expected,
+    held,
+    stage,
+    stageLabel: TEST_STAGE_LABEL[stage],
+  };
+}
+
+export type TestRow = ReturnType<typeof shapeTest>;
+
+/**
+ * A teacher's tests this session: tests they set, and exam papers for the
+ * subjects they are assigned. Another teacher's tests never appear.
+ */
+export async function listMyTests(ctx: TenantContext) {
+  assertRole(ctx.user, "TEACHER");
+  const teacher = await requireTeacherSelf(ctx);
+  const session = await requireCurrentSession(ctx);
+  const assignments = await ctx.db.teacherSubjectAssignment.findMany({
+    where: { teacherId: teacher.id, academicSessionId: session.id },
+    select: { sectionId: true, subjectId: true },
+  });
+  const rows = await ctx.db.assessment.findMany({
+    where: {
+      academicSessionId: session.id,
+      OR: [
+        { examId: null, teacherId: teacher.id },
+        ...(assignments.length ? [{ examId: { not: null }, OR: assignments.map((row) => ({ sectionId: row.sectionId, subjectId: row.subjectId })) }] : []),
+      ],
+    },
+    orderBy: [{ date: "desc" }],
+    select: TEST_ROW_SELECT,
+  });
+  const expected = await expectedCounts(ctx, rows);
+  return rows.map((row) => shapeTest(row, expected(row)));
+}
+
+export type TestFilters = {
+  view?: "all" | "pending" | "published";
+  classId?: string;
+  sectionId?: string;
+  streamId?: string;
+  subjectId?: string;
+  teacherId?: string;
+  q?: string;
+};
+
+/**
+ * School Admin: every test and exam paper this session, filtered.
+ *   * pending — held, marks still a draft (or not started);
+ *   * published — results families can see (submitted tests, published exams).
+ */
+export async function listTests(ctx: TenantContext, filters: TestFilters = {}) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const session = await requireCurrentSession(ctx);
+  const now = today();
+  // Each filter is its own AND clause, so their ORs never overwrite each other.
+  const and: Prisma.AssessmentWhereInput[] = [{ academicSessionId: session.id }];
+  if (filters.sectionId) and.push({ sectionId: filters.sectionId });
+  if (filters.classId) and.push({ section: { classId: filters.classId } });
+  if (filters.streamId) and.push({ OR: [{ streamId: filters.streamId }, { section: { streamId: filters.streamId } }] });
+  if (filters.subjectId) and.push({ subjectId: filters.subjectId });
+  if (filters.teacherId) and.push({ teacherId: filters.teacherId });
+  if (filters.q) and.push({ name: { contains: filters.q, mode: "insensitive" } });
+  if (filters.view === "pending") and.push(PENDING_PAPER(now));
+  if (filters.view === "published") and.push(VISIBLE_PAPER);
+  const rows = await ctx.db.assessment.findMany({
+    where: { AND: and },
+    orderBy: [{ date: "desc" }],
+    take: 300,
+    select: TEST_ROW_SELECT,
+  });
+  const expected = await expectedCounts(ctx, rows);
+  return rows.map((row) => shapeTest(row, expected(row)));
+}
+
+/** Counts for the admin's tabs. */
+export async function testCounts(ctx: TenantContext) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const session = await requireCurrentSession(ctx);
+  const now = today();
+  const [all, pending, published] = await Promise.all([
+    ctx.db.assessment.count({ where: { academicSessionId: session.id } }),
+    ctx.db.assessment.count({ where: { AND: [{ academicSessionId: session.id }, PENDING_PAPER(now)] } }),
+    ctx.db.assessment.count({ where: { academicSessionId: session.id, ...VISIBLE_PAPER } }),
+  ]);
+  return { all, pending, published };
 }
 
 /** Every paper this teacher enters marks for this session — exam papers and class tests. */
@@ -825,7 +1244,11 @@ export async function listMyPapers(ctx: TenantContext) {
   const papers = await ctx.db.assessment.findMany({
     where: {
       academicSessionId: session.id,
-      OR: assignments.map((row) => ({ sectionId: row.sectionId, subjectId: row.subjectId })),
+      // Exam papers for their subjects; tests only their own — never another teacher's.
+      OR: [
+        { examId: null, teacherId: teacher.id },
+        { examId: { not: null }, OR: assignments.map((row) => ({ sectionId: row.sectionId, subjectId: row.subjectId })) },
+      ],
     },
     orderBy: [{ date: "desc" }],
     select: {

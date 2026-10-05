@@ -1,4 +1,5 @@
 import "server-only";
+import { normalizePhone, phoneErrorFor } from "@/lib/phone";
 import { admissionYear, allocateAdmissionNumber, ensureAdmissionCounter } from "@/server/people/admission-number";
 
 import { changeStudentStatus } from "@/server/people/lifecycle";
@@ -8,7 +9,7 @@ import { CsvFormatError, readCsvRecords } from "@/lib/csv";
 import { parseDateInput, today } from "@/lib/dates";
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { sectionLabel } from "@/server/academics/structure";
-import { claimSeatsForGroup } from "@/server/academics/streams";
+import { claimSeatsForGroup, claimShare } from "@/server/academics/streams";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -171,6 +172,51 @@ export async function changeSection(
     metadata: { studentIds: moving.map((row) => row.studentId) },
   });
   return { moved: moving.length };
+}
+
+/**
+ * Put several students of a shared section into one stream / group, within
+ * that stream's seats (checked under lock, like every placement). Only for a
+ * section whose seats are split among streams; a whole-section stream or a
+ * section without streams has nothing to choose.
+ */
+export async function assignStream(ctx: TenantContext, input: { streamId: string; studentIds: string[] }): Promise<{ assigned: number }> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const stream = await ctx.db.stream.findFirst({ where: { id: input.streamId, isActive: true }, select: { id: true, name: true } });
+  if (!stream) throw new NotFoundError("That stream was not found.");
+  const students = await requireStudents(ctx, input.studentIds);
+  const rows = await ctx.db.studentEnrollment.findMany({
+    where: { studentId: { in: students.map((s) => s.id) }, academicSession: { isCurrent: true }, status: "ACTIVE" },
+    select: { id: true, studentId: true, sectionId: true, streamId: true, section: { select: { ...SECTION_SELECT, streamId: true } } },
+  });
+  const placed = new Set(rows.map((row) => row.studentId));
+  const missing = students.filter((student) => !placed.has(student.id));
+  if (missing.length) throw new ConflictError(`Not placed in a section this session: ${names(missing)}.`);
+
+  const bySection = new Map<string, typeof rows>();
+  for (const row of rows) bySection.set(row.sectionId, [...(bySection.get(row.sectionId) ?? []), row]);
+  let assigned = 0;
+  await ctx.db.$transaction(async (tx) => {
+    for (const [sectionId, group] of bySection) {
+      const section = group[0]!.section;
+      if (section.streamId) throw new ConflictError(`${sectionLabel(section)} is entirely one stream. Move the students to another section instead.`);
+      const moving = group.filter((row) => row.streamId !== stream.id);
+      if (!moving.length) continue;
+      await claimShare(tx, sectionId, stream.id, moving.length, sectionLabel(section));
+      await tx.studentEnrollment.updateMany({ where: { id: { in: moving.map((row) => row.id) } }, data: { streamId: stream.id } });
+      assigned += moving.length;
+    }
+  });
+  await recordAudit({
+    action: "STUDENTS_STREAM_ASSIGNED",
+    entityType: "Stream",
+    entityId: stream.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `${assigned} student${assigned === 1 ? "" : "s"} put in the ${stream.name} stream.`,
+    metadata: { studentIds: rows.map((row) => row.studentId) },
+  });
+  return { assigned };
 }
 
 /** Change status for many students. Leaving students lose their portal login. */
@@ -375,8 +421,11 @@ export async function importStudents(
       else rollsTaken.add(key);
     }
 
-    const phone = (v["guardian phone"] ?? "").trim();
-    if (!/^\+?[0-9][0-9\s-]{6,18}$/.test(phone)) problems.push("guardian phone is missing or invalid");
+    const phoneRaw = (v["guardian phone"] ?? "").trim();
+    // Same rule as the forms: +91 by default, at most 10 digits; stored as "+91 9876543210".
+    const phone = normalizePhone(phoneRaw) ?? "";
+    if (!phoneRaw) problems.push("guardian phone is missing");
+    else if (!phone) problems.push(`guardian phone is invalid — ${phoneErrorFor(phoneRaw).toLowerCase()}`);
     const guardianFirst = (v["guardian first name"] ?? "").trim();
     const known = phone ? parentByPhone.has(phoneDigits(phone)) : false;
     if (!known && !guardianFirst) problems.push("guardian first name is needed for a new guardian");

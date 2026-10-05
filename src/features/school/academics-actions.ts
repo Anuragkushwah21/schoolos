@@ -14,6 +14,8 @@ import {
   subjectSchema,
   updateClassSchema,
   updateSectionSchema,
+  updateStreamSchema,
+  updateSubjectSchema,
 } from "@/lib/validation/school";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import {
@@ -31,6 +33,8 @@ import {
   setSubjectActive,
   updateClass,
   updateSection,
+  updateStream,
+  updateSubject,
 } from "@/server/academics/structure";
 import { saveStreamAllocations } from "@/server/academics/streams";
 import { performAction } from "@/server/perform-action";
@@ -225,5 +229,27 @@ export async function deleteSectionAction(_p: Result, formData: FormData): Promi
       return successResult("Section deleted.");
     },
     { revalidate: REVALIDATE, redirectTo: "/school-admin/academics/classes" },
+  );
+}
+
+export async function updateSubjectAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      await updateSubject(ctx, parseFormData(updateSubjectSchema, formData));
+      return successResult("Subject renamed.");
+    },
+    { revalidate: REVALIDATE },
+  );
+}
+
+export async function updateStreamAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      await updateStream(ctx, parseFormData(updateStreamSchema, formData));
+      return successResult("Stream renamed.");
+    },
+    { revalidate: REVALIDATE },
   );
 }

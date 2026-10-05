@@ -309,6 +309,53 @@ export async function setSubjectActive(ctx: TenantContext, subjectId: string, is
   if (!count) throw new NotFoundError();
 }
 
+/**
+ * Rename a subject or change its code. Every test, timetable period and
+ * report that shows it reads the name from here, so history follows the
+ * new name — nothing is copied or lost. Subjects are never deleted: switch
+ * one off instead (`setSubjectActive`).
+ */
+export async function updateSubject(ctx: TenantContext, input: { subjectId: string; name: string; code: string }): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const current = await ctx.db.subject.findFirst({ where: { id: input.subjectId }, select: { name: true, code: true } });
+  if (!current) throw new NotFoundError("That subject was not found.");
+  try {
+    await ctx.db.subject.updateMany({ where: { id: input.subjectId }, data: { name: input.name, code: input.code } });
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new ConflictError("Another subject already uses that code.");
+    throw error;
+  }
+  await recordAudit({
+    action: "SUBJECT_UPDATED",
+    entityType: "Subject",
+    entityId: input.subjectId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Subject ${current.name} (${current.code}) renamed to ${input.name} (${input.code}).`,
+  });
+}
+
+/** Rename a stream. Like subjects, streams are switched off, never deleted. */
+export async function updateStream(ctx: TenantContext, input: { streamId: string; name: string }): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const current = await ctx.db.stream.findFirst({ where: { id: input.streamId }, select: { name: true } });
+  if (!current) throw new NotFoundError("That stream was not found.");
+  try {
+    await ctx.db.stream.updateMany({ where: { id: input.streamId }, data: { name: input.name } });
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new ConflictError("Another stream already has that name.");
+    throw error;
+  }
+  await recordAudit({
+    action: "STREAM_UPDATED",
+    entityType: "Stream",
+    entityId: input.streamId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Stream ${current.name} renamed to ${input.name}.`,
+  });
+}
+
 // -----------------------------------------------------------------------------
 // Sections
 // -----------------------------------------------------------------------------

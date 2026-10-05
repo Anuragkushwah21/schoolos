@@ -53,7 +53,7 @@ const admin = () => requireTenantForAction("SCHOOL_ADMIN");
 
 // A salary change alters what the teacher's own screen shows, and a fee change
 // alters the parent's and the student's, so all three areas are refreshed.
-const FINANCE_PAGES = ["/school-admin", "/teacher", "/parent", "/student"];
+const FINANCE_PAGES = ["/school-admin", "/teacher", "/parent", "/student", "/staff"];
 
 export async function setSalaryAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
@@ -188,23 +188,25 @@ export async function removePaymentAction(_p: Result, formData: FormData): Promi
 export async function recordExpenseAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
+      // The service checks the expenses permission for staff.
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF");
       await recordExpense(ctx, parseFormData(expenseSchema, formData));
       return successResult("Expense recorded.");
     },
-    { revalidate: "/school-admin" },
+    { revalidate: ["/school-admin", "/staff"] },
   );
 }
 
 export async function removeExpenseAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
+      // The service checks the expenses permission for staff.
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF");
       const { expenseId } = parseFormData(z.object({ expenseId: id }), formData);
       await removeExpense(ctx, expenseId);
       return successResult("Expense removed.");
     },
-    { revalidate: "/school-admin" },
+    { revalidate: ["/school-admin", "/staff"] },
   );
 }
 
@@ -245,7 +247,8 @@ const payrollSchema = z.object({
 export async function payPayrollAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
+      // The service checks "Record salary payments" for staff.
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF");
       const input = parseFormData(payrollSchema, formData);
       const ticked = formData.getAll("pay").map(String);
       const errors: Record<string, string[]> = {};

@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   checkbox,
   id,
+  optionalDate,
   optionalPastDate,
   optionalEmail,
   optionalEnum,
@@ -105,7 +106,7 @@ export type AdmissionApplicationInput = z.infer<typeof admissionApplicationSchem
 
 export const admissionStatusSchema = z.object({
   applicationId: id,
-  status: z.enum(["UNDER_REVIEW", "WAITLISTED", "REJECTED"]),
+  status: z.enum(["UNDER_REVIEW", "SHORTLISTED", "APPROVED", "REJECTED"]),
   reviewNotes: optionalText(1000),
 });
 
@@ -117,4 +118,10 @@ export const acceptAdmissionSchema = z.object({
   rollNumber: optionalText(10),
   admissionNumber: optionalText(30),
   reviewNotes: optionalText(1000),
+});
+
+export const admissionFollowUpSchema = z.object({
+  applicationId: id,
+  note: requiredText("what happened", 1000),
+  nextFollowUpOn: optionalDate,
 });

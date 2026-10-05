@@ -8,7 +8,7 @@ import { useT, useTranslateDynamic } from "@/components/i18n/i18n-provider";
 import { humanize } from "@/lib/format";
 import { SUPPORT_ACTIONS, SUPPORT_PRIORITIES, SUPPORT_REASONS, SUPPORT_STATUSES } from "@/lib/validation/support";
 
-import { createSupportAction, followUpSupportAction } from "./actions";
+import { createSupportAction, followUpSupportAction, scheduleExtraClassAction } from "./actions";
 
 type Option = { value: string; label: string };
 
@@ -125,8 +125,52 @@ export function FollowUpForm({ supportId, current }: { supportId: string; curren
         options={SUPPORT_STATUSES.filter((value) => value !== current).map((value) => ({ value, label: label.status(value) }))}
         placeholder={t("support.keepStatus")}
       />
+      <TextareaField
+        name="parentRemark"
+        label="Remark shared with the parent (optional)"
+        hint="Parents see this on their Support page. Follow-up notes above stay with staff."
+        rows={2}
+        maxLength={500}
+        placeholder="Practising fractions at home for 10 minutes a day will help."
+      />
       <div>
         <SubmitButton pendingLabel={t("support.saving")}>{t("support.saveFollowUp")}</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** One click to close the support once it has done its job. */
+export function CompleteSupportForm({ supportId }: { supportId: string }) {
+  return (
+    <ActionForm action={followUpSupportAction}>
+      <input type="hidden" name="supportId" value={supportId} />
+      <input type="hidden" name="status" value="RESOLVED" />
+      <input type="hidden" name="note" value="Support completed." />
+      <div>
+        <SubmitButton variant="outline" pendingLabel="Saving…">
+          Mark support completed
+        </SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** Book an extra class: the student, their parents and the teacher are invited (a Meeting). */
+export function ExtraClassForm({ supportId, today }: { supportId: string; today: string }) {
+  return (
+    <ActionForm action={scheduleExtraClassAction}>
+      <input type="hidden" name="supportId" value={supportId} />
+      <FieldRow>
+        <TextField name="date" label="Date" type="date" min={today} defaultValue={today} required />
+        <TextField name="location" label="Where" placeholder="Room 12" maxLength={120} />
+      </FieldRow>
+      <FieldRow>
+        <TextField name="startMinute" label="Starts" type="time" defaultValue="14:00" required />
+        <TextField name="endMinute" label="Ends" type="time" defaultValue="14:45" required />
+      </FieldRow>
+      <div>
+        <SubmitButton pendingLabel="Booking…">Book extra class</SubmitButton>
       </div>
     </ActionForm>
   );

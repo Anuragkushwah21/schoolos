@@ -5,15 +5,15 @@ import { today } from "@/lib/dates";
 import { AppError, NotFoundError } from "@/lib/errors";
 import { formatMoney, humanize } from "@/lib/format";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 
 /**
  * What the school spends, other than salaries.
  *
  * The same shape as fee receipts: one row per amount, integer paise, no stored
- * totals. School Admin only — nothing here is reachable from a teacher, parent
- * or student screen.
+ * totals. The School Admin, or staff with the matching expenses permission
+ * (view, record, remove) — never a teacher, parent or student.
  */
 
 export const EXPENSE_CATEGORIES = [
@@ -42,7 +42,7 @@ export async function recordExpense(
   ctx: TenantContext,
   input: ExpenseInput,
 ): Promise<{ id: string }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "expenses.create");
 
   if (input.amountMinor <= 0) {
     throw new AppError("VALIDATION", "An expense must be more than zero.");
@@ -79,7 +79,7 @@ export async function recordExpense(
 }
 
 export async function removeExpense(ctx: TenantContext, expenseId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "expenses.delete");
 
   // Scoped by `ctx.db`: another school's expense id is simply not found.
   const expense = await ctx.db.expense.findFirst({
@@ -104,7 +104,7 @@ export async function listExpenses(
   ctx: TenantContext,
   filters: { from?: Date | null; to?: Date | null; category?: ExpenseCategory | null; take?: number } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "expenses.view");
 
   return ctx.db.expense.findMany({
     where: {

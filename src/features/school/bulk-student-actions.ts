@@ -3,9 +3,9 @@
 import { z } from "zod";
 
 import { type ActionResult, parseFormData, successResult } from "@/lib/action-result";
-import { bulkStatusSchema, changeSectionSchema, promoteSchema } from "@/lib/validation/bulk-students";
+import { assignStreamSchema, bulkStatusSchema, changeSectionSchema, promoteSchema } from "@/lib/validation/bulk-students";
 import { requireTenantForAction } from "@/server/auth/current-user";
-import { changeSection, importStudents, promoteStudents, setStudentsStatus, type StudentImportReport } from "@/server/people/bulk-students";
+import { assignStream, changeSection, importStudents, promoteStudents, setStudentsStatus, type StudentImportReport } from "@/server/people/bulk-students";
 import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
@@ -16,7 +16,7 @@ export async function bulkStudentsAction(_p: Result, formData: FormData): Promis
   return performAction(
     async () => {
       const ctx = await requireTenantForAction("SCHOOL_ADMIN");
-      const { operation } = parseFormData(z.object({ operation: z.enum(["promote", "move", "status"]) }), formData);
+      const { operation } = parseFormData(z.object({ operation: z.enum(["promote", "move", "status", "stream"]) }), formData);
       if (operation === "promote") {
         const input = parseFormData(promoteSchema, formData);
         const { promoted } = await promoteStudents(ctx, {
@@ -25,6 +25,11 @@ export async function bulkStudentsAction(_p: Result, formData: FormData): Promis
           studentIds: input.studentIds,
         });
         return successResult(`${promoted} student${promoted === 1 ? "" : "s"} promoted.`);
+      }
+      if (operation === "stream") {
+        const input = parseFormData(assignStreamSchema, formData);
+        const { assigned } = await assignStream(ctx, { streamId: input.assignStreamId, studentIds: input.studentIds });
+        return successResult(`${assigned} student${assigned === 1 ? "" : "s"} put in the stream.`);
       }
       if (operation === "move") {
         const input = parseFormData(changeSectionSchema, formData);

@@ -4,13 +4,15 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { STAFF_ROLE_DEFAULT_GRANTS } from "@/lib/staff-access";
+
 import { addDays, today } from "@/lib/dates";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { studentLeaveSchema } from "@/lib/validation/student-leave";
 import { getTeacherAlerts } from "@/server/alerts/feeds";
 import { getRegister } from "@/server/attendance/register";
 import { applyStudentLeave, cancelStudentLeave, decideStudentLeave, listStudentLeaves } from "@/server/attendance/student-leave";
-import { assertAdminOrStaffPermission, staffPermissions } from "@/server/auth/staff-access";
+import { assertAdminOrStaffPermission, staffGrants } from "@/server/auth/staff-access";
 import { prisma } from "@/server/db/prisma";
 import {
   childLoans,
@@ -53,9 +55,10 @@ const copiesOf = (id: string) => prisma.bookCopy.findMany({ where: { bookId: id 
 
 beforeAll(async () => {
   ({ schoolA, schoolB } = await createIsolationFixture());
-  // A librarian whose "Run the library" box was left unticked — as found in a real school.
+  // A librarian carried over from the old permissions: "View library" ticked, and
+  // the library their role used to bring by itself (see the 20261013 migration).
   const user = await prisma.user.create({ data: { email: "librarian@lib-test.test", passwordHash: "x", role: "NON_TEACHING_STAFF", firstName: "Neha", lastName: "Sharma", schoolId: schoolA.schoolId, activatedAt: new Date() } });
-  await prisma.staffMember.create({ data: { schoolId: schoolA.schoolId, userId: user.id, employeeId: "LIB1", firstName: "Neha", lastName: "Sharma", role: "LIBRARIAN", permissions: ["VIEW_LIBRARY"] } });
+  await prisma.staffMember.create({ data: { schoolId: schoolA.schoolId, userId: user.id, employeeId: "LIB1", firstName: "Neha", lastName: "Sharma", role: "LIBRARIAN", grants: STAFF_ROLE_DEFAULT_GRANTS.LIBRARIAN } });
   librarianUserId = user.id;
 }, 60_000);
 
@@ -69,11 +72,11 @@ afterAll(async () => {
 // -----------------------------------------------------------------------------
 
 describe("librarian book issue", () => {
-  it("a Librarian always runs the library — and nothing else", async () => {
-    expect(await staffPermissions(librarian())).toEqual(expect.arrayContaining(["MANAGE_LIBRARY"]));
-    await expect(assertAdminOrStaffPermission(librarian(), "COLLECT_FEES")).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(assertAdminOrStaffPermission(librarian(), "VIEW_STUDENTS")).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(assertAdminOrStaffPermission(librarian(), "VIEW_TRANSPORT")).rejects.toBeInstanceOf(ForbiddenError);
+  it("a Librarian runs the library — and nothing else", async () => {
+    expect(await staffGrants(librarian())).toEqual(expect.arrayContaining(["library.circulation"]));
+    await expect(assertAdminOrStaffPermission(librarian(), "fees.collect")).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(assertAdminOrStaffPermission(librarian(), "students.directory")).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(assertAdminOrStaffPermission(librarian(), "transport.routes")).rejects.toBeInstanceOf(ForbiddenError);
   });
 
   it("adds a book as numbered physical copies", async () => {

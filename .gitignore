@@ -49,3 +49,6 @@ next-env.d.ts
 
 # Prisma Client is generated from prisma/schema.prisma (see `postinstall`)
 /src/generated
+
+# Output of scripts/i18n/extract.ts
+scripts/i18n/missing-*.json

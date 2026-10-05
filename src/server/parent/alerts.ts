@@ -10,6 +10,7 @@ import { visibleNoticeWhere } from "@/server/communication/notices";
 import { familyLeaveAlerts } from "@/server/attendance/student-leave";
 import { parentConcernAlerts } from "@/server/support/concerns";
 import { parentSupportAlerts } from "@/server/support/service";
+import { overdueLoansFor } from "@/server/operations/library";
 import { VISIBLE_PAPER } from "@/server/exams/service";
 import { readStudentFees } from "@/server/finance/fees";
 import { LOW_ATTENDANCE_THRESHOLD } from "@/server/parent/child";
@@ -45,6 +46,7 @@ export const ALERT_KINDS = [
   "support",
   "concern",
   "student-leave",
+  "library-overdue",
 ] as const;
 
 export type AlertKind = (typeof ALERT_KINDS)[number];
@@ -272,6 +274,21 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
   // --- a parent-teacher meeting coming up ----------------------------------
   // --- meetings the school has invited this family to ------------------------
   for (const meeting of meetings) alerts.push({ ...meeting, childName: null });
+
+  // --- library books past their due date ----------------------------------
+  for (const loan of await overdueLoansFor(ctx, placed.map((child) => child.id))) {
+    const child = placed.find((c) => c.id === loan.studentId);
+    alerts.push({
+      kind: "library-overdue",
+      childId: loan.studentId,
+      childName: child?.name ?? null,
+      title: `Library book overdue: ${loan.title}`,
+      detail: `${child?.name ?? "Your child"} was due to return it on ${formatDate(loan.dueOn)} (${loan.daysLate} day${loan.daysLate === 1 ? "" : "s"} late).`,
+      at: loan.dueOn,
+      href: `/parent/children/${loan.studentId}`,
+      tone: "warning",
+    });
+  }
 
   // --- exam results just published -----------------------------------------
   for (const exam of exams) {

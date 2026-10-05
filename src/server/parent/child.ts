@@ -6,7 +6,7 @@ import type { TenantContext } from "@/server/auth/current-user";
 import { type AttendanceCounts, attendedShare, emptyCounts } from "@/server/attendance/service";
 import { monthlyAttendance } from "@/server/analytics/student";
 import { schoolClosureOn } from "@/server/calendar/holidays";
-import { VISIBLE_PAPER } from "@/server/exams/service";
+import { studentStreamWhere, VISIBLE_PAPER } from "@/server/exams/service";
 import { readStudentFees } from "@/server/finance/fees";
 import { type ChildContext, requireChild } from "@/server/parent/access";
 
@@ -420,12 +420,11 @@ export async function getChildHomework(ctx: TenantContext, studentId: string) {
 export async function getChildResults(ctx: TenantContext, studentId: string) {
   const child = await requireChild(ctx, studentId);
 
+  const streamWhere = await studentStreamWhere(ctx, studentId, child.placement.sessionId);
   const assessments = await ctx.db.assessment.findMany({
     where: {
-      sectionId: child.placement.sectionId,
-      academicSessionId: child.placement.sessionId,
-      // An exam's papers stay hidden until the school publishes its results.
-      ...VISIBLE_PAPER,
+      // Submitted tests and published exams only, for the child's own stream.
+      AND: [{ sectionId: child.placement.sectionId, academicSessionId: child.placement.sessionId, date: { lte: today() } }, VISIBLE_PAPER, streamWhere],
     },
     orderBy: { date: "desc" },
     select: {

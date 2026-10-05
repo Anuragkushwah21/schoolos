@@ -1,6 +1,7 @@
 import type { Route } from "next";
 
-import type { StaffPermission, UserRole } from "@/generated/prisma/enums";
+import type { UserRole } from "@/generated/prisma/enums";
+import type { StaffGrant } from "@/lib/staff-access";
 import type { MessageKey } from "@/lib/i18n/translate";
 
 /**
@@ -92,7 +93,7 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
       href: "/school-admin/finance/payments",
       labelKey: "nav.fees",
       icon: "fees",
-      match: ["/school-admin/finance/fees", "/school-admin/finance/receipts", "/school-admin/finance/expenses", "/school-admin/finance/salaries", "/school-admin/finance/payroll"],
+      match: ["/school-admin/finance/fees", "/school-admin/finance/receipts", "/school-admin/finance/family", "/school-admin/finance/carry-forward", "/school-admin/finance/expenses", "/school-admin/finance/salaries", "/school-admin/finance/payroll"],
       matchExact: ["/school-admin/finance"],
     },
     { href: "/school-admin/library", labelKey: "nav.library", icon: "library", match: ["/school-admin/inventory"] },
@@ -103,7 +104,10 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/school-admin/notices", labelKey: "nav.notices", icon: "notices", match: ["/school-admin/complaints"] },
     { href: "/school-admin/meetings", labelKey: "nav.meetings", icon: "meetings" },
     { href: "/school-admin/student-leave", labelKey: "nav.leave", icon: "leave", match: ["/school-admin/leave"] },
-    { href: "/school-admin/settings", labelKey: "nav.settings", icon: "settings", match: ["/school-admin/website", "/school-admin/audit"] },
+    // The public website and the online admission form: configured here,
+    // while the applications it brings in are under Students → Admissions.
+    { href: "/school-admin/website", labelKey: "nav.website", icon: "website" },
+    { href: "/school-admin/settings", labelKey: "nav.settings", icon: "settings", match: ["/school-admin/audit"] },
   ],
   TEACHER: [
     // The dashboard sits at /teacher/dashboard, not /teacher — see ROLE_HOME.
@@ -112,7 +116,7 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: "/teacher/attendance", labelKey: "nav.attendance", icon: "attendance" },
     { href: "/teacher/timetable", labelKey: "nav.timetable", icon: "timetable" },
     { href: "/teacher/homework", labelKey: "nav.homework", icon: "homework" },
-    { href: "/teacher/exams", labelKey: "nav.examsShort", icon: "exams" },
+    { href: "/teacher/exams", labelKey: "nav.examsTests", icon: "exams" },
     { href: "/teacher/concerns", labelKey: "nav.studentConcerns", icon: "support", match: ["/teacher/support"] },
     { href: "/teacher/student-leave", labelKey: "nav.leaveRequests", icon: "leave", match: ["/teacher/leave"] },
     { href: "/teacher/notices", labelKey: "nav.notices", icon: "notices", match: ["/teacher/complaints"] },
@@ -171,24 +175,30 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   ],
 };
 
-/** Sidebar entries for modules a staff member has been granted. */
-export const STAFF_PERMISSION_NAV: Record<StaffPermission, NavItem> = {
-  VIEW_STUDENTS: { href: "/staff/students", labelKey: "nav.students", icon: "students" },
-  VIEW_LIBRARY: { href: "/staff/library", labelKey: "nav.library", icon: "library" },
-  VIEW_TRANSPORT: { href: "/staff/transport", labelKey: "nav.transport", icon: "transport" },
-  // Running the library is the same page with the desk controls switched on.
-  MANAGE_LIBRARY: { href: "/staff/library", labelKey: "nav.library", icon: "library" },
-  COLLECT_FEES: { href: "/staff/fees", labelKey: "nav.fees", icon: "fees" },
-};
+/**
+ * Sidebar entries for staff modules, each shown when the person holds any of
+ * its grants. Presentation only — every page and service checks again.
+ */
+export const STAFF_MODULE_NAV: Array<{ grants: readonly StaffGrant[]; item: NavItem }> = [
+  { grants: ["transport.myroute"], item: { href: "/staff/my-route", labelKey: "nav.myRoute", icon: "transport" } },
+  { grants: ["library.view"], item: { href: "/staff/library", labelKey: "nav.library", icon: "library" } },
+  { grants: ["fees.view", "fees.collect"], item: { href: "/staff/fees", labelKey: "nav.fees", icon: "fees" } },
+  { grants: ["expenses.view"], item: { href: "/staff/expenses", labelKey: "nav.expenses", icon: "expenses" } },
+  { grants: ["payroll.view"], item: { href: "/staff/payroll", labelKey: "nav.payroll", icon: "fees" } },
+  { grants: ["inventory.view"], item: { href: "/staff/inventory", labelKey: "nav.inventory", icon: "inventory" } },
+  { grants: ["students.directory"], item: { href: "/staff/students", labelKey: "nav.students", icon: "students" } },
+  { grants: ["transport.routes"], item: { href: "/staff/transport", labelKey: "nav.transport", icon: "transport" } },
+];
 
-/** A staff member's sidebar: the base links with their granted modules after Home. */
-export function staffNav(permissions: readonly StaffPermission[]): NavItem[] {
+/**
+ * A staff member's sidebar: Home, then the modules their grants open, then
+ * the pages every staff member has. "My route" also needs a route to show —
+ * their own, or one they cover as a substitute.
+ */
+export function staffNav(grants: readonly string[], options: { assignedRoute?: boolean } = {}): NavItem[] {
   const [home, ...rest] = NAV_BY_ROLE.NON_TEACHING_STAFF;
-  const granted = (Object.keys(STAFF_PERMISSION_NAV) as StaffPermission[])
-    .filter((permission) => permissions.includes(permission))
-    .map((permission) => STAFF_PERMISSION_NAV[permission])
-    .filter((item, index, all) => all.findIndex((other) => other.href === item.href) === index);
-  return [home!, ...granted, ...rest];
+  const modules = STAFF_MODULE_NAV.filter(({ grants: needs, item }) => needs.some((grant) => grants.includes(grant)) && (item.href !== "/staff/my-route" || options.assignedRoute)).map(({ item }) => item);
+  return [home!, ...modules, ...rest];
 }
 
 /** Whether `pathname` is on a nav entry's page or one it owns. */
@@ -241,6 +251,8 @@ export const AREA_TABS: Partial<Record<UserRole, AreaTab[][]>> = {
       { href: "/school-admin/finance/fees", labelKey: "tabs.feeStructure" },
       { href: "/school-admin/finance/receipts", labelKey: "tabs.receipts" },
       { href: "/school-admin/finance", labelKey: "tabs.overview", exact: true },
+      { href: "/school-admin/finance/family", labelKey: "tabs.familyPayment" },
+      { href: "/school-admin/finance/carry-forward", labelKey: "tabs.carryForward" },
       { href: "/school-admin/finance/expenses", labelKey: "tabs.expenses" },
       { href: "/school-admin/finance/salaries", labelKey: "tabs.salaries" },
       { href: "/school-admin/finance/payroll", labelKey: "tabs.payroll" },
@@ -251,12 +263,23 @@ export const AREA_TABS: Partial<Record<UserRole, AreaTab[][]>> = {
       { href: "/school-admin/inventory", labelKey: "tabs.inventory" },
     ],
     [
+      { href: "/school-admin/exams", labelKey: "tabs.allTests", exact: true },
+      { href: "/school-admin/exams/pending", labelKey: "tabs.pendingMarks" },
+      { href: "/school-admin/exams/results", labelKey: "tabs.publishedResults" },
+      { href: "/school-admin/exams/performance", labelKey: "tabs.studentPerformance" },
+      { href: "/school-admin/exams/term", labelKey: "tabs.termExams" },
+    ],
+    [
       { href: "/school-admin/notices", labelKey: "tabs.notices" },
       { href: "/school-admin/complaints", labelKey: "tabs.complaints" },
     ],
     [
       { href: "/school-admin/student-leave", labelKey: "tabs.studentLeave" },
       { href: "/school-admin/leave", labelKey: "tabs.staffLeave" },
+    ],
+    [
+      { href: "/school-admin/website", labelKey: "tabs.websiteSite", exact: true },
+      { href: "/school-admin/website/admission", labelKey: "tabs.admissionForm" },
     ],
   ],
   TEACHER: [
@@ -271,6 +294,11 @@ export const AREA_TABS: Partial<Record<UserRole, AreaTab[][]>> = {
     [
       { href: "/teacher/classes", labelKey: "tabs.myClasses" },
       { href: "/teacher/activities", labelKey: "tabs.classRecords" },
+    ],
+    [
+      { href: "/teacher/exams", labelKey: "tabs.myTests", exact: true },
+      { href: "/teacher/exams/new", labelKey: "tabs.createTest" },
+      { href: "/teacher/exams/attention", labelKey: "tabs.studentPerformance" },
     ],
     [
       { href: "/teacher/notices", labelKey: "tabs.notices" },

@@ -1,12 +1,7 @@
 "use client";
 
 import { ActionForm } from "@/components/forms/action-form";
-import {
-  FieldRow,
-  SelectField,
-  SubmitButton,
-  TextField,
-} from "@/components/forms/fields";
+import { FieldRow, PhoneField, SelectField, SubmitButton, TextField } from "@/components/forms/fields";
 
 import { registerSchoolAction } from "./registration-actions";
 
@@ -56,14 +51,7 @@ export function RegisterForm({
             autoComplete="email"
             hint="Your administrator sign-in will use this address."
           />
-          <TextField
-            name="contactPhone"
-            label="Phone"
-            type="tel"
-            required
-            autoComplete="tel"
-            placeholder="+91 98765 43210"
-          />
+          <PhoneField name="contactPhone" label="Phone" required />
         </FieldRow>
       </fieldset>
 

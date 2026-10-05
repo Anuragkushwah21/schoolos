@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { useFormContext } from "@/components/forms/action-form";
 import { nativeSelectClass } from "@/components/forms/styles";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { PHONE_COUNTRIES, type PhoneCountryCode, parsePhone, phoneCountry, splitPhoneForInput } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 
 /**
@@ -93,6 +94,165 @@ export function TextField({
         aria-describedby={describedBy(field, hint)}
         {...inputProps}
       />
+    </FieldFrame>
+  );
+}
+
+/**
+ * The one phone input: a country code (+91 preselected) and the local number,
+ * digits only and never more than the country allows (10 for India). Letters
+ * and extra digits are refused as they are typed or pasted; a pasted
+ * "+91 98765 43210", "09876543210" or "919876543210" is read correctly.
+ *
+ * It submits a single field, `name`, as "+91 9876543210" (empty when blank),
+ * so the server schemas (`requiredPhone` / `optionalPhone`) see one value and
+ * apply the same rule again. Works uncontrolled (`defaultValue`) or
+ * controlled (`value` + `onChange`, which receives that same string).
+ */
+export function PhoneField({
+  name,
+  label,
+  hint,
+  required,
+  className,
+  defaultValue,
+  value,
+  onChange,
+  disabled,
+  autoComplete = "tel-national",
+  placeholder,
+}: BaseFieldProps & {
+  defaultValue?: string | null;
+  value?: string;
+  onChange?: (value: string) => void;
+  disabled?: boolean;
+  autoComplete?: string;
+  placeholder?: string;
+}) {
+  const field = useField(name);
+  const initial = splitPhoneForInput(value ?? defaultValue);
+  const [country, setCountry] = useState<PhoneCountryCode>(initial.country);
+  const [digits, setDigits] = useState(initial.digits);
+  const [notice, setNotice] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const rule = phoneCountry(country) ?? PHONE_COUNTRIES[0];
+  const combined = digits ? `${country} ${digits}` : "";
+
+  // Controlled: take a new value from the parent (e.g. an existing parent picked).
+  const [seen, setSeen] = useState(value);
+  if (value !== undefined && value !== seen) {
+    setSeen(value);
+    if (value !== combined) {
+      const next = splitPhoneForInput(value);
+      setCountry(next.country);
+      setDigits(next.digits);
+    }
+  }
+
+  // A form reset (after a successful add) clears this field too.
+  useEffect(() => {
+    const form = input.current?.form;
+    if (!form) return;
+    const onReset = () => {
+      const next = splitPhoneForInput(defaultValue);
+      setCountry(next.country);
+      setDigits(next.digits);
+      setNotice(null);
+    };
+    form.addEventListener("reset", onReset);
+    return () => form.removeEventListener("reset", onReset);
+  }, [defaultValue]);
+
+  function update(nextCountry: PhoneCountryCode, nextDigits: string) {
+    setCountry(nextCountry);
+    setDigits(nextDigits);
+    onChange?.(nextDigits ? `${nextCountry} ${nextDigits}` : "");
+  }
+
+  function onType(raw: string) {
+    const clean = raw.replace(/\D/g, "");
+    if (clean !== raw.replace(/[\s-]/g, "")) setNotice("Digits only — letters and symbols are not allowed.");
+    else if (clean.length > rule.max) setNotice(`At most ${rule.max} digits after ${rule.code}.`);
+    else setNotice(null);
+    update(country, clean.slice(0, rule.max));
+  }
+
+  function onPaste(event: React.ClipboardEvent<HTMLInputElement>) {
+    const text = event.clipboardData.getData("text");
+    const parsed = parsePhone(text);
+    event.preventDefault();
+    if (parsed) {
+      setNotice(null);
+      update(parsed.country, parsed.digits);
+      return;
+    }
+    const pastedDigits = text.replace(/[\s\-().]/g, "");
+    if (!/^\d*$/.test(pastedDigits)) {
+      setNotice("That paste has letters or symbols — only digits are allowed.");
+      return;
+    }
+    // Digits pasted into the middle of what is already there.
+    const el = event.currentTarget;
+    const start = el.selectionStart ?? digits.length;
+    const end = el.selectionEnd ?? digits.length;
+    const next = digits.slice(0, start) + pastedDigits + digits.slice(end);
+    if (next.length > rule.max) {
+      setNotice(`That number has too many digits — at most ${rule.max} after ${rule.code}.`);
+      return;
+    }
+    setNotice(null);
+    update(country, next);
+  }
+
+  const incomplete = digits.length > 0 && digits.length < rule.min;
+  return (
+    <FieldFrame {...{ label, hint, required, className, field }}>
+      <div className="flex gap-2">
+        <select
+          aria-label={`${label}: country code`}
+          value={country}
+          disabled={disabled}
+          onChange={(event) => {
+            const next = event.target.value as PhoneCountryCode;
+            const max = phoneCountry(next)?.max ?? 10;
+            setNotice(digits.length > max ? `At most ${max} digits after ${next}.` : null);
+            update(next, digits.slice(0, max));
+          }}
+          className={cn(nativeSelectClass, "w-[5.5rem] shrink-0")}
+        >
+          {PHONE_COUNTRIES.map((option) => (
+            <option key={option.code} value={option.code}>
+              {option.code} {option.label}
+            </option>
+          ))}
+        </select>
+        <Input
+          ref={input}
+          id={field.inputId}
+          type="tel"
+          inputMode="numeric"
+          autoComplete={autoComplete}
+          maxLength={rule.max}
+          value={digits}
+          disabled={disabled}
+          placeholder={placeholder ?? (rule.code === "+91" ? "9876543210" : `${rule.max} digits`)}
+          onChange={(event) => onType(event.target.value)}
+          onPaste={onPaste}
+          onBlur={() => {
+            if (incomplete) setNotice(`Enter ${rule.min === rule.max ? rule.max : `${rule.min}–${rule.max}`} digits after ${rule.code}.`);
+          }}
+          aria-required={required || undefined}
+          aria-invalid={field.invalid || Boolean(notice && incomplete) || undefined}
+          aria-describedby={describedBy(field, hint)}
+          className="min-w-0 flex-1 tabular-nums"
+        />
+        <input type="hidden" name={name} value={combined} />
+      </div>
+      {notice && !field.invalid ? (
+        <p className="text-warning-strong text-xs" aria-live="polite">
+          {notice}
+        </p>
+      ) : null}
     </FieldFrame>
   );
 }

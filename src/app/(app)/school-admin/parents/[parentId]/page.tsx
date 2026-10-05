@@ -6,6 +6,8 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LifecyclePanel } from "@/features/people/lifecycle-panel";
+import { ParentArchiveForm } from "@/features/people/parent-archive-form";
+import { formatDateTime } from "@/lib/dates";
 import { humanize } from "@/lib/format";
 import { PersonPhoto } from "@/components/shared/person-photo";
 import { requireTenant } from "@/server/auth/current-user";
@@ -71,7 +73,48 @@ export default async function ParentProfilePage(props: PageProps<"/school-admin/
             )}
           </CardContent>
         </Card>
-        <LifecyclePanel ctx={ctx} person="PARENT" personId={parent.id} childStatuses={parent.children.map((child) => child.status)} />
+        <div className="flex flex-col gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Contact &amp; address</CardTitle>
+              <CardDescription>
+                {parent.selfUpdatedAt ? `Updated by the parent on ${formatDateTime(parent.selfUpdatedAt)}.` : "Parents can update these themselves from My account."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                <dt className="text-muted-foreground">Mobile</dt>
+                <dd>{parent.phone}</dd>
+                <dt className="text-muted-foreground">Alternate</dt>
+                <dd>{parent.alternatePhone ?? "—"}</dd>
+                <dt className="text-muted-foreground">Email</dt>
+                <dd className="break-all">{parent.email ?? "—"}</dd>
+                <dt className="text-muted-foreground">Occupation</dt>
+                <dd>{parent.occupation ?? "—"}</dd>
+                <dt className="text-muted-foreground">Address</dt>
+                <dd>{[parent.addressLine, parent.city, parent.state, parent.postalCode].filter(Boolean).join(", ") || "—"}</dd>
+              </dl>
+            </CardContent>
+          </Card>
+          <LifecyclePanel ctx={ctx} person="PARENT" personId={parent.id} childStatuses={parent.children.map((child) => child.status)} />
+          <Card>
+            <CardHeader>
+              <CardTitle>{parent.archivedAt ? "Archived" : "Archive"}</CardTitle>
+              <CardDescription>
+                {parent.archivedAt
+                  ? "This parent is archived: kept for their children's history, hidden from lists, with no login."
+                  : "For a family whose children have all left. Nothing is deleted — the record stays for history."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ParentArchiveForm
+                parentId={parent.id}
+                archived={Boolean(parent.archivedAt)}
+                blocked={parent.children.some((child) => ["ACTIVE", "ON_LEAVE"].includes(child.status)) ? "A child of this parent is still a current student, so they cannot be archived." : null}
+              />
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </>
   );

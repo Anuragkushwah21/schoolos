@@ -5,17 +5,13 @@ import { useState } from "react";
 import { ActionForm } from "@/components/forms/action-form";
 import { FormSteps } from "@/components/forms/form-steps";
 import { useT } from "@/components/i18n/i18n-provider";
-import {
-  CheckboxField,
-  FieldRow,
-  type SelectOption,
-  SelectField,
-  SubmitButton,
-  TextField,
-} from "@/components/forms/fields";
+import { CheckboxField, FieldRow, PhoneField, SelectField, SubmitButton, TextField, type SelectOption } from "@/components/forms/fields";
 import { nativeSelectClass } from "@/components/forms/styles";
 import { Label } from "@/components/ui/label";
 import { today, toDateInput } from "@/lib/dates";
+
+import { convertApplicationAction } from "@/features/admissions/actions";
+import { convertEnquiryChildAction } from "@/features/admissions/enquiry-actions";
 
 import { type SectionSeats, StreamSeatPicker } from "./stream-seat-picker";
 
@@ -129,7 +125,7 @@ function StudentContactFields({ d }: { d: StudentDefaults }) {
       </FieldRow>
       <FieldRow>
         <TextField name="emergencyContactName" label="Emergency contact" defaultValue={d.emergencyContactName ?? ""} />
-        <TextField name="emergencyContactPhone" label="Emergency phone" type="tel" defaultValue={d.emergencyContactPhone ?? ""} />
+        <PhoneField name="emergencyContactPhone" label="Emergency phone" defaultValue={d.emergencyContactPhone ?? ""} />
       </FieldRow>
     </>
   );
@@ -143,20 +139,34 @@ function StudentContactFields({ d }: { d: StudentDefaults }) {
  * this family is already at the school — picking the existing parent is what
  * keeps one guardian with three children as one account rather than three.
  */
+export type GuardianDefaults = {
+  mode?: "existing" | "new";
+  existingParentId?: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string | null;
+  address?: string | null;
+  relationship?: string;
+};
+
 function GuardianModeFields({
   parents,
   modes,
   admission = false,
+  defaults = {},
 }: {
   parents: SelectOption[];
   modes: Array<"existing" | "new">;
+  /** Prefilled from an enquiry being converted. */
+  defaults?: GuardianDefaults;
   /** On the admission form: address, and the "different person" confirmation. */
   admission?: boolean;
 }) {
   // Default to the existing parent when there is one to pick: a sibling already
   // at the school is the case that creates duplicates when it is missed.
   const [mode, setMode] = useState<"existing" | "new">(
-    modes.includes("existing") && parents.length ? "existing" : "new",
+    defaults.mode ?? (modes.includes("existing") && parents.length ? "existing" : "new"),
   );
 
   return (
@@ -186,6 +196,7 @@ function GuardianModeFields({
           name="existingParentId"
           label="Choose the parent"
           options={parents}
+          defaultValue={defaults.existingParentId}
           placeholder="Search by name or phone…"
           hint="Listed with their phone number so two people with the same name can be told apart."
           required
@@ -195,21 +206,22 @@ function GuardianModeFields({
       {mode === "new" ? (
         <>
           <FieldRow>
-            <TextField name="parentFirstName" label="First name" required />
-            <TextField name="parentLastName" label="Last name" required />
+            <TextField name="parentFirstName" label="First name" defaultValue={defaults.firstName} required />
+            <TextField name="parentLastName" label="Last name" defaultValue={defaults.lastName} required />
           </FieldRow>
           <FieldRow>
-            <TextField name="parentPhone" label="Mobile" type="tel" required />
+            <PhoneField name="parentPhone" label="Mobile" defaultValue={defaults.phone} required />
             <TextField
               name="parentEmail"
               label="Email"
               type="email"
+              defaultValue={defaults.email ?? undefined}
               hint={admission ? "With an email, the parent gets an activation link to choose their own password." : undefined}
             />
           </FieldRow>
           {admission ? (
             <>
-              <TextField name="parentAddress" label="Address" autoComplete="street-address" />
+              <TextField name="parentAddress" label="Address" autoComplete="street-address" defaultValue={defaults.address ?? undefined} />
               <CheckboxField
                 name="confirmNewParent"
                 label="This is a different person"
@@ -224,7 +236,7 @@ function GuardianModeFields({
         name="relationship"
         label="Relationship to the student"
         options={RELATIONSHIP_OPTIONS}
-        defaultValue="FATHER"
+        defaultValue={defaults.relationship ?? "FATHER"}
         required
       />
     </>
@@ -243,7 +255,7 @@ function StudentAccountFields() {
     <>
       <FieldRow>
         <TextField name="studentEmail" label="Student email" type="email" hint="Optional." />
-        <TextField name="studentPhone" label="Student mobile" type="tel" hint="Optional." />
+        <PhoneField name="studentPhone" label="Student mobile" hint="Optional." />
       </FieldRow>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" name="studentLogin" checked={login} onChange={(event) => setLogin(event.target.checked)} className="accent-primary mt-0.5 size-4" />
@@ -269,22 +281,67 @@ export function CreateStudentForm({
   parents,
   sessionName,
   seats = {},
+  prefill,
+  convert,
 }: {
   sections: Array<SelectOption & { level: number }>;
   parents: SelectOption[];
   sessionName: string;
   /** Each section's stream shares and free seats. */
   seats?: Record<string, SectionSeats>;
+  /** Details already known (an enquiry being converted) — typed once, never twice. */
+  prefill?: { student: StudentDefaults; sectionId?: string; streamId?: string | null; guardian?: GuardianDefaults };
+  /**
+   * Converting an approved application, or one child of a family enquiry:
+   * the same admission, then the application or child is marked admitted.
+   */
+  convert?: { applicationId?: string; enquiry?: { enquiryId: string; childId: string }; duplicates: string[] };
 }) {
   const t = useT();
-  const [sectionId, setSectionId] = useState("");
+  const [sectionId, setSectionId] = useState(prefill?.sectionId ?? "");
   const level = sections.find((section) => section.value === sectionId)?.level ?? null;
   const senior = level !== null && level >= 6;
   return (
-    <ActionForm action={createStudentAction} className="max-w-3xl">
+    <ActionForm action={convert?.enquiry ? convertEnquiryChildAction : convert ? convertApplicationAction : createStudentAction} className="max-w-3xl">
+      {convert?.applicationId ? <input type="hidden" name="applicationId" value={convert.applicationId} /> : null}
+      {convert?.enquiry ? (
+        <>
+          <input type="hidden" name="enquiryId" value={convert.enquiry.enquiryId} />
+          <input type="hidden" name="childId" value={convert.enquiry.childId} />
+        </>
+      ) : null}
       <FormSteps
         steps={[
-          { title: t("studentForm.stepStudent"), content: <StudentPersonalFields d={{}} autoNumber /> },
+          {
+            title: t("studentForm.stepStudent"),
+            content: (
+              <>
+                <StudentPersonalFields d={prefill?.student ?? {}} autoNumber />
+                {convert ? (
+                  <>
+                    <SelectField
+                      name="admissionType"
+                      label="Admission type"
+                      defaultValue="NEW"
+                      options={[
+                        { value: "NEW", label: "New admission" },
+                        { value: "TRANSFER", label: "Transfer from another school" },
+                        { value: "READMISSION", label: "Re-admission" },
+                      ]}
+                      required
+                    />
+                    {convert.duplicates.length ? (
+                      <CheckboxField
+                        name="confirmNotDuplicate"
+                        label="This is a different child"
+                        hint={`Already at the school with this name: ${convert.duplicates.join(", ")}. Tick only if this is someone else.`}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+              </>
+            ),
+          },
           {
             title: t("studentForm.stepClass"),
             description: sessionName,
@@ -302,11 +359,11 @@ export function CreateStudentForm({
                   />
                   <TextField name="rollNumber" label="Roll number" />
                 </FieldRow>
-                <StreamSeatPicker key={sectionId} seats={seats[sectionId]} />
+                <StreamSeatPicker key={sectionId} seats={seats[sectionId]} defaultValue={prefill?.streamId} />
               </>
             ),
           },
-          { title: t("studentForm.stepParent"), content: <GuardianModeFields parents={parents} modes={["existing", "new"]} admission /> },
+          { title: t("studentForm.stepParent"), content: <GuardianModeFields parents={parents} modes={["existing", "new"]} admission defaults={prefill?.guardian} /> },
           // Nursery to Class 5 have no student account: the step is not there at all.
           ...(senior
             ? [
@@ -320,7 +377,7 @@ export function CreateStudentForm({
           {
             title: t("studentForm.stepContact"),
             description: t("common.optional"),
-            content: <StudentContactFields d={{}} />,
+            content: <StudentContactFields d={prefill?.student ?? {}} />,
           },
         ]}
         submit={
@@ -454,6 +511,8 @@ export function EditParentForm({
     email: string | null;
     occupation: string | null;
     addressLine: string | null;
+    /** Given where the screen has them; left out, they are not on the form and stay as they are. */
+    contact?: { alternatePhone: string | null; city: string | null; state: string | null; postalCode: string | null };
     /** Given only where the School Admin should see and edit it. */
     idProof?: { type: string | null; number: string | null };
   };
@@ -466,13 +525,25 @@ export function EditParentForm({
         <TextField name="lastName" label="Last name" defaultValue={parent.lastName} required />
       </FieldRow>
       <FieldRow>
-        <TextField name="phone" label="Phone" type="tel" defaultValue={parent.phone} required />
+        <PhoneField name="phone" label="Phone" defaultValue={parent.phone} required />
         <TextField name="email" label="Email" type="email" defaultValue={parent.email ?? ""} />
       </FieldRow>
       <FieldRow>
         <TextField name="occupation" label="Occupation" defaultValue={parent.occupation ?? ""} />
         <TextField name="addressLine" label="Address" defaultValue={parent.addressLine ?? ""} />
       </FieldRow>
+      {parent.contact ? (
+        <>
+          <FieldRow>
+            <PhoneField name="alternatePhone" label="Alternate number" defaultValue={parent.contact.alternatePhone ?? ""} />
+            <TextField name="city" label="City" defaultValue={parent.contact.city ?? ""} />
+          </FieldRow>
+          <FieldRow>
+            <TextField name="state" label="State" defaultValue={parent.contact.state ?? ""} />
+            <TextField name="postalCode" label="PIN code" defaultValue={parent.contact.postalCode ?? ""} />
+          </FieldRow>
+        </>
+      ) : null}
       {parent.idProof ? (
         <>
           <input type="hidden" name="withIdProof" value="on" />
@@ -638,7 +709,7 @@ function TeacherBasicFields({ d, requireEmployeeId }: { d: TeacherDefaults; requ
         <SelectField name="gender" label="Gender" options={GENDER_OPTIONS} placeholder="Not specified" defaultValue={d.gender ?? ""} />
       </FieldRow>
       <FieldRow>
-        <TextField name="phone" label="Phone" type="tel" defaultValue={d.phone ?? ""} />
+        <PhoneField name="phone" label="Phone" defaultValue={d.phone ?? ""} />
         <TextField name="joiningDate" label="Joining date" type="date" defaultValue={d.joiningDate} />
       </FieldRow>
     </>

@@ -14,6 +14,8 @@ import { adminConcernCounts, teacherConcernAlerts } from "@/server/support/conce
 import { studentSupportAlerts } from "@/server/support/service";
 import { familyLeaveAlerts, pendingLeaveCount, teacherLeaveAlerts } from "@/server/attendance/student-leave";
 import { listExams, VISIBLE_PAPER } from "@/server/exams/service";
+import { overdueLoanCount, overdueLoansFor } from "@/server/operations/library";
+import { staffHolds } from "@/server/auth/staff-access";
 import { findStudentSelf } from "@/server/student/access";
 
 /**
@@ -130,6 +132,17 @@ export async function getStudentAlerts(ctx: TenantContext): Promise<FeedAlert[]>
   ]);
 
   const alerts: FeedAlert[] = [...shared, ...(await studentSupportAlerts(ctx, self.student.id)), ...(await familyLeaveAlerts(ctx, [self.student.id], "/student/leave"))];
+  for (const loan of await overdueLoansFor(ctx, [self.student.id])) {
+    alerts.push({
+      kind: "library-overdue",
+      childId: null,
+      title: `Library book overdue: ${loan.title}`,
+      detail: `It was due back on ${formatDate(loan.dueOn)}. Please return it to the library.`,
+      at: loan.dueOn,
+      href: "/student/library",
+      tone: "warning",
+    });
+  }
   if (absent) {
     alerts.push({ kind: "absent-today", childId: null, title: "You were marked absent today", detail: "If this is wrong, tell your class teacher.", at: now, href: "/student/attendance", tone: "critical" });
   }
@@ -190,8 +203,13 @@ export async function getStaffAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
         select: { date: true, createdAt: true, duties: true, absentStaff: { select: { firstName: true, lastName: true } } },
       })
     : [];
+  // The librarian hears how many books are overdue.
+  const overdue = (await staffHolds(ctx, "library.circulation")) ? await overdueLoanCount(ctx) : 0;
   return sortAlerts([
     ...shared,
+    ...(overdue
+      ? [{ kind: "library-overdue", childId: null, title: `${overdue} library book${overdue === 1 ? " is" : "s are"} overdue`, detail: "", at: new Date(), href: "/staff/library?view=overdue", tone: "warning" as const, key: `library-overdue:${overdue}:${now.toISOString().slice(0, 10)}` }]
+      : []),
     ...leave.map((row) => leaveDecisionAlert(row, "/staff/leave", now)),
     ...covers.map((cover) => ({
       kind: "work-cover",
@@ -231,15 +249,17 @@ export async function getAdminAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
   const now = today();
   const moment = new Date();
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
-  const [absent, missed, leave, admissions, complaints, concerns, studentLeave, exams] = await Promise.all([
+  const [absent, missed, leave, admissions, enquiries, complaints, concerns, studentLeave, exams, overdueBooks] = await Promise.all([
     ctx.db.studentAttendance.count({ where: { date: now, status: "ABSENT" } }),
     ctx.db.classSession.count({ where: { date: now, status: "MISSED" } }),
     ctx.db.leaveRequest.count({ where: { status: "PENDING" } }),
     ctx.db.admissionApplication.count({ where: { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
+    ctx.db.enquiry.count({ where: { status: { in: ["NEW", "CONTACTED", "FOLLOW_UP"] }, nextFollowUpOn: { lte: now } } }),
     ctx.db.complaint.count({ where: { status: { in: ["OPEN", "IN_PROGRESS"] } } }),
     adminConcernCounts(ctx),
     pendingLeaveCount(ctx),
     session ? listExams(ctx, { academicSessionId: session.id }) : Promise.resolve([]),
+    overdueLoanCount(ctx),
   ]);
   const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length;
   const pending = exams.filter((exam) => exam.stage === "MARKS_PENDING").length;
@@ -258,9 +278,11 @@ export async function getAdminAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
     },
     { kind: "student-leave", count: studentLeave, title: `${studentLeave} student leave request${studentLeave === 1 ? "" : "s"} pending`, href: "/school-admin/student-leave?status=PENDING", tone: "info" },
     { kind: "concerns", count: concerns.open, title: `${concerns.open} new parent–teacher concern${concerns.open === 1 ? "" : "s"}`, href: "/school-admin/concerns", tone: "info" },
-    { kind: "results-ready", count: ready, title: `${ready} exam result${ready === 1 ? " is" : "s are"} ready to publish`, href: "/school-admin/exams?status=READY_TO_PUBLISH", tone: "info" },
-    { kind: "marks-pending", count: pending, title: `${pending} exam${pending === 1 ? " has" : "s have"} marks still missing`, href: "/school-admin/exams?status=MARKS_PENDING", tone: "info" },
+    { kind: "results-ready", count: ready, title: `${ready} exam result${ready === 1 ? " is" : "s are"} ready to publish`, href: "/school-admin/exams/term?status=READY_TO_PUBLISH", tone: "info" },
+    { kind: "marks-pending", count: pending, title: `${pending} exam${pending === 1 ? " has" : "s have"} marks still missing`, href: "/school-admin/exams/pending", tone: "info" },
     { kind: "admissions", count: admissions, title: `${admissions} admission application${admissions === 1 ? "" : "s"} to review`, href: "/school-admin/admissions", tone: "info" },
+    { kind: "enquiries", count: enquiries, title: `${enquiries} enquir${enquiries === 1 ? "y" : "ies"} due for follow-up`, href: "/school-admin/admissions/enquiries?followUp=due", tone: "info" },
+    { kind: "library-overdue", count: overdueBooks, title: `${overdueBooks} library book${overdueBooks === 1 ? " is" : "s are"} overdue`, href: "/school-admin/library/loans?view=overdue", tone: "info" },
     { kind: "complaints", count: complaints, title: `${complaints} complaint${complaints === 1 ? "" : "s"} still open`, href: "/school-admin/complaints", tone: "warning" },
   ];
   return sortAlerts(

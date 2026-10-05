@@ -1,7 +1,8 @@
 import { AppShell } from "@/components/shared/app-shell";
 import { staffNav } from "@/lib/nav";
+import { hasAssignedRoute } from "@/server/transport/driver";
 import { requireUser } from "@/server/auth/current-user";
-import { staffPermissions } from "@/server/auth/staff-access";
+import { staffGrants } from "@/server/auth/staff-access";
 import { forSchool } from "@/server/tenancy/scope";
 
 /**
@@ -12,10 +13,11 @@ import { forSchool } from "@/server/tenancy/scope";
 export default async function AccountLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   // A staff member's sidebar includes the modules they were granted.
-  const nav =
+  const staffCtx =
     user.role === "NON_TEACHING_STAFF" && user.schoolId
-      ? staffNav(await staffPermissions({ user, schoolId: user.schoolId, schoolSlug: user.schoolSlug ?? "", schoolName: user.schoolName ?? "", db: forSchool(user.schoolId) }))
-      : undefined;
+      ? { user, schoolId: user.schoolId, schoolSlug: user.schoolSlug ?? "", schoolName: user.schoolName ?? "", db: forSchool(user.schoolId) }
+      : null;
+  const nav = staffCtx ? staffNav(await staffGrants(staffCtx), { assignedRoute: await hasAssignedRoute(staffCtx) }) : undefined;
   return (
     <AppShell user={user} nav={nav}>
       {children}

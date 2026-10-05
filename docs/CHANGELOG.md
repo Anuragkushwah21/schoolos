@@ -13,11 +13,24 @@ way, and [`API.md`](API.md) the REST endpoints. This file is the history.
 
 ## Current status
 
-_Last updated: 1 Oct 2026 (Events, Calendar, Notices, Meetings and Leave separated)_
+_Last updated: 5 Oct 2026 (Staff profile: everything at a glance; drivers' routes and stops managed from the profile)_
 
 | | |
 | --- | --- |
-| Database migrations | 31 in `prisma/migrations`. 29 applied to Neon; **`20261006090000_rooms` and `20261007090000_notice_reads` are NOT applied to Neon yet** — run `npx prisma migrate deploy` (one command applies both). Until then the Rooms, Timetable and Notices pages error on the live database |
+| Database migrations | 37 in `prisma/migrations`. **Check Neon with `npx prisma migrate status`.** On 4 Oct the live DB was missing `20261008090000`–`20261011090000`; **`20261012090000_routes_website_admissions` and `20261013090000_staff_roles_substitutes_trips` are NOT applied to Neon** — `npx prisma migrate deploy` applies whatever is pending, in order |
+| Tests | 79 files, 832 tests passing; typecheck and lint clean; production build passing |
+| Email | Code sends through Gmail SMTP when configured. **The Gmail App Password in `.env` was rejected by Gmail** — create a new App Password and put it in `SMTP_PASSWORD` |
+| Uncommitted work | Everything in the 2 Oct and 3 Oct entries below (last commit `d611d70`) |
+
+**Setup gaps on the live database** (not code bugs — features look broken until these are filled in):
+
+- **Sankeswar** — all 7 sections have **no class teacher**; **0 subjects** assigned to teachers; no students yet. Without these, attendance registers have no owner, leave requests only the admin can approve, and every concern goes to the School Admin.
+- **Green Valley Academy** — 9 of 13 sections have no class teacher.
+
+**Known limits:** no online payment gateway (the parent "pay together" panel is a calculator; payment is recorded at the fee desk); the new admin dashboard and new exams/fees/admissions screens are English only (menus are Hindi/English); leave pages' body text is English only; timetable and homework are not split by stream; events have no audience field, so there is no bulk event visibility.
+
+--- | --- |
+| Database migrations | 31 in `prisma/migrations`. 30 applied to Neon (`20261006090000_rooms` confirmed applied 1 Oct 2026); **`20261007090000_notice_reads` is NOT applied yet** — run `npx prisma migrate deploy`. Until then the Notices pages and dashboards error on the live database |
 | Tests | 62 files, 718 tests passing; lint clean; production build passing |
 | Email | Code sends through Gmail SMTP when configured. **The Gmail App Password in `.env` was rejected by Gmail** — create a new App Password and put it in `SMTP_PASSWORD` |
 | Uncommitted work | Everything since commit `d1118c8` (29 Sep) is not committed yet |
@@ -28,6 +41,475 @@ _Last updated: 1 Oct 2026 (Events, Calendar, Notices, Meetings and Leave separat
 - **Green Valley Academy** — 9 of 13 sections have no class teacher.
 
 **Known limits:** leave pages' body text is English only (menus are Hindi/English); timetable and homework are not split by stream (only concerns and support are); Class 6–8 leave uses the same rules as other classes but has no separate test.
+
+---
+
+## 5 Oct 2026 — Staff profile: see and change everything, routes from a driver's page
+
+**Asked:** when the admin opens a staff member they should see all their information and be able to edit all of it. For a driver: their routes; if none, a way to add a route and stops; change route, add stops, send them to another route. Admin holds every staff permission.
+
+**Changed (`src/app/(app)/school-admin/staff/[staffId]/page.tsx`):**
+
+- **At a glance** card above the tabs: role (links to the role), employee ID, job title/department, mobile (tap to call), email, joined, today's attendance, login state, number of permissions, and routes — each links to the tab where it is changed. Editing stays in the tabs: Profile (details, status/archive, login, reset password), Role & access (every permission), Work & routes, Substitutes, Attendance & leave.
+- **Work & routes** tab for drivers and attendants (and anyone on a route): each route as a card with start → end, vehicle, students, the other crew member;
+  - **Move to another route** (one step: off this one, onto the chosen one in the same seat; the dropdown says who is on each route now and that they will be replaced),
+  - **Remove from route**, link to the route's students,
+  - **Stops**: list with edit and remove, **+ Add stop**,
+  - **Edit route** (name, number, start/end point, vehicle, crew, running).
+  - **Assign to a route** (an existing one) and **Create a new route** with them already filled in as driver/attendant — shown when they have no route, and as "Also assign" when they do.
+- Server: `assignRouteCrew`, `removeRouteCrew`, `moveRouteCrew` in `src/server/operations/transport.ts` (School Admin only; only a Driver can drive and a Transport attendant attend; same school; move is one transaction; stops/students untouched; audited). Actions in `src/features/operations/actions.ts`; `AssignCrewForm`, `MoveCrewForm`, `RouteForm.defaults` in `src/features/operations/forms.tsx`.
+- Route form labels "Start point" / "End point" (were "Starts at/Ends at", which read as times in Hindi). Place names used as examples ("Vijay Nagar") are kept untranslated so real route names are never translated.
+- New interface text added to the Hindi dictionary (coverage test passes).
+
+**Migrations:** none.
+
+**Tested:** new `tests/integration/route-crew.test.ts` (assign driver and attendant, move with replacement and stops untouched, remove, wrong role / other school / non-admin refused). Full suite 832/832, typecheck, lint, production build. Rendered the driver's profile in headless Chrome (Hindi) against a seeded local DB: all sections present, no console errors. A click-through of Move / Add stop in the browser could not run (Chrome was no longer installed at that moment) — the same actions are covered by the integration tests.
+
+---
+
+## 5 Oct 2026 — Language switch translates everything
+
+**Asked:** when someone changes the language, everything written anywhere on the screen must change.
+
+**Before:** only text going through `t()` keys changed (menus, tabs, a few dashboards — ~48 of 586 component files). Most screens had their English written in place, so Hindi users saw mostly English.
+
+**Changed:**
+
+- **Phrase dictionary** `src/lib/i18n/phrases/hi.json`: Hindi for every piece of interface text in the source — 5,086 phrases and 1,117 templates with numbered holes ("Covering for {0} until {1}"), including humanized enum values (status badges), `pluralize()` counts, validation and server error messages. Translated with one glossary (consistent terms: छात्र, अभिभावक, उपस्थिति, फ़ीस, रूट …).
+- **Engine** `src/lib/i18n/phrase-translate.ts`: exact match, templates (holes are translated too: "Status changed to Active"), "A · B" lists, trailing punctuation, spacing kept, English month/day names in dates → Hindi. Names, numbers and anything people typed are not in the dictionary and stay as written.
+- **`AutoTranslate`** (`src/components/i18n/auto-translate.tsx`, mounted in the root layout when the language is not English): translates every visible text node and `placeholder` / `title` / `aria-label` / `alt` on every page — server pages, client components, toasts, form errors — and keeps doing so as the page changes. Only changes text values/attributes, never React's structure, and only after React has hydrated a node (no hydration errors). Skips inputs, textareas, code and `data-no-translate`. The page fades in once translated (fallback 2.5 s) so English does not flash. Switching back to English restores every original without a reload. The dictionary loads lazily, only for Hindi (~156 KB gzip, cached).
+- **Extractor** `src/lib/i18n/phrase-extract.ts` + `npm run i18n:extract` (lists untranslated text in `scripts/i18n/missing-hi.json`) and `npm run i18n:merge <dir>`. **`tests/unit/phrase-coverage.test.ts` fails when any visible English in the source has no Hindi** — new screens cannot ship English-only.
+- Fixed in passing: the student dashboard said "classs" (`pluralize(n, "class")`).
+- The existing `t()` keys keep working unchanged.
+
+**Migrations:** none.
+
+**Tested:** unit tests for the engine and the coverage test; full suite 828/828; typecheck, lint, production build. In headless Chrome (Hindi) against a local seeded database: login, marketing home and contact, School Admin dashboard/staff/students/transport/admission form/payments, teacher dashboard and create test, parent dashboard and fees, student dashboard — all interface text Hindi, only data (names, school name, subject "English", event titles) left as entered, no console or hydration errors. Switching Hindi → English and English → Hindi from the language menu, without reload, changes the whole page including the sidebar.
+
+**Open:** translations are machine-quality first drafts reviewed only by sampling — worth a read by a Hindi-speaking teacher; emails and PDFs/CSV exports are still English.
+
+---
+
+## 5 Oct 2026 — Teacher dashboard: class switcher and quick actions
+
+**Asked:** redesign the teacher dashboard for quick work — create test, take attendance, today's classes — with a way to switch class, since a teacher teaches several. Keep what exists; fix what is missing.
+
+**Already there:** today's registers (incl. cover), substitute periods, today's classes with Take attendance / Start class, stats, support, homework due, low-attendance list, trend, school life, alerts.
+
+**Missing, now added (`src/app/(app)/teacher/dashboard/page.tsx`):**
+
+- **Class switcher** — "All my classes" plus one pill per class (★ class teacher, dot when their register is still due). `?class=<sectionId>` scopes the whole page; only the teacher's own classes are offered and an unknown id just shows all (no access widened). A selected class shows a header card: students, subjects, register status, Open class.
+- **Quick actions** for the chosen class: Take attendance (the register they owe), **Create test** (new), Set homework, Start class at the current/next period (or Enter marks when none left), View students, Add student support.
+- **Today's classes** as a timeline with **Now** and **Next up** from the school clock (school time zone), time ranges, and clickable class names to switch.
+- Registers, cover, stats, low attendance, homework due and the attendance trend all follow the chosen class. "Your classes" list links to each class's view.
+- `/teacher/exams/new?section=` and `/teacher/homework/new?section=` pre-select that class (`ClassTestForm.sectionId`, `HomeworkForm.defaultSectionId`); `homeworkDueForMySections` takes an optional `sectionId` (ignored unless it is one of the teacher's own).
+- New English/Hindi strings under `dashboard.teacher.*`.
+
+**Migrations:** none.
+
+**Tested:** typecheck, lint, full suite 821/821, production build (local DB). Not checked in a browser.
+
+---
+
+## 5 Oct 2026 — Non-teaching staff: roles, permissions, driver routes, substitutes
+
+**Asked:** a complete non-teaching staff system: roles (Librarian, Driver, Accountant, Receptionist, Lab assistant, Security, Support staff, custom) without per-role hard-coded dashboards; module × action permissions (view/create/edit/delete/…) editable per role and per person; every API checking user, school, role, permission and assignment; drivers seeing only their route's students and marking pickup/drop; accountant access to fees/expenses/payroll as allowed; a reusable staff profile; substitutes for any staff member with temporary access that expires by itself; archive, never delete; tests for isolation, driver scope, permissions, substitutes and history.
+
+**Audit (reused):** `StaffMember` (designation enum, lifecycle status with `StatusChange` history, login), `TransportRoute` / `RouteStop` / `StudentTransport` (route → stop → student), `WorkCover` (one-day staff cover, unchanged), teacher period cover (`/school-admin/substitutes`, unchanged), reset password, audit log, `ctx.db` tenant scoping. Replaced: the 5 coarse `StaffPermission` values.
+
+**Found and fixed (tenant isolation):** `AdmissionFollowUp`, `FeeConcession`, `FamilyPayment` and `FeeCarryForward` carry `schoolId` but were missing from `TENANT_MODELS`, so a lookup by id alone (e.g. a family receipt, revoking a concession) could reach another school's row. Added to the scoped list.
+
+**Changed — permissions (`src/lib/staff-access.ts`, `src/server/auth/staff-access.ts`):**
+
+- Catalogue of 24 grants over 7 modules (library, students, transport, fees, expenses, payroll, inventory), each with an action (View/Create/Edit/Delete/Export/Manage) and "Limited" where the server narrows it. Every grant gates a real page/service/API.
+- `StaffMember.grants` holds a person's grants; effective access = own grants + grants of a substitution active today − what the designation can never hold (Librarian: students, transport, finance; Driver/Attendant: the school-wide student directory). Read from the DB every request; inactive staff hold nothing.
+- **Permission meaning changed:** a Librarian no longer gets the library implicitly — it is in their grants (carried over by the migration, and the role's default for new librarians), so the admin can now restrict it. A driver/attendant's own route needs `transport.myroute` (given to existing drivers by the migration). Drivers who had "View students" lose the full directory (excluded); they get their route's students instead.
+- All services moved to grants: library (separate add / edit / issue-return-renew / lost-damaged / fines / reports), fee desk (`fees.view` read-only, `fees.collect`), student directory (guardian contact only with `students.contact`), all-routes transport, photos (a driver sees only their riders'), search, alerts, receipts; expenses, payroll and inventory services opened to staff with their grants.
+- **Roles:** `StaffRoleProfile` per school — one built-in per designation (created on first use, staff linked automatically) and custom roles on a base designation. A role's default grants seed new staff; "apply to staff in this role" pushes a change. Staff form picks a role profile.
+
+**Changed — School Admin UI:**
+
+- Staff → **Non-teaching staff**: role cards (count per role) → role page (module × action matrix, edit default permissions, staff in the role, archive custom roles) → staff profile. Custom role form.
+- Staff profile tabs: **Profile** (details, status/archive via lifecycle panel, login, reset password), **Role & access** (per-person permission checklist grouped by module, matrix, temporary access, access history from the audit log), **Work** (routes driven/attended, responsibilities by module, loans issued, payments taken), **Substitutes** (assign: substitute, dates, reason, notes, temporary access pre-ticked from the original's grants, take over routes; covered-by and covering history with status and "End now"), **Attendance & leave**.
+- Cover page renamed **Cover & substitutes**: teachers' period cover as before, plus staff substitution history filterable by status.
+- Transport route page: today's pickups/drops and 14-day history with crew-reported issues.
+
+**Changed — staff portal:**
+
+- One dashboard for every role; panels follow grants (today's route timeline with student counts per stop, library desk, fee desk, inventory summary) plus a "covering as a substitute" banner. Sidebar from grants (`STAFF_MODULE_NAV`).
+- **My route** (`/staff/my-route`, `/staff/my-route/{routeId}`): pickup list / drop list by stop, only the route's students (name, class, section, stop, time), guardian contact only with permission, Picked up / Not present / Dropped / Issue buttons (today only), route history, report issue. Covers a colleague's route during a substitution.
+- New staff pages from shared screens (no duplicate markup): **Expenses**, **Payroll** (read-only without `payroll.pay`), **Inventory** (+ item page); **Fees** read-only with `fees.view` only.
+
+**Substitutions (`src/server/staff/substitutions.ts`):** `StaffSubstitution` (original, substitute, start/end date, reason, notes, temporary grants, cover routes, created by/at, ended by/at). Status computed from dates — SCHEDULED / ACTIVE / EXPIRED / ENDED — so access starts and expires with no job and no manual removal; nothing is deleted; the original's grants and routes are never touched. Refuses: same person, end before start, >180 days, inactive substitute, another school's staff, temporary grants the substitute's role can never hold, overlapping duplicates. Teachers keep period cover on Teachers → Cover.
+
+**Driver (`src/server/transport/driver.ts`):** route scope = routes they drive/attend + routes of an original they cover today. `TransportTripLog` (one mark per student per trip per day) and `TransportIssue`.
+
+**API (`docs/API.md`):** `/staff/{id}` GET/PUT (status archives), `/staff/{id}/permissions` GET/PUT, `/staff/roles` GET/POST, `/staff/roles/{id}` GET/PUT, `/staff/substitutions` GET/POST, `/staff/substitutions/{id}` PUT, `/staff/substitutions/{id}/end` POST, `/transport/my-route` GET, `/transport/my-route/{routeId}/students` GET, `/transport/trips` POST, `/transport/issues` POST. `/staff` POST accepts `roleProfileId` and `grants` (old `permissions` names still converted).
+
+**Migration:** `20261013090000_staff_roles_substitutes_trips` — additive: `StaffMember.grants`, `roleProfileId`; tables `StaffRoleProfile`, `StaffSubstitution`, `TransportTripLog`, `TransportIssue`; enums `TransportTrip`, `TransportTripStatus`. Backfill copies each person's old permissions into grants meaning for meaning, plus the library for Librarians and own-route grants for drivers/attendants (minus excluded). `StaffMember.permissions` is kept, unread. Applied to the local test DB only — **NOT applied to Neon**.
+
+**Tested:** new `tests/integration/staff-roles-substitutes.test.ts` (12 tests: built-in and custom roles, defaults for new staff, apply to role, librarian never finance; grant on/off for services and the permissions API, cross-school 404, staff 403; Route 01 driver sees only its 3 students and per-stop counts, Route 02 driver refused, marking rules, contacts only with permission, issue report and admin activity; API with the same scope; substitute scheduled → active → expired from the dates, original unchanged, cross-role temporary fee access and end-early; refusals; School B isolation; archived driver holds nothing, records kept). Existing tests updated to grants (old permission names still accepted via `staffSchema`). Full suite 821/821, typecheck, lint, production build (local DB) clean. Not checked in a browser.
+
+**Open:** receptionist enquiries, security visitor logs and support-staff tasks have no module yet (roles exist, only common pages); staff salaries remain teacher-only; parents do not yet see pickup/drop status; `StaffMember.permissions` column can be dropped later.
+
+---
+
+## 5 Oct 2026 — Driver routes, Website in the sidebar, Online vs Walk-in admissions
+
+**Asked:** (1) Transport → Routes: route name/number, start/end points, optional ordered stops with location, driver and vehicle, shown clearly to the assigned driver, no unrelated modules for drivers. (2) A Website entry in the School Admin sidebar as the one place for the public site and online admission form (profile, logo, address, about, principal's message, contact, links, form questions, preview, publish/unpublish, dates, classes, instructions, highlights, public link, preview). (3) Students → Admissions split into Online admissions and Walk-in admissions, each keeping its source and history. No duplicate systems.
+
+**Audit:** Transport already had routes (name, vehicle, driver, attendant), stops (name, order, times; add/remove), and a driver's own route on the staff dashboard. Website already had profile (name, logo, address, about, principal, contact, colours), pages and gallery, but sat under Settings. The admission form's settings (dates, classes, instructions, highlights, map/website links, extra questions) lived at Admissions → "Admission page"; there was no publish switch or preview. Admissions showed Enquiries / Applications / Admission page tabs, and the Applications list mixed sources (old office-entered applications with Website ones).
+
+**Changed:**
+
+- **Transport:** routes have an optional **route number**, **start point** and **end point**; stops have a **landmark/location**; a stop can be **edited** (name, landmark, order, times) as well as added/removed; stops stay optional. Route form also takes notes for the driver. Route list and page show number and start → end.
+- **Driver:** new **My route** page (`/staff/my-route`) and sidebar link, shown only to a driver/attendant assigned to a running route (`hasAssignedRoute`). Shows number, start → end, vehicle, the other crew member and phone, notes, and stops in order with landmark and times; rider count only. Same panel on the staff dashboard. No grant is added: Students, Fees, Library and the all-routes Transport page stay closed unless permitted.
+- **Website:** own sidebar entry (no longer under Settings) with tabs **Site & profile** and **Admission form**. Site & profile gains an admission-form status card and copyable website / admission-form links. **Admission form** (`/school-admin/website/admission`, reusing `AdmissionPortal` and the existing `PortalForm`): status, **Publish / Unpublish**, copyable public link, **Preview public page** (`?preview=1` — only this school's admin sees the form, switched off, even when unpublished or closed), the settings form, and a live **form preview** (the real public form with every control disabled). Old `/school-admin/admissions/portal` redirects here.
+- **Publish:** `AdmissionPortal.isPublished` (default true, so nothing changes for existing schools). Unpublished → public page says "Online admissions are not open" and `submitApplications` refuses on the server.
+- **Admissions:** tabs are now **Online admissions** (applications from the public form only, with a Submitted → Under review → Shortlisted → Approved → Converted / Rejected strip that filters) and **Walk-in admissions** (the existing enquiry workflow, renamed; convert each child into a student as before). Older office-entered applications (source Walk-in/Phone/Office) are listed separately at `?origin=office`, linked from Walk-in admissions; every application keeps its source and history.
+- Reverses an earlier choice: Website was folded under Settings; it now has its own sidebar entry (sidebar 16 → 17 entries; nav test updated).
+
+**Migration:** `20261012090000_routes_website_admissions` — additive: `TransportRoute.code`, `startPoint`, `endPoint`; `RouteStop.location`; `AdmissionPortal.isPublished` (default true). Applied to the local test DB only — **NOT applied to Neon**.
+
+**Tested:** new `tests/integration/routes-website-admissions.test.ts` (7 tests: route with number/start/end and no stops; driver and attendant see it with crew; stops with landmark in order, edit; My route link and no students/fees/library/all-routes for the driver; other school and teachers cannot edit; unpublish blocks the public form and the server, publish reopens, other school untouched, only admin can toggle; online vs office lists and counts, isolated per school). Updated nav unit test and transport test fixtures. Full suite 809/809, typecheck, lint, production build (local DB) clean. Not checked in a browser.
+
+---
+
+## 5 Oct 2026 — Phone numbers: one input, one rule, everywhere
+
+**Asked:** standardise every phone/mobile field: India (+91) default with a country-code selector, max 10 local digits, block letters and extra digits (typed or pasted), one reusable component and one validation on frontend and backend, without breaking existing numbers or forms.
+
+**Audit:** server schemas already shared `requiredPhone` / `optionalPhone` (`src/lib/validation/common.ts`), but the rule was loose (`+?[0-9][0-9\s-]{6,18}` — up to ~19 digits, any format). The staff, teacher and student CSV imports each had their own copy of that regex. The platform's "add school admin" schema had no phone check at all (any 20 characters). All 16 phone inputs were plain text boxes.
+
+**Changed:**
+
+- `src/lib/phone.ts` (new, shared by client and server): country list (+91 first), `parsePhone`, `normalizePhone`, `phoneErrorFor`, `splitPhoneForInput`. Rule: India exactly 10 digits; other listed countries their own length, never more than 10; digits only; no leading 0 after the code. Stored as `"+91 9876543210"`. Older spellings (`98765 43210`, `+91-98765-43210`, `09876543210`, `919876543210`) still parse.
+- `requiredPhone` / `optionalPhone` now use it and normalise to the stored form, so every form and every API route that uses them is checked on the server. Platform `createSchoolAdminSchema.phone` now uses `optionalPhone`. Staff, teacher and bulk-student CSV imports use the same rule and store the standard form.
+- `PhoneField` (new, `src/components/forms/fields.tsx`): country-code select (+91 preselected) + digits box; strips letters, stops at the country's maximum, reads a pasted full number (`+91 98765 43210` → +91 / 9876543210), refuses a paste with letters or too many digits with a message; submits one hidden field with the same name, so server field names are unchanged. Works uncontrolled or controlled; clears on form reset.
+- Replaced every phone `TextField` with `PhoneField`: student emergency phone, student mobile, guardian mobile (add student / add guardian), parent phone + alternate (admin edit), parent self-profile phone + alternate, teacher phone, staff mobile, enquiry mobile + alternate, public admission application, school website profile phone, platform school registration, platform add-admin, marketing contact form.
+- Existing records are not changed in the database; an old value shows in the new input (country + digits) and is saved in the standard form next time it is edited. Matching parents by phone already used the last 10 digits, so it is unaffected.
+
+**Migrations:** none.
+
+**Tested:** new `tests/unit/phone.test.ts` (parsing every common spelling, other countries, refusing letters / short / long / leading-zero / unknown code, max 10 digits, error messages, schemas, platform schema); staff CSV import test in `staff-roles-access.test.ts`. Updated `admissions` and `parent-self-profile` tests to expect the stored standard form. Full suite 802/802 passing (all suites ran — weekday). Typecheck, lint, production build (local DB) clean. `PhoneField` not checked in a browser.
+
+**Open:** numbers already stored in an invalid form (e.g. fewer than 10 digits) show their digits and must be corrected when that record is next saved.
+
+---
+
+## 4 Oct 2026 — Librarian locked to the library; permanent issue history
+
+**Asked:** Librarian must not see or open Students or Transport (UI and server), keep Library; keep a complete, permanent history of every book issue (student, admission no., class, book, copy, issue/return date and time, due date, status incl. Lost/Damaged, who issued, who processed the return, fine); an Issue History view with search and filters, per-student and per-book/copy history; keep all existing library rules.
+
+**Root cause (Students/Transport):** no code gave them to a Librarian — the sidebar, page guards and services all read `StaffMember.permissions`, and the librarian's record had "View students" and "View transport" ticked. Nothing stopped a designation from holding an unrelated grant.
+
+**Changed (permission meaning changed for Librarian, as asked):**
+
+- `STAFF_ROLE_EXCLUDED` in `src/lib/validation/operations.ts`: a Librarian can never hold `VIEW_STUDENTS` or `VIEW_TRANSPORT`. `effectiveStaffPermissions` drops them, so the sidebar, dashboard tiles, `/staff/students`, `/staff/transport`, the student directory service, `listRoutes`, the header search and photo access all refuse at once — including for records that still have the boxes ticked.
+- Saving a staff record drops excluded grants (`saveStaffDetails`); the form greys those boxes out for a Librarian ("Not available for a librarian").
+- Unchanged: the issue desk's own borrower search (`searchBorrowers`, `MANAGE_LIBRARY`: name, admission no., class — no guardian details) and borrower photos at the desk.
+
+**Issue history (reuses `BookIssue` — one row per issue, never overwritten or deleted):**
+
+- New columns: `returnedAt` (time the return was processed), `returnedById` (who), `damagedOn` (damaged is no longer shown as "lost"), `borrowerGroup` (class – section • stream on the day of issue). Issue time = `createdAt`; issued by = `issuedById` (existing).
+- `issueBook` stores the class snapshot; `returnBook` and lost/damaged reports store who and when. Lost → `lostOn`, Damaged → `damagedOn`.
+- `listLoans`: views Issued / Overdue / Returned / Lost / Damaged / Unpaid fines / **All issue history**; search by student name, admission no., employee ID, book title/author/ISBN or copy code (BK-…); filters by book, copy or student; history sorted newest first. API `GET /api/v1/library/loans` accepts the new views.
+- Desk list shows copy, admission no., class at issue, issue date + time and who issued, due date, return date + time and who processed it, status, fine/charge.
+- Book page (admin and staff): full borrowing history; each copy has a **History** link (`?copy=`). Admin student page: **Library** card with every book ever issued.
+- A student with library loans can no longer be erased (`studentDeletionBlockers`); before, the FK would have failed with a server error.
+
+**Migration:** `20261011090000_library_issue_history` — additive (4 nullable columns + FK). Backfill: loans closed as "Returned damaged" move from `lostOn` to `damagedOn`; existing student loans get `borrowerGroup` from the placement in the session covering the issue date. Applied to the local test DB only — **NOT applied to Neon**.
+
+**Tested:** new `tests/integration/library-issue-history.test.ts` (9 tests: librarian with old Students/Transport ticks refused everywhere, borrower search still works, save drops the grants; issue → return → re-issue keeps both records with issuer/returner/time/class; double issue refused; copy freed on return; lost vs damaged filters; overdue; search by admission no./copy/book; student history; deletion blocked; school B sees nothing). Full suite 747 passed, 45 skipped; `parent-portal` and `student-portal` refuse to run on a Sunday. Typecheck, lint, production build (local DB) clean. Not checked in a browser.
+
+**Open:** run `npx prisma migrate deploy` on Neon. Old loans have no return time or returner (shown as date only).
+
+---
+
+## 4 Oct 2026 — Non-teaching staff: audit, staff dashboard, admin staff overview
+
+**Asked:** audit the non-teaching staff system (types, permissions, sidebar, guards, dashboards, attendance, admin management), find why a Librarian sees Students and Transport, then make only the changes actually needed. Stop before destructive DB changes or changing permission semantics.
+
+**Audit findings:**
+
+- Staff types already exist (`StaffRole`: Accountant, Receptionist, Librarian, Driver, Transport attendant, Peon, Office staff, Coordinator, Security, Lab assistant, Other). One common portal at `/staff`; no per-type routes.
+- Permissions: `StaffMember.permissions` (VIEW_STUDENTS, VIEW_LIBRARY, MANAGE_LIBRARY, VIEW_TRANSPORT, COLLECT_FEES), read from the DB on every request by `staffPermissions()`; Librarian implies MANAGE_LIBRARY only. Sidebar (`staffNav`), page guards (`requireStaffModule`) and services (`assertAdminOrStaffPermission`) all use it; tenant scoping via `ctx.db`.
+- **Librarian seeing Students/Transport:** the code adds those links only when the stored permissions contain VIEW_STUDENTS / VIEW_TRANSPORT — no role-based fallback. So the librarian's record has those boxes ticked (it could not be confirmed on Neon from here). Fix: untick them on the staff member's page; the new "Access" card flags them as "Not usual for a librarian".
+- Staff dashboard read permissions without the status check (an inactive staff member's dashboard could still list modules); the sidebar did not.
+- Admin had only the daily register (Attendance → Staff): no staff overview, no per-person attendance history or leave on the staff page.
+- Not in the app (not built): enquiries for staff, lab inventory for staff, tasks for peons, visitors/entry-exit for security, coordinator module, staff salary (`SalaryPayment` is teacher-only), HALF_DAY attendance status.
+
+**Changed:**
+
+- Staff dashboard (`/staff/dashboard`): permissions now come from `staffPermissions()` (status-aware). New panels in `src/features/staff/work-panels.tsx`: **My attendance** (today + 30-day counts) for everyone; **Today's fee desk** (collected today, taken by you, latest receipts; Collect fee / Family payment) with COLLECT_FEES; **My route** (vehicle, stops in order with times, rider count) for a driver/attendant assigned to a route — their own route only, no student names.
+- New server functions: `feeDeskToday`, `myAssignedRoutes` (`src/server/staff/portal.ts`); `staffOverview`, `staffRecord` (`src/server/operations/staff.ts`, School Admin only).
+- Admin Staff page: today's summary (current, present, absent, on leave, not marked), designation chips that filter, a **Today** column, link to mark attendance.
+- Admin staff detail page: **Access** card (each grant, "comes with designation", "not usual for designation"), **Attendance** by month with previous/next, **Leave** (latest 20).
+- New-staff form no longer pre-ticks "View students" for an Accountant (existing staff unchanged).
+
+**Migrations:** none.
+
+**Tested:** new `tests/integration/staff-roles-access.test.ts` (11 tests: librarian/accountant/driver nav + server refusals, inactive staff hold nothing, admin overview/record, teacher and staff cannot mark, own register only, school isolation). Full suite: 738 passed, 45 skipped; `parent-portal` and `student-portal` refused to run because today is Sunday. Typecheck, lint and production build (against the local test DB) clean. Not checked in a browser.
+
+**Open — needs a decision (changes permission meaning or the schema):** driver's assigned-student list; HALF_DAY status; enquiries permission for receptionists; lab inventory permission; delegating staff attendance to a permission; staff salaries.
+
+---
+
+## 3 Oct 2026 — Parent profile page: cleaner layout, normal-sized photo
+
+**Asked:** the parent profile page looked bad — the profile photo was far too big. Make it a normal profile page where the parent can change their profile.
+
+**Changed:**
+
+- `/parent/profile` header is now a plain card instead of the big gradient banner: an 80px avatar (64px on phones) with a camera button on its edge, name, "Parent · school · N children", phone/email/city on one line, and a small "Profile complete" bar on the right.
+- The photo is changed right on that avatar (new `src/features/photos/avatar-editor.tsx`): pick a file → it previews in the circle with **Save photo / Cancel**; **Change photo · Remove** links sit under the name. Same `uploadPhotoAction` / `removePhotoAction` as before. The separate "Profile photo" card (a second large photo) is gone.
+- "My details" is now **Personal information** in settings style (`src/features/parent/profile-form.tsx`): each group — About you, How the school reaches you, Home address — has its title and hint on the left and fields on the right on wide screens, divided by lines, with **Save changes** at the bottom right.
+- "Kept by the school" sidebar is narrower, with each item as a label over its value.
+- `PhotoUploader` is unchanged and still used by `/account`; teacher/student/staff profiles are unchanged.
+
+**Migrations:** none.
+
+**Tested:** typecheck and lint clean on the changed files. Not checked in a browser.
+
+**Open:** same compact header could be applied to teacher/student/staff profile pages if wanted.
+
+---
+
+## 3 Oct 2026 — Parent "My account" redesign; parents update their own details
+
+**Asked:** redesign the parent's account page, and let parents update their own profile and personal details.
+
+**Changed:**
+
+- **`/parent/profile` is now "My account".** It opens with a coloured header: photo, name, school, number of children, mobile / email / city, and a "Profile complete %" bar.
+- It has three tabs:
+  - **My details:** an editable form in three groups, and a "Kept by the school" card.
+    - About you: first name, last name, occupation.
+    - How the school reaches you: mobile, alternate number.
+    - Home address: house / street, city, state, 6-digit PIN.
+    - The profile photo uploader sits beside the form.
+    - "Kept by the school" lists what only the office can change.
+  - **My children:** one card per child (photo, class, section, roll, admission number, "You are: Mother / Father", primary contact) with Attendance / Results / Homework / Fees shortcuts.
+  - **Sign-in & security:** change password, language and theme, and a link to notifications.
+- **What a parent cannot change** (stated on the page):
+  - The sign-in email (a login change).
+  - Links to children and the relationship.
+  - ID proof.
+- **Safeguards:**
+  - The record is found from the sign-in, never from an id sent by the browser.
+  - A mobile number another parent at the same school uses is refused, because families are linked by that number.
+  - An archived record is refused.
+  - The login's name and phone are kept in step with the record.
+  - Each save writes a `PARENT_SELF_UPDATED` audit entry listing the fields changed, and stamps `selfUpdatedAt`.
+- **Office side:**
+  - The parent page gains a "Contact & address" card, showing "Updated by the parent on …".
+  - The guardian edit form on the student page has the new fields.
+  - When the API or an older form leaves the new fields out, they are kept as they are, not cleared.
+
+**Migration:** `20261010090000_parent_self_profile`.
+
+- Adds nullable columns to `Parent`: `alternatePhone`, `city`, `state`, `postalCode`, `selfUpdatedAt`. It only adds columns; no existing data changes.
+- Applied to the local test database only. **NOT applied to Neon**; it needs the two migrations before it, which `migrate deploy` applies in order.
+
+**Tested:**
+
+- New `tests/integration/parent-self-profile.test.ts` (5 tests):
+  - Every field saves and the login's name is synced.
+  - The audit entry is written, and another school's parent is untouched.
+  - Saving with no changes does nothing.
+  - A mobile used by another parent at the same school is refused; the same number at another school is allowed.
+  - PIN and alternate-number checks.
+  - Teachers and admins are refused; an archived record is refused.
+  - An office save without the new fields does not wipe them.
+- Full suite **772/772**; typecheck and lint clean; build passing.
+- **In Chrome against a scratch database (as Rupa Bose):**
+  - Entering "4520" as the PIN was refused on the field.
+  - Corrected and saved: the database row is updated and the page shows "Last updated by you".
+  - Screens checked: the children tab and mobile.
+
+**Open:**
+
+- Run `npx prisma migrate deploy`.
+- Teachers, staff and students still have read-only profiles; they were not asked for here.
+
+---
+
+## 3 Oct 2026 — Family enquiries, fee discussion, multi-child applications, admission page
+
+**Asked:**
+
+- Audit first.
+- Then keep three things clearly separate:
+  - **Enquiry**: a family's interest, never a student or a fee.
+  - **Public application**: submitted → under review → shortlisted → approved → converted, or rejected.
+  - **Internal admission**: creating a student.
+- One parent can have several children on one enquiry or application.
+- Streams follow the class:
+  - Nursery–8: no stream.
+  - Class 9–10: optional.
+  - Class 11–12: required.
+  - Checked in the browser and on the server.
+- An admin-managed fee discussion:
+  - Per child: fixed or percentage discount.
+  - An optional family / sibling discount.
+  - History, and internal notes.
+- Agreed discounts reach real fees only after confirmation, and only on each child's own account.
+- Follow-ups, and search by any child.
+- Existing parents are linked, not duplicated.
+- Admission page settings.
+- Tests.
+
+**Audit (before):**
+
+- Enquiries and applications were the same table, with one child per row.
+- Streams were always optional, including on the server.
+- There was no fee discussion, no portal settings and no multi-child form.
+
+Reused unchanged:
+
+- Parent dedupe by mobile or email.
+- `createStudent`.
+- Concessions (`FeeConcession`).
+- Tenant-scoped `ctx.db`.
+
+**Changed:**
+
+- **Enquiries** (`/school-admin/admissions/enquiries`):
+  - Taken in five steps: Parent → Children (add / remove child cards) → Fee discussion → Follow-up → Review.
+  - Numbers look like `ENQ-2026-00001`.
+  - Statuses: NEW, CONTACTED, FOLLOW_UP, CONVERTED (automatic, once every child still coming is admitted) and CLOSED (needs a reason, can be reopened).
+  - Each child can be marked "not proceeding".
+  - The list shows: parent, number of children, class and stream badges, fee status, discussed / discount / final totals, and the next follow-up.
+  - Filters: status, class, stream, follow-up due, and received dates in the school's time zone.
+  - Search covers parent, mobile, email, ENQ number and **any child's name**; the matching child is highlighted.
+- **Fee discussion:**
+  - Per child: original amount, discount (none / fixed / percentage), reason (suggestions plus free text), notes. The final amount is worked out the same way in the browser preview and on the server.
+  - A discount larger than the fee, or over 100%, is refused.
+  - Family / sibling discount: applied on what is left after each child's own discount.
+  - Status: discussing / agreed, with who agreed and when. Changing a figure after it was agreed sends it back to "discussing".
+  - Every change is stored in `EnquiryFeeRevision`.
+  - None of this creates a charge.
+- **Existing parent:**
+  - The enquiry shows "Existing parent found", with that parent's current children.
+  - A match by mobile or email links in one click.
+  - A match by name only asks for confirmation first.
+  - Another school's parent cannot be linked.
+- **Admit a child** (`…/enquiries/[id]/convert/[childId]`):
+  - The normal admission form, filled in, with the linked parent preselected.
+  - A parent who matches only by name is listed, never preselected.
+  - Brothers and sisters admitted later join the same parent.
+  - No fee is touched.
+- **Apply agreed discount** (`…/enquiries/[id]/fees`):
+  - Shows each admitted child's agreed amount (own discount plus a share of the family discount) against their real fees.
+  - The office picks which fee each concession goes on, ticks a confirmation, and presses Confirm.
+  - Writes a `FeeConcession` on that child's own charge; the charge keeps its original amount.
+  - Cannot be applied twice.
+  - If the child has no fees yet, the page says to charge fees first.
+- **Public applications:**
+  - One form for one or several children; each child gets their own `APP-2026-00001` number, linked to their siblings by `familyKey`.
+  - Statuses are now SUBMITTED / UNDER_REVIEW / SHORTLISTED / APPROVED / REJECTED / CONVERTED, with a progress strip on the detail page.
+  - Only an **approved** application can be converted, including through the API's accept route.
+  - The detail page shows the siblings and the answers to the school's extra questions.
+- **Admission page settings** (`/school-admin/admissions/portal`):
+  - Opening and closing dates; classes open for admission; instructions; facilities / highlights; map and website links.
+  - Up to 10 extra questions: text, long text, date or choice, optionally required.
+  - The standard questions cannot be removed.
+  - Name, logo, address, about and the principal's message still come from Website.
+  - The public page shows all of this, and a "closed / opens on" notice outside the dates.
+- **Other screens:**
+  - An Enquiries / Applications / Admission page tab bar.
+  - `/school-admin/admissions/new` now redirects to the new enquiry form.
+  - Dashboard: enquiries and applications are counted separately. "Today" counts now start at midnight in the school's time zone (they started at 05:30 before).
+  - A "follow-ups due" alert on the dashboard and in notifications.
+  - A student created from an enquiry cannot be hard-deleted.
+- **Removed:** the office "enquiry" stored as an application (`createEnquiry` / `updateEnquiry` on `AdmissionApplication`, from 2 Oct). Office enquiries are now family enquiries; application notes and calls stay.
+
+**Migration:** `20261009090000_family_enquiries_admission_portal`.
+
+- New tables: `Enquiry`, `EnquiryChild`, `EnquiryFollowUp`, `EnquiryFeeRevision`, `AdmissionPortal`.
+- `AdmissionApplication` gains `familyKey` and `customAnswers`.
+- `AdmissionStatus` is rebuilt. Existing rows are mapped: **ACCEPTED → CONVERTED, WAITLISTED → SHORTLISTED**.
+- Applied to the local test database only. **NOT applied to Neon.** It needs `20261008090000` first; `migrate deploy` applies both in order.
+
+**Tested:**
+
+- Baseline before any change: 744/744.
+- After: **767/767**; typecheck and lint clean; production build passing.
+- New test files:
+  - `tests/unit/fee-discussion.test.ts`: discounts, the §29 totals, sharing a family discount, the stream rule, form rows.
+  - `tests/integration/family-enquiries.test.ts`:
+    - One child and three children.
+    - Stream rules on the server.
+    - Adding and removing children.
+    - Search by child.
+    - Statuses.
+    - Fee history, the limits and the family discount.
+    - Existing parent linked, and admitting with no duplicate parent.
+    - No fee created by conversion.
+    - Concession only after confirmation, on the child's own charge, and only once.
+    - Name-only parent match needs confirmation.
+    - School B and teachers are refused.
+  - `tests/integration/public-applications.test.ts` (replaces `enquiry-conversion.test.ts`):
+    - Siblings and their numbers.
+    - Stream rules.
+    - Dates, classes on offer and extra questions.
+    - Conversion only after approval.
+    - Name-only parent match.
+    - Duplicate child.
+    - Isolation.
+- Updated: `admissions.test.ts` (approve before accepting; 5-digit numbers).
+- **In Chrome against a scratch database:**
+  - Public form: submitted 2 children; Class 11 with no stream was refused on the child's own card, then accepted → `APP-2026-00003` and `APP-2026-00004`, with a shared family key and the custom answer stored.
+  - New enquiry form: the §29 family (Aarav Class 8, Anaya Class 9 at 10%, Riya Class 12). The missing Commerce stream was refused and the form jumped back to the Children step; once fixed it saved ₹35,000 / ₹40,500 / ₹50,000.
+  - Screens checked: lists, details, admit page, portal and public page, in light, dark and mobile.
+  - Admitting a child and applying the discount were tested by the integration tests, **not clicked through in the browser**.
+
+**Open:**
+
+- Run `npx prisma migrate deploy` on Neon.
+- Enquiry → application (as opposed to → student) is not built.
+- The enquiry and admission screens are English only.
+
+---
+
+## 2 Oct 2026 — Exams & tests, needs attention, family fees, concessions, carry forward, enquiries, dashboard
+
+**Asked:** audit first, then implement: simpler exams/tests/results for teachers and admins; configurable "needs attention" with support actions; the remaining audit items (subject/stream rename & archive, class-test edit/delete, promotion undo, library lost/damaged and overdue alerts, enquiry → student, parent archive); an admin dashboard redesign with quick actions; family fees with one combined payment; concessions; carry-forward of last session's balance; safe bulk operations; tests for all of it.
+
+**Changed:**
+
+- **Tests (teacher):** My tests / Create test (with preview, only the teacher's own subject, class, section and stream) / Enter marks (draft → submit, which locks). Marks are checked against 0..max; a test can be edited while a draft and deleted only before marks exist. **Admin:** All tests, Pending marks, Published results, Student performance, Term exams (the old exams list moved to `/school-admin/exams/term`); the admin can reopen submitted marks with a reason.
+- **Visibility:** students and parents see a class test only once it is submitted, and term exams once published; results are stream-aware.
+- **Needs attention:** the rule is set per school (default: latest below 40%, or 2 of the last 3). The reason is shown on each row. The subject teacher can add a note, book an extra class (a Meeting with the student, parents and teacher), share a remark with the parent and mark the support complete.
+- **Academics:** subjects and streams can be renamed. Promotion runs can be undone (students who already have records in the new session are skipped).
+- **Library:** copies can be marked lost or damaged (closing the loan, with an optional charge) and restored. Overdue alerts go to the student, the parent, library staff and the admin.
+- **Admissions:** the enquiry list shows source and status, with view, edit, follow-ups, archive and **Convert**. Convert pre-fills the student form, links the existing parent (matched by phone or email), sets the status to Converted and keeps the history.
+- **People:** a parent can be archived (and restored) once no child is still at the school; there is "Resend activation" for parents who have not activated.
+- **Bulk:** assign a stream to several students, within its seats.
+- **Fees:**
+  - Concessions are fixed or a percentage. The original amount is kept, with the reason and the approver, and a concession can be withdrawn.
+  - "Carry forward outstanding" adds a linked "Previous outstanding (session)" fee; the old session shows it as carried forward.
+  - Family fees show each child separately plus the family total. One family payment is split into per-child receipts (`FAM-n/1`, `FAM-n/2`, …); the school switches this on or off.
+- **Admin dashboard:**
+  - Sections: Today, Students (by stage and boys/girls), Staff, Academics, Money (6-month trend), Happening soon, Needs action.
+  - 8 quick actions.
+  - Each section streams on its own.
+
+**Migration:** `20261008090000_exams_fees_admissions` — new enums/columns/tables (test lifecycle, attention settings, parent remark, copy condition, enquiry source/follow-ups/archive, admission type, parent archive, concessions, family payments, carry forward) and a backfill marking existing class tests with results and papers of published exams as submitted. Applied to the local test DB only. **NOT applied to Neon.**
+
+**Tested:**
+
+- New test files: `tests-attention`, `library-lost-overdue`, `academic-archive-reversal`, `enquiry-conversion`, `family-fees` and `people-bulk`. They cover teacher scope, marks validation, visibility, multiple children, family allocation, discounts, carry-forward, conversion, duplicate parents, needs attention, support permissions, archive, promotion reversal, library, bulk permissions and school isolation.
+- Updated: the exams, portal and fee-receipt tests.
+- Results: 744/744 tests passing; typecheck and lint clean; production build passing.
+- Screenshots checked against a scratch database: admin dashboard (light, dark, mobile), teacher tests and marks entry, admin tests and performance, enquiries and convert, parent family fees, family payment desk, carry forward, payments, student results.
+
+**Open:**
+
+- Run `npx prisma migrate deploy`.
+- No online payment gateway.
+- Staff "archive" uses the existing leaver lifecycle.
+- The new screens are English only.
 
 ---
 

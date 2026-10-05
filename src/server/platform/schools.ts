@@ -372,7 +372,7 @@ export async function markEmailVerified(actor: SessionUser, schoolId: string): P
 
 export async function createSchoolAdmin(
   actor: SessionUser,
-  input: { schoolId: string; firstName: string; lastName: string; email: string; phone?: string },
+  input: { schoolId: string; firstName: string; lastName: string; email: string; phone?: string | null },
 ): Promise<Credentials> {
   assertRole(actor, "SUPER_ADMIN");
 

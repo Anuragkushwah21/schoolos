@@ -1,15 +1,7 @@
 "use client";
 
 import { ActionForm } from "@/components/forms/action-form";
-import {
-  CheckboxField,
-  FieldRow,
-  type SelectOption,
-  SelectField,
-  SubmitButton,
-  TextField,
-  TextareaField,
-} from "@/components/forms/fields";
+import { CheckboxField, FieldRow, PhoneField, SelectField, SubmitButton, TextField, TextareaField, type SelectOption } from "@/components/forms/fields";
 
 import {
   approveSchoolAction,
@@ -89,7 +81,7 @@ export function CreateAdminForm({ schoolId }: { schoolId: string }) {
       </FieldRow>
       <FieldRow>
         <TextField name="email" label="Email" type="email" required />
-        <TextField name="phone" label="Phone" type="tel" />
+        <PhoneField name="phone" label="Phone" />
       </FieldRow>
       <div>
         <SubmitButton pendingLabel="Creating…">Create administrator</SubmitButton>

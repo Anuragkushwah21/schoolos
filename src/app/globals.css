@@ -253,6 +253,14 @@
   --viz-surface: #1e293b;
 }
 
+/* Not English: hidden for the moment AutoTranslate needs to swap the text in. */
+html[data-translating] body {
+  opacity: 0;
+}
+html body {
+  transition: opacity 120ms ease-out;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

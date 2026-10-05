@@ -2,7 +2,7 @@ import "server-only";
 import { today } from "@/lib/dates";
 import { admissionYear, allocateAdmissionNumber, ensureAdmissionCounter } from "@/server/people/admission-number";
 
-import type { AdmissionStatus } from "@/generated/prisma/enums";
+import type { AdmissionSource, AdmissionStatus, AdmissionType } from "@/generated/prisma/enums";
 import { AppError, ConflictError, NotFoundError, RateLimitedError } from "@/lib/errors";
 import type { AdmissionApplicationInput } from "@/lib/validation/website";
 import { recordAudit } from "@/server/audit/log";
@@ -13,6 +13,16 @@ import { PUBLIC_FORM_RATE_LIMIT, rateLimit } from "@/server/auth/rate-limit";
 import { isUniqueViolation } from "@/server/db/errors";
 import { prisma } from "@/server/db/prisma";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
+import { randomUUID } from "node:crypto";
+
+import { formatDate } from "@/lib/dates";
+import { fullName } from "@/lib/format";
+import { streamProblem } from "@/lib/stream-rules";
+import type { PublicApplicationInput } from "@/lib/validation/enquiries";
+import { publicPortal, readCustomAnswers } from "@/server/admissions/portal";
+import { ValidationError } from "@/lib/errors";
+import type { CreateStudentInput } from "@/lib/validation/school";
+import { type AdmissionResult, createStudent, phoneKey } from "@/server/people/students";
 
 /**
  * Admissions: public applications and the School Admin's review of them.
@@ -26,11 +36,34 @@ import { assertWithinPlanLimit } from "@/server/platform/limits";
 // Public submission
 // -----------------------------------------------------------------------------
 
+/** One child, as the public API has always accepted it. */
 export async function submitApplication(
   slug: string,
   input: AdmissionApplicationInput,
   meta: { ipAddress: string | null },
 ): Promise<{ applicationNumber: string }> {
+  const { website, studentFirstName, studentLastName, dateOfBirth, gender, previousSchool, requestedClassId, requestedStreamId, ...parent } = input;
+  const result = await submitApplications(
+    slug,
+    { ...parent, website, children: [{ firstName: studentFirstName, lastName: studentLastName, dateOfBirth, gender, previousSchool, classId: requestedClassId, streamId: requestedStreamId }] },
+    meta,
+  );
+  return { applicationNumber: result.applicationNumbers[0]! };
+}
+
+/**
+ * A parent applies for one or more children at once. Each child becomes their
+ * own application — own APP number, status and conversion — tied to their
+ * brothers and sisters by a shared family key. Checked here, not just in the
+ * browser: the portal must be open, each class on offer, and each stream
+ * follow the class rule (Nursery–8 none, 9–10 optional, 11–12 required).
+ */
+export async function submitApplications(
+  slug: string,
+  input: PublicApplicationInput,
+  meta: { ipAddress: string | null },
+  rawAnswers: Record<string, string | undefined> = {},
+): Promise<{ applicationNumbers: string[] }> {
   const limited = rateLimit(
     `admission:${meta.ipAddress ?? "unknown"}`,
     PUBLIC_FORM_RATE_LIMIT.limit,
@@ -47,65 +80,86 @@ export async function submitApplication(
   if (!school) throw new NotFoundError();
 
   // Honeypot: look successful, store nothing.
-  if (input.website) return { applicationNumber: "APP-RECEIVED" };
+  if (input.website) return { applicationNumbers: ["APP-RECEIVED"] };
 
-  const [session, klass, stream] = await Promise.all([
-    prisma.academicSession.findFirst({ where: { schoolId: school.id, isCurrent: true }, select: { id: true, name: true } }),
-    prisma.class.findFirst({ where: { id: input.requestedClassId, schoolId: school.id, isActive: true }, select: { id: true, name: true } }),
-    input.requestedStreamId
-      ? prisma.stream.findFirst({ where: { id: input.requestedStreamId, schoolId: school.id, isActive: true }, select: { id: true } })
-      : Promise.resolve(null),
-  ]);
+  const portal = await publicPortal(school.id);
+  const session = portal.session;
   if (!session) throw new AppError("CONFLICT", "This school is not accepting applications right now.");
-  // A class or stream id from another school fails here, not at the database.
-  if (!klass || (input.requestedStreamId && !stream)) {
-    throw new AppError("VALIDATION", "Choose a class from the list.");
-  }
+  if (portal.window.state === "UNPUBLISHED") throw new AppError("CONFLICT", "This school is not taking online applications at the moment. Please contact the school office.");
+  if (portal.window.state === "NOT_YET") throw new AppError("CONFLICT", `Applications open on ${formatDate(portal.window.opensOn)}.`);
+  if (portal.window.state === "CLOSED") throw new AppError("CONFLICT", `Applications closed on ${formatDate(portal.window.closesOn)}.`);
+
+  // A class or stream id from another school (or not on offer) fails here, not at the database.
+  const errors: Record<string, string[]> = {};
+  input.children.forEach((child, index) => {
+    const klass = portal.classes.find((row) => row.id === child.classId);
+    if (!klass) {
+      errors[`children.${index}.classId`] = ["Choose a class from the list"];
+      return;
+    }
+    if (child.streamId && !portal.streams.some((row) => row.id === child.streamId)) {
+      errors[`children.${index}.streamId`] = ["Choose a stream from the list"];
+      return;
+    }
+    const problem = streamProblem(klass.level, child.streamId, klass.name);
+    if (problem) errors[`children.${index}.streamId`] = [problem];
+  });
+  const custom = readCustomAnswers(portal.customFields, rawAnswers);
+  Object.assign(errors, custom.errors);
+  if (Object.keys(errors).length) throw new ValidationError("Please correct the highlighted fields.", errors);
 
   const prefix = `APP-${session.name.slice(0, 4)}-`;
+  const familyKey = input.children.length > 1 ? randomUUID() : null;
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const count = await prisma.admissionApplication.count({
-      where: { schoolId: school.id, applicationNumber: { startsWith: prefix } },
-    });
-    const applicationNumber = `${prefix}${String(count + 1 + attempt).padStart(4, "0")}`;
-
     try {
-      const application = await prisma.admissionApplication.create({
-        data: {
+      const created = await prisma.$transaction(async (tx) => {
+        const count = await tx.admissionApplication.count({ where: { schoolId: school.id, applicationNumber: { startsWith: prefix } } });
+        const rows: Array<{ id: string; applicationNumber: string; className: string }> = [];
+        for (const [index, child] of input.children.entries()) {
+          const applicationNumber = `${prefix}${String(count + 1 + index + attempt).padStart(5, "0")}`;
+          const row = await tx.admissionApplication.create({
+            data: {
+              schoolId: school.id,
+              academicSessionId: session.id,
+              applicationNumber,
+              familyKey,
+              customAnswers: custom.answers.length ? custom.answers : undefined,
+              studentFirstName: child.firstName,
+              studentLastName: child.lastName,
+              dateOfBirth: child.dateOfBirth,
+              gender: child.gender,
+              previousSchool: child.previousSchool,
+              parentName: input.parentName,
+              parentRelationship: input.parentRelationship,
+              parentPhone: input.parentPhone,
+              parentEmail: input.parentEmail,
+              addressLine: input.addressLine,
+              city: input.city,
+              state: input.state,
+              postalCode: input.postalCode,
+              requestedClassId: child.classId,
+              requestedStreamId: child.streamId,
+              notes: input.notes,
+            },
+            select: { id: true },
+          });
+          rows.push({ id: row.id, applicationNumber, className: portal.classes.find((klass) => klass.id === child.classId)!.name });
+        }
+        return rows;
+      });
+
+      for (const row of created) {
+        await recordAudit({
+          action: "ADMISSION_SUBMITTED",
+          entityType: "AdmissionApplication",
+          entityId: row.id,
           schoolId: school.id,
-          academicSessionId: session.id,
-          applicationNumber,
-          studentFirstName: input.studentFirstName,
-          studentLastName: input.studentLastName,
-          dateOfBirth: input.dateOfBirth,
-          gender: input.gender,
-          previousSchool: input.previousSchool,
-          parentName: input.parentName,
-          parentRelationship: input.parentRelationship,
-          parentPhone: input.parentPhone,
-          parentEmail: input.parentEmail,
-          addressLine: input.addressLine,
-          city: input.city,
-          state: input.state,
-          postalCode: input.postalCode,
-          requestedClassId: klass.id,
-          requestedStreamId: stream?.id ?? null,
-          notes: input.notes,
-        },
-        select: { id: true },
-      });
-
-      await recordAudit({
-        action: "ADMISSION_SUBMITTED",
-        entityType: "AdmissionApplication",
-        entityId: application.id,
-        schoolId: school.id,
-        summary: `Application ${applicationNumber} received for ${klass.name}.`,
-        ipAddress: meta.ipAddress,
-      });
-
-      return { applicationNumber };
+          summary: `Application ${row.applicationNumber} received for ${row.className}${created.length > 1 ? ` (one of ${created.length} children)` : ""}.`,
+          ipAddress: meta.ipAddress,
+        });
+      }
+      return { applicationNumbers: created.map((row) => row.applicationNumber) };
     } catch (error) {
       if (isUniqueViolation(error)) continue;
       throw error;
@@ -119,25 +173,87 @@ export async function submitApplication(
 // Review
 // -----------------------------------------------------------------------------
 
-export async function listApplications(ctx: TenantContext, status?: AdmissionStatus) {
+export type ApplicationFilters = {
+  status?: AdmissionStatus;
+  archived?: boolean;
+  q?: string;
+  source?: AdmissionSource;
+  /** "online": sent through the public form; "office": entered by the office before enquiries existed. */
+  origin?: "online" | "office";
+};
+
+/**
+ * Online applications at each step, for the pipeline strip — current ones
+ * only — and how many older office-entered applications there are.
+ */
+export async function applicationCounts(ctx: TenantContext) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
-  return ctx.db.admissionApplication.findMany({
-    where: status ? { status } : {},
+  const [byStatus, office] = await Promise.all([
+    ctx.db.admissionApplication.groupBy({ by: ["status"], where: { source: "WEBSITE", archivedAt: null }, _count: true }),
+    ctx.db.admissionApplication.count({ where: { source: { not: "WEBSITE" }, archivedAt: null } }),
+  ]);
+  const count = (status: AdmissionStatus) => byStatus.find((row) => row.status === status)?._count ?? 0;
+  const statuses = ["SUBMITTED", "UNDER_REVIEW", "SHORTLISTED", "APPROVED", "CONVERTED", "REJECTED"] as const;
+  const counts = Object.fromEntries(statuses.map((status) => [status, count(status)])) as Record<(typeof statuses)[number], number>;
+  return { counts, open: counts.SUBMITTED + counts.UNDER_REVIEW + counts.SHORTLISTED + counts.APPROVED, office };
+}
+
+/** Enquiries and applications. Archived ones are hidden unless asked for. */
+export async function listApplications(ctx: TenantContext, filters: ApplicationFilters | AdmissionStatus = {}) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const f: ApplicationFilters = typeof filters === "string" ? { status: filters } : filters;
+  const q = f.q?.trim();
+  const rows = await ctx.db.admissionApplication.findMany({
+    where: {
+      ...(f.status ? { status: f.status } : {}),
+      ...(f.source ? { source: f.source } : {}),
+      ...(f.origin === "online" ? { source: "WEBSITE" as const } : f.origin === "office" ? { source: { not: "WEBSITE" as const } } : {}),
+      archivedAt: f.archived ? { not: null } : null,
+      ...(q
+        ? {
+            OR: [
+              { studentFirstName: { contains: q, mode: "insensitive" } },
+              { studentLastName: { contains: q, mode: "insensitive" } },
+              { parentName: { contains: q, mode: "insensitive" } },
+              { parentPhone: { contains: q } },
+              { applicationNumber: { contains: q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    },
     orderBy: { submittedAt: "desc" },
     take: 200,
     select: {
       id: true,
       applicationNumber: true,
       status: true,
+      source: true,
       studentFirstName: true,
       studentLastName: true,
       parentName: true,
       parentPhone: true,
+      parentEmail: true,
       submittedAt: true,
+      archivedAt: true,
+      createdStudentId: true,
+      familyKey: true,
       requestedClass: { select: { name: true } },
+      requestedStream: { select: { name: true } },
       academicSession: { select: { name: true } },
+      followUps: { orderBy: { createdAt: "desc" }, take: 1, select: { nextFollowUpOn: true, createdAt: true } },
     },
   });
+  // Brothers and sisters sent in the same form.
+  const keys = [...new Set(rows.flatMap((row) => (row.familyKey ? [row.familyKey] : [])))];
+  const families = keys.length
+    ? await ctx.db.admissionApplication.groupBy({ by: ["familyKey"], where: { familyKey: { in: keys } }, _count: { _all: true } })
+    : [];
+  return rows.map(({ followUps, ...row }) => ({
+    ...row,
+    siblings: row.familyKey ? (families.find((family) => family.familyKey === row.familyKey)?._count._all ?? 1) : 1,
+    nextFollowUpOn: followUps[0]?.nextFollowUpOn ?? null,
+    lastFollowUpAt: followUps[0]?.createdAt ?? null,
+  }));
 }
 
 export async function getApplication(ctx: TenantContext, applicationId: string) {
@@ -150,17 +266,30 @@ export async function getApplication(ctx: TenantContext, applicationId: string) 
       academicSession: { select: { id: true, name: true } },
       reviewedBy: { select: { firstName: true, lastName: true } },
       createdStudent: { select: { id: true, firstName: true, lastName: true } },
+      followUps: { orderBy: { createdAt: "desc" }, select: { id: true, note: true, nextFollowUpOn: true, createdAt: true, author: { select: { firstName: true, lastName: true } } } },
     },
   });
   if (!application) throw new NotFoundError();
-  return application;
+  const siblings = application.familyKey
+    ? await ctx.db.admissionApplication.findMany({
+        where: { familyKey: application.familyKey, id: { not: application.id } },
+        orderBy: { applicationNumber: "asc" },
+        select: { id: true, applicationNumber: true, studentFirstName: true, studentLastName: true, status: true, requestedClass: { select: { name: true } } },
+      })
+    : [];
+  return { ...application, siblings };
 }
 
-const OPEN: AdmissionStatus[] = ["SUBMITTED", "UNDER_REVIEW", "WAITLISTED"];
+/** Still being decided. CONVERTED and REJECTED are final. */
+const OPEN: AdmissionStatus[] = ["SUBMITTED", "UNDER_REVIEW", "SHORTLISTED", "APPROVED"];
 
+/**
+ * Move an application along: under review, shortlisted, approved — or
+ * rejected. Only an approved application can become a student.
+ */
 export async function setApplicationStatus(
   ctx: TenantContext,
-  input: { applicationId: string; status: "UNDER_REVIEW" | "WAITLISTED" | "REJECTED"; reviewNotes: string | null },
+  input: { applicationId: string; status: "UNDER_REVIEW" | "SHORTLISTED" | "APPROVED" | "REJECTED"; reviewNotes: string | null },
 ): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
 
@@ -181,14 +310,15 @@ export async function setApplicationStatus(
     entityId: input.applicationId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Application marked ${input.status.toLowerCase().replace("_", " ")}.`,
+    summary: `Application marked ${input.status.toLowerCase().replace("_", " ")}${input.reviewNotes ? `: ${input.reviewNotes}` : ""}.`,
   });
 }
 
 /**
  * Accept an application: create the student, their guardian (reusing an
  * existing guardian with the same phone, so siblings share one record) and the
- * enrollment, and mark the application ACCEPTED — all or nothing.
+ * enrollment, and mark the application CONVERTED — all or nothing. Only an
+ * approved application can be admitted.
  */
 export async function acceptApplication(
   ctx: TenantContext,
@@ -213,6 +343,7 @@ export async function acceptApplication(
         where: { id: input.applicationId, status: { in: OPEN } },
       });
       if (!application) throw new ConflictError("This application has already been decided.");
+      if (application.status !== "APPROVED") throw new ConflictError("Approve the application before admitting the child.");
 
       const section = await tx.section.findFirst({
         where: { id: input.sectionId, academicSessionId: application.academicSessionId },
@@ -256,10 +387,13 @@ export async function acceptApplication(
         },
       });
 
-      const existingParent = await tx.parent.findFirst({
-        where: { phone: application.parentPhone },
-        select: { id: true },
-      });
+      // The family may already be here under the same mobile (however it was
+      // typed) or email: link that parent instead of creating a second one.
+      const email = application.parentEmail?.toLowerCase() ?? null;
+      const existingParent =
+        (await tx.parent.findMany({ where: { archivedAt: null }, select: { id: true, phone: true, email: true } })).find(
+          (row) => phoneKey(row.phone) === phoneKey(application.parentPhone) || (email !== null && row.email?.toLowerCase() === email),
+        ) ?? null;
       const [firstName, ...rest] = application.parentName.trim().split(/\s+/);
       const parentId =
         existingParent?.id ??
@@ -290,7 +424,7 @@ export async function acceptApplication(
       await tx.admissionApplication.updateMany({
         where: { id: application.id },
         data: {
-          status: "ACCEPTED",
+          status: "CONVERTED",
           createdStudentId: student.id,
           reviewedAt: new Date(),
           reviewedById: ctx.user.id,
@@ -319,4 +453,157 @@ export async function acceptApplication(
   });
 
   return { studentId: result.studentId };
+}
+
+// -----------------------------------------------------------------------------
+// Notes and calls on an application, archive
+// -----------------------------------------------------------------------------
+
+/** A follow-up: what happened, and optionally when to follow up next. */
+export async function addFollowUp(ctx: TenantContext, input: { applicationId: string; note: string; nextFollowUpOn: Date | null }): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const application = await ctx.db.admissionApplication.findFirst({ where: { id: input.applicationId }, select: { id: true, status: true, applicationNumber: true } });
+  if (!application) throw new NotFoundError();
+  if (input.nextFollowUpOn && input.nextFollowUpOn < today()) throw new AppError("VALIDATION", "The next follow-up must be today or later.");
+  await ctx.db.$transaction(async (tx) => {
+    await tx.admissionFollowUp.create({ data: { schoolId: ctx.schoolId, applicationId: application.id, note: input.note, nextFollowUpOn: input.nextFollowUpOn, authorId: ctx.user.id } });
+    // A brand-new enquiry that has been followed up is being looked at.
+    if (application.status === "SUBMITTED") await tx.admissionApplication.updateMany({ where: { id: application.id, status: "SUBMITTED" }, data: { status: "UNDER_REVIEW", reviewedAt: new Date(), reviewedById: ctx.user.id } });
+  });
+  await recordAudit({ action: "ADMISSION_FOLLOW_UP", entityType: "AdmissionApplication", entityId: application.id, schoolId: ctx.schoolId, actorId: ctx.user.id, summary: `Follow-up on ${application.applicationNumber}.` });
+}
+
+/**
+ * Archive (or restore) an application. Nothing is deleted: the history and
+ * the audit trail stay, and an archived application is simply off the list.
+ */
+export async function setApplicationArchived(ctx: TenantContext, applicationId: string, archived: boolean): Promise<void> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const application = await ctx.db.admissionApplication.findFirst({ where: { id: applicationId }, select: { id: true, applicationNumber: true, status: true } });
+  if (!application) throw new NotFoundError();
+  if (archived && OPEN.includes(application.status)) {
+    // An open application is decided first, so nobody is left waiting for an answer.
+    throw new ConflictError("Reject or convert this application before archiving it.");
+  }
+  await ctx.db.admissionApplication.updateMany({ where: { id: application.id }, data: archived ? { archivedAt: new Date(), archivedById: ctx.user.id } : { archivedAt: null, archivedById: null } });
+  await recordAudit({ action: archived ? "ADMISSION_ARCHIVED" : "ADMISSION_RESTORED", entityType: "AdmissionApplication", entityId: application.id, schoolId: ctx.schoolId, actorId: ctx.user.id, summary: `Application ${application.applicationNumber} ${archived ? "archived" : "restored"}.` });
+}
+
+// -----------------------------------------------------------------------------
+// Convert to student
+// -----------------------------------------------------------------------------
+
+/**
+ * Everything the "Convert to student" form needs: the enquiry's details as a
+ * prefill, the parents already at the school who match its phone or email
+ * (so the family is linked, not duplicated), and students who look like the
+ * same child.
+ */
+export async function conversionPlan(ctx: TenantContext, applicationId: string) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const application = await getApplication(ctx, applicationId);
+  const phone = phoneKey(application.parentPhone);
+  const email = application.parentEmail?.toLowerCase() ?? null;
+  const [parents, lookalikes] = await Promise.all([
+    ctx.db.parent.findMany({ where: { archivedAt: null }, select: { id: true, firstName: true, lastName: true, phone: true, email: true } }),
+    ctx.db.student.findMany({
+      where: {
+        firstName: { equals: application.studentFirstName, mode: "insensitive" },
+        lastName: { equals: application.studentLastName, mode: "insensitive" },
+      },
+      select: { id: true, firstName: true, lastName: true, admissionNumber: true, dateOfBirth: true, status: true },
+    }),
+  ]);
+  const matchingParents = parents
+    .filter((row) => phoneKey(row.phone) === phone || (email && row.email?.toLowerCase() === email))
+    .map((row) => ({ id: row.id, name: fullName(row), phone: row.phone, matchedBy: phoneKey(row.phone) === phone ? "mobile" : "email" }));
+  // Same name, different contact: offered, never preselected — the office must check.
+  const parentName = application.parentName.trim().toLowerCase().replace(/\s+/g, " ");
+  const nameOnlyParents = parents
+    .filter((row) => !matchingParents.some((match) => match.id === row.id) && fullName(row).toLowerCase().replace(/\s+/g, " ") === parentName)
+    .map((row) => ({ id: row.id, name: fullName(row), phone: row.phone }));
+  const sameChild = lookalikes.filter((row) => !application.dateOfBirth || !row.dateOfBirth || row.dateOfBirth.getTime() === application.dateOfBirth.getTime());
+  const [first, ...rest] = application.parentName.trim().split(/\s+/);
+  return {
+    application,
+    open: application.status === "APPROVED" && !application.createdStudentId,
+    matchingParents,
+    nameOnlyParents,
+    possibleDuplicates: sameChild.map((row) => ({ id: row.id, name: fullName(row), admissionNumber: row.admissionNumber, status: row.status })),
+    prefill: {
+      firstName: application.studentFirstName,
+      lastName: application.studentLastName,
+      gender: application.gender,
+      dateOfBirth: application.dateOfBirth,
+      addressLine: application.addressLine,
+      city: application.city,
+      state: application.state,
+      postalCode: application.postalCode,
+      parentFirstName: first ?? application.parentName,
+      parentLastName: rest.join(" ") || application.studentLastName,
+      parentPhone: application.parentPhone,
+      parentEmail: application.parentEmail,
+      relationship: application.parentRelationship,
+      requestedClassId: application.requestedClassId,
+      requestedStreamId: application.requestedStreamId,
+    },
+  };
+}
+
+/**
+ * Turn an enquiry into a student, through the same admission as "Add student"
+ * (seats, admission number, parent dedupe, logins). Before that: the enquiry
+ * must still be open, and a student who looks like the same child is refused
+ * unless the office confirms it is someone else. After: the enquiry is marked
+ * admitted and linked to the new student; its history stays.
+ */
+export async function convertApplication(
+  ctx: TenantContext,
+  applicationId: string,
+  input: CreateStudentInput,
+  extra: { admissionType: AdmissionType; confirmNotDuplicate: boolean },
+): Promise<AdmissionResult> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const plan = await conversionPlan(ctx, applicationId);
+  if (!plan.open) throw new ConflictError(plan.application.status === "CONVERTED" || plan.application.status === "REJECTED" ? "This application has already been converted or rejected." : "Approve the application before converting it.");
+  if (plan.possibleDuplicates.length && !extra.confirmNotDuplicate) {
+    throw new ValidationError("Please correct the highlighted fields.", {
+      confirmNotDuplicate: [
+        `${plan.possibleDuplicates.map((row) => `${row.name} (${row.admissionNumber})`).join(", ")} already exists with this name. Tick "This is a different child" if it really is someone else.`,
+      ],
+    });
+  }
+  // Claim the application first — approved and not yet converted becomes
+  // CONVERTED — so two clicks cannot admit the same child twice. If the
+  // admission then fails, it goes back to approved.
+  const previous = plan.application.status;
+  const { count } = await ctx.db.admissionApplication.updateMany({
+    where: { id: applicationId, status: "APPROVED", createdStudentId: null },
+    data: { status: "CONVERTED" },
+  });
+  if (!count) throw new ConflictError("This application is being converted, or was converted a moment ago.");
+  let result: AdmissionResult;
+  try {
+    result = await createStudent(ctx, input);
+  } catch (error) {
+    await ctx.db.admissionApplication.updateMany({ where: { id: applicationId, createdStudentId: null }, data: { status: previous } });
+    throw error;
+  }
+  await ctx.db.$transaction([
+    ctx.db.student.updateMany({ where: { id: result.studentId }, data: { admissionType: extra.admissionType } }),
+    ctx.db.admissionApplication.updateMany({
+      where: { id: applicationId },
+      data: { createdStudentId: result.studentId, reviewedAt: new Date(), reviewedById: ctx.user.id },
+    }),
+    ctx.db.admissionFollowUp.create({ data: { schoolId: ctx.schoolId, applicationId, note: `Converted to student ${result.admissionNumber}.`, authorId: ctx.user.id } }),
+  ]);
+  await recordAudit({
+    action: "ADMISSION_CONVERTED",
+    entityType: "AdmissionApplication",
+    entityId: applicationId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Application ${plan.application.applicationNumber} converted to student ${result.admissionNumber}.`,
+  });
+  return result;
 }

@@ -230,12 +230,15 @@ enum TeacherAttendanceStatus {
   ON_LEAVE
 }
 
+/// A public admission application, child by child:
+/// SUBMITTED → UNDER_REVIEW → SHORTLISTED → APPROVED → CONVERTED (or REJECTED).
 enum AdmissionStatus {
   SUBMITTED
   UNDER_REVIEW
-  ACCEPTED
+  SHORTLISTED
+  APPROVED
   REJECTED
-  WAITLISTED
+  CONVERTED
 }
 
 enum NoticeAudience {
@@ -622,6 +625,11 @@ model User {
   raisedComplaints       Complaint[]            @relation("ComplaintRaiser")
   assignedComplaints     Complaint[]            @relation("ComplaintAssignee")
   issuedBooks            BookIssue[]            @relation("BookIssuer")
+  substitutionsCreated   StaffSubstitution[]    @relation("SubstitutionCreator")
+  substitutionsEnded     StaffSubstitution[]    @relation("SubstitutionEnder")
+  tripsMarked            TransportTripLog[]     @relation("TripMarker")
+  transportIssues        TransportIssue[]       @relation("TransportIssueReporter")
+  returnedBooks          BookIssue[]            @relation("BookReturner")
   studentLeavesRequested StudentLeave[]         @relation("StudentLeaveRequester")
   studentLeavesDecided   StudentLeave[]         @relation("StudentLeaveDecider")
   assetEvents            AssetEvent[]           @relation("AssetEventActor")
@@ -643,6 +651,21 @@ model User {
 
   accountTokens AccountToken[]
   noticeReads   NoticeRead[]
+
+  admissionFollowUps     AdmissionFollowUp[] @relation("AdmissionFollowUpAuthor")
+  concessionsApproved    FeeConcession[]     @relation("ConcessionApprover")
+  familyPaymentsRecorded FamilyPayment[]     @relation("FamilyPaymentRecorder")
+  carryForwardsCreated   FeeCarryForward[]   @relation("CarryForwardCreator")
+
+  enquiriesCreated      Enquiry[]            @relation("EnquiryCreator")
+  enquiriesUpdated      Enquiry[]            @relation("EnquiryUpdater")
+  enquiriesAssigned     Enquiry[]            @relation("EnquiryAssignee")
+  enquiryFeesAgreed     Enquiry[]            @relation("EnquiryFeeAgreer")
+  enquiryChildrenAdded  EnquiryChild[]       @relation("EnquiryChildCreator")
+  enquiryChildrenEdited EnquiryChild[]       @relation("EnquiryChildUpdater")
+  enquiryFollowUps      EnquiryFollowUp[]    @relation("EnquiryFollowUpAuthor")
+  enquiryFeeRevisions   EnquiryFeeRevision[] @relation("EnquiryFeeReviser")
+  admissionPortalEdits  AdmissionPortal[]    @relation("AdmissionPortalEditor")
 
   @@unique([schoolId, id])
   @@index([schoolId, role])
@@ -796,6 +819,12 @@ model School {
   studentLeaveBackdateDays Int     @default(7)
   /// Whether students see their own fees and receipts. Parents always do.
   showFeesToStudents       Boolean @default(false)
+  /// A subject "needs attention" below this percentage (see server/exams/attention.ts).
+  needsAttentionPercent    Int     @default(40)
+  /// …or when this many of the last three tests are below it.
+  needsAttentionRepeat     Int     @default(2)
+  /// Lets the fee desk take one payment for several siblings, split per child.
+  familyPaymentEnabled     Boolean @default(false)
 
   /// When the daily register is taken, and whether it submits itself.
   attendanceTiming     RegisterTiming     @default(FIRST_PERIOD)
@@ -879,6 +908,10 @@ model School {
   sectionStreams        SectionStream[]
   complaints            Complaint[]
   staffMembers          StaffMember[]
+  staffRoleProfiles     StaffRoleProfile[]
+  staffSubstitutions    StaffSubstitution[]
+  transportTripLogs     TransportTripLog[]
+  transportIssues       TransportIssue[]
   vehicles              Vehicle[]
   transportRoutes       TransportRoute[]
   routeStops            RouteStop[]
@@ -898,6 +931,17 @@ model School {
 
   admissionCounters AdmissionCounter[]
   profilePhotos     ProfilePhoto[]
+
+  admissionFollowUps AdmissionFollowUp[]
+  feeConcessions     FeeConcession[]
+  familyPayments     FamilyPayment[]
+  feeCarryForwards   FeeCarryForward[]
+
+  enquiries           Enquiry[]
+  enquiryChildren     EnquiryChild[]
+  enquiryFollowUps    EnquiryFollowUp[]
+  enquiryFeeRevisions EnquiryFeeRevision[]
+  admissionPortal     AdmissionPortal?
 
   @@index([status])
   @@index([createdAt])
@@ -1145,6 +1189,9 @@ model StudentSupport {
   createdBy       User?           @relation("SupportCreator", fields: [createdById], references: [id], onDelete: SetNull)
   notes           SupportNote[]
 
+  /// A remark the teacher chooses to share with the family; notes stay staff-only.
+  parentRemark String?
+
   @@unique([schoolId, id])
   @@index([schoolId, status, createdAt])
   @@index([schoolId, studentId])
@@ -1306,7 +1353,12 @@ model StaffMember {
   joiningDate DateTime?         @db.Date
   status      TeacherStatus     @default(ACTIVE)
   notes       String?
+  /// Superseded by `grants` (4 Oct 2026); kept, unread, so nothing is lost.
   permissions StaffPermission[] @default([])
+  /// What this person may do: module × action keys from `@/lib/staff-access`.
+  grants        String[] @default([])
+  /// Their role profile (built-in or custom); null = the built-in one for `role`.
+  roleProfileId String?
   userId      String?           @unique
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
@@ -1325,9 +1377,124 @@ model StaffMember {
 
   attendance StaffAttendance[]
 
+  roleProfile      StaffRoleProfile?   @relation(fields: [schoolId, roleProfileId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  substitutedBy    StaffSubstitution[] @relation("SubstitutionOriginal")
+  substitutingFor  StaffSubstitution[] @relation("SubstitutionSubstitute")
+
   @@unique([schoolId, id])
   @@unique([schoolId, employeeId])
   @@index([schoolId, role, status])
+}
+
+/// A non-teaching role at one school: the built-in designations (one per
+/// `StaffRole`, created when first needed) and any the school adds. Holds
+/// the grants a new staff member in the role starts with.
+model StaffRoleProfile {
+  id            String    @id @default(cuid())
+  schoolId      String
+  name          String
+  /// The designation underneath: decides what the role can never hold.
+  baseRole      StaffRole
+  isCustom      Boolean   @default(false)
+  description   String?
+  defaultGrants String[]  @default([])
+  archivedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  school School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  staff  StaffMember[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, name])
+}
+
+/// One staff member covering another's work for a span of days, with the
+/// access that needs. Status is worked out from the dates (scheduled, active,
+/// expired) or `endedAt` (ended early) — nothing has to be switched off by hand,
+/// and nothing is deleted. The original's own assignments are never changed.
+model StaffSubstitution {
+  id                String    @id @default(cuid())
+  schoolId          String
+  originalStaffId   String
+  substituteStaffId String
+  startDate         DateTime  @db.Date
+  endDate           DateTime  @db.Date
+  reason            String
+  notes             String?
+  /// What the substitute may do meanwhile, on top of their own grants.
+  grants            String[]  @default([])
+  /// Also cover the original's routes (as driver or attendant).
+  coverRoutes       Boolean   @default(true)
+  endedAt           DateTime?
+  endedById         String?
+  createdById       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  school     School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  original   StaffMember @relation("SubstitutionOriginal", fields: [schoolId, originalStaffId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  substitute StaffMember @relation("SubstitutionSubstitute", fields: [schoolId, substituteStaffId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy  User?       @relation("SubstitutionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  endedBy    User?       @relation("SubstitutionEnder", fields: [endedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, substituteStaffId, startDate])
+  @@index([schoolId, originalStaffId, startDate])
+}
+
+enum TransportTrip {
+  PICKUP
+  DROP
+}
+
+enum TransportTripStatus {
+  PICKED_UP
+  NOT_PRESENT
+  DROPPED
+  ISSUE
+}
+
+/// A student's pickup or drop on one day, as the driver or attendant marked it.
+model TransportTripLog {
+  id         String              @id @default(cuid())
+  schoolId   String
+  date       DateTime            @db.Date
+  routeId    String
+  studentId  String
+  stopId     String?
+  trip       TransportTrip
+  status     TransportTripStatus
+  note       String?
+  markedById String?
+  markedAt   DateTime            @default(now())
+
+  school   School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  route    TransportRoute @relation(fields: [schoolId, routeId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  student  Student        @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  markedBy User?          @relation("TripMarker", fields: [markedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, date, studentId, trip])
+  @@index([schoolId, routeId, date])
+}
+
+/// Something wrong on a route that day — a breakdown, a road closed — reported by its crew.
+model TransportIssue {
+  id           String   @id @default(cuid())
+  schoolId     String
+  routeId      String
+  date         DateTime @db.Date
+  note         String
+  reportedById String?
+  createdAt    DateTime @default(now())
+
+  school     School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  route      TransportRoute @relation(fields: [schoolId, routeId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  reportedBy User?          @relation("TransportIssueReporter", fields: [reportedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, routeId, date])
 }
 
 model Vehicle {
@@ -1353,6 +1520,11 @@ model TransportRoute {
   id          String   @id @default(cuid())
   schoolId    String
   name        String
+  /// Route number as painted on the bus ("R-3"), optional.
+  code        String?
+  /// Where the route starts and ends, e.g. "Vijay Nagar depot" → "School gate".
+  startPoint  String?
+  endPoint    String?
   vehicleId   String?
   driverId    String?
   attendantId String?
@@ -1368,6 +1540,8 @@ model TransportRoute {
 
   stops    RouteStop[]
   students StudentTransport[]
+  tripLogs TransportTripLog[]
+  issues   TransportIssue[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, name])
@@ -1379,6 +1553,8 @@ model RouteStop {
   schoolId     String
   routeId      String
   name         String
+  /// Landmark or address, so a new driver can find it.
+  location     String?
   sequence     Int
   pickupMinute Int?
   dropMinute   Int?
@@ -1468,6 +1644,21 @@ model BookIssue {
   staffMember StaffMember? @relation(fields: [schoolId, staffMemberId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   issuedBy    User?        @relation("BookIssuer", fields: [issuedById], references: [id], onDelete: SetNull)
 
+  /// The loan ended because the copy was lost while out (no return date is invented).
+  lostOn DateTime? @db.Date
+  /// The copy came back damaged: the loan closed that day and the copy left stock.
+  damagedOn DateTime? @db.Date
+
+  /// The borrower's class, section and stream on the day of issue, kept as
+  /// text so the history still reads right after promotion. Null for staff
+  /// borrowers and for loans made before it was recorded.
+  borrowerGroup String?
+  /// When the return (or loss/damage) was processed, and by whom. `returnedOn`
+  /// stays the date the book is counted back on, which may be back-dated.
+  returnedAt   DateTime?
+  returnedById String?
+  returnedBy   User?     @relation("BookReturner", fields: [returnedById], references: [id], onDelete: SetNull)
+
   @@unique([schoolId, id])
   @@index([schoolId, bookId, returnedOn])
   @@index([schoolId, dueOn, returnedOn])
@@ -1479,6 +1670,39 @@ enum BookCopyStatus {
   AVAILABLE
   ISSUED
   WITHDRAWN
+  /// Reported lost — out of stock for good; its loan history stays.
+  LOST
+  /// Too damaged to lend — out of stock; its loan history stays.
+  DAMAGED
+}
+
+/// A test's marks: being entered (DRAFT) or handed in by the teacher (SUBMITTED).
+/// A submitted class test's results are visible to families; an exam paper's
+/// wait for the exam to be published.
+enum AssessmentMarksStatus {
+  DRAFT
+  SUBMITTED
+}
+
+/// Where an admission enquiry came from.
+enum AdmissionSource {
+  WEBSITE
+  WALK_IN
+  PHONE
+  ADMIN
+}
+
+/// How a student joined: a fresh admission, a transfer from another school, or a return.
+enum AdmissionType {
+  NEW
+  TRANSFER
+  READMISSION
+}
+
+/// A concession is a fixed amount off a charge, or a percentage of it.
+enum ConcessionKind {
+  FIXED
+  PERCENT
 }
 
 /// One physical copy of a book, with its own accession code (BK-0001). A copy
@@ -1496,6 +1720,10 @@ model BookCopy {
   school School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   book   Book        @relation(fields: [schoolId, bookId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   issues BookIssue[]
+
+  /// Why a copy was reported lost or damaged, and when.
+  conditionNote   String?
+  statusChangedAt DateTime?
 
   @@unique([schoolId, id])
   @@unique([schoolId, code])
@@ -1722,6 +1950,11 @@ model AcademicSession {
 
   attendanceRegisters AttendanceRegister[]
 
+  carriedOut     FeeCarryForward[] @relation("CarryFrom")
+  carriedIn      FeeCarryForward[] @relation("CarryTo")
+  familyPayments FamilyPayment[]
+  enquiries      Enquiry[]
+
   @@unique([schoolId, id])
   @@unique([schoolId, name])
   @@index([schoolId, isCurrent])
@@ -1746,6 +1979,7 @@ model Class {
   notices               Notice[]
   enrollments           StudentEnrollment[]
   admissionApplications AdmissionApplication[]
+  enquiryChildren       EnquiryChild[]
 
   supports StudentSupport[]
   concerns SupportConcern[]
@@ -1773,6 +2007,9 @@ model Stream {
   sectionAllocations    SectionStream[]
   teacherAssignments    TeacherSubjectAssignment[]
   concerns              SupportConcern[]
+  enquiryChildren       EnquiryChild[]
+
+  assessments Assessment[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, name])
@@ -1963,20 +2200,21 @@ model TeacherSubjectAssignment {
 /// here would mean promoting a child from Class 9 to Class 10 erases the
 /// record of them ever having been in Class 9.
 model Student {
-  id                    String        @id @default(cuid())
+  id                    String         @id @default(cuid())
   schoolId              String
-  school                School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  school                School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   /// Null until the school issues portal credentials.
-  userId                String?       @unique
-  user                  User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId                String?        @unique
+  user                  User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  admissionType         AdmissionType?
   admissionNumber       String
   firstName             String
   lastName              String
-  dateOfBirth           DateTime?     @db.Date
+  dateOfBirth           DateTime?      @db.Date
   gender                Gender?
   photoUrl              String?
-  status                StudentStatus @default(ACTIVE)
-  admissionDate         DateTime?     @db.Date
+  status                StudentStatus  @default(ACTIVE)
+  admissionDate         DateTime?      @db.Date
   addressLine           String?
   city                  String?
   state                 String?
@@ -1984,8 +2222,8 @@ model Student {
   emergencyContactName  String?
   emergencyContactPhone String?
   bloodGroup            String?
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
 
   enrollments          StudentEnrollment[]
   parents              ParentStudent[]
@@ -1996,18 +2234,22 @@ model Student {
   feeCharges           FeeCharge[]
   feePayments          FeePayment[]
   admissionApplication AdmissionApplication?
+  enquiryChild         EnquiryChild?
   meetingInvites       MeetingStudent[]
   statusChanges        StatusChange[]
   supports             StudentSupport[]
   supportConcerns      SupportConcern[]
   complaints           Complaint[]
   transport            StudentTransport?
+  tripLogs             TransportTripLog[]
   bookIssues           BookIssue[]
   leaves               StudentLeave[]
 
   /// Optional contact for Classes 6–12 only; never collected for Nursery–5.
   email String?
   phone String?
+
+  feeCarryForwards FeeCarryForward[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, admissionNumber])
@@ -2055,19 +2297,26 @@ model StudentEnrollment {
 /// A guardian. One parent row can be linked to any number of children through
 /// `ParentStudent`, so siblings never duplicate the parent record.
 model Parent {
-  id          String   @id @default(cuid())
-  schoolId    String
-  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
-  userId      String?  @unique
-  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  firstName   String
-  lastName    String
-  email       String?
-  phone       String
-  occupation  String?
-  addressLine String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String    @id @default(cuid())
+  schoolId       String
+  school         School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  userId         String?   @unique
+  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String
+  occupation     String?
+  addressLine    String?
+  /// Filled in by the office or by the parent themselves (My account).
+  alternatePhone String?
+  city           String?
+  state          String?
+  postalCode     String?
+  /// The last time the parent corrected their own details — shown to the office.
+  selfUpdatedAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   children        ParentStudent[]
   statusChanges   StatusChange[]
@@ -2076,6 +2325,12 @@ model Parent {
   /// Sensitive: School Admin only. The document itself is a later step.
   idProofType   String?
   idProofNumber String?
+
+  /// Archived: kept for history (their children's records point here), hidden from lists, no login.
+  archivedAt DateTime?
+
+  familyPayments FamilyPayment[]
+  enquiries      Enquiry[]
 
   @@unique([schoolId, id])
   @@index([schoolId, phone])
@@ -2513,6 +2768,14 @@ model Assessment {
 
   results AssessmentResult[]
 
+  /// Set when the test is for one stream of a shared section (e.g. Science only).
+  streamId      String?
+  description   String?
+  marksStatus   AssessmentMarksStatus @default(DRAFT)
+  submittedAt   DateTime?
+  submittedById String?
+  stream        Stream?               @relation(fields: [schoolId, streamId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
   @@unique([schoolId, id])
   /// One paper per subject per exam.
   @@unique([schoolId, examId, subjectId])
@@ -2674,6 +2937,9 @@ model FeeHead {
   school  School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   charges FeeCharge[]
 
+  /// Created by the system (e.g. "Previous outstanding (2025-26)"), never offered in pickers.
+  isSystem Boolean @default(false)
+
   @@unique([schoolId, id])
   @@unique([schoolId, name])
   @@index([schoolId, isActive])
@@ -2700,6 +2966,9 @@ model FeeCharge {
   academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   student         Student         @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   feeHead         FeeHead         @relation(fields: [schoolId, feeHeadId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  concessions      FeeConcession[]
+  carriedForwardBy FeeCarryForward[]
 
   @@unique([schoolId, id])
   /// One charge per head per student per session; raising it twice edits the
@@ -2745,10 +3014,15 @@ model FeePayment {
   recordedBy      User?           @relation("PaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
   voidedBy        User?           @relation("PaymentVoider", fields: [voidedById], references: [id], onDelete: SetNull)
 
+  /// Set when this payment is one child's share of a family payment.
+  familyPaymentId String?
+  familyPayment   FamilyPayment? @relation(fields: [schoolId, familyPaymentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
   @@unique([schoolId, id])
   @@unique([schoolId, receiptNo])
   @@index([schoolId, academicSessionId, studentId])
   @@index([schoolId, paidOn])
+  @@index([schoolId, familyPaymentId])
 }
 
 /// A public admission enquiry. Submitted by anyone from the school's public
@@ -2786,7 +3060,15 @@ model AdmissionApplication {
   requestedStreamId String?
   notes             String?
 
-  submittedAt      DateTime  @default(now())
+  source           AdmissionSource @default(WEBSITE)
+  /// Shared by brothers and sisters sent in one public form: each child is
+  /// their own application (own number, status and conversion).
+  familyKey        String?
+  /// Answers to the school's own extra questions: [{ key, label, value }].
+  customAnswers    Json?
+  archivedAt       DateTime?
+  archivedById     String?
+  submittedAt      DateTime        @default(now())
   reviewedAt       DateTime?
   reviewedById     String?
   reviewNotes      String?
@@ -2799,6 +3081,8 @@ model AdmissionApplication {
   reviewedBy      User?           @relation("AdmissionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   createdStudent  Student?        @relation(fields: [schoolId, createdStudentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
 
+  followUps AdmissionFollowUp[]
+
   @@unique([schoolId, id])
   @@unique([schoolId, applicationNumber])
   /// Composite, because `createdStudent` is a one-to-one across the tenant key.
@@ -2806,6 +3090,7 @@ model AdmissionApplication {
   @@index([schoolId, status, submittedAt])
   @@index([schoolId, academicSessionId])
   @@index([schoolId, parentPhone])
+  @@index([schoolId, familyKey])
 }
 
 /// An announcement. `isPublic` controls whether it also appears on the
@@ -3124,4 +3409,343 @@ model ProfilePhoto {
 
   @@unique([schoolId, id])
   @@unique([schoolId, ownerType, ownerId])
+}
+
+/// A note on an admission enquiry: a call made, a visit booked, the next step.
+model AdmissionFollowUp {
+  id             String    @id @default(cuid())
+  schoolId       String
+  applicationId  String
+  note           String
+  nextFollowUpOn DateTime? @db.Date
+  authorId       String?
+  createdAt      DateTime  @default(now())
+
+  school      School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  application AdmissionApplication @relation(fields: [schoolId, applicationId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  author      User?                @relation("AdmissionFollowUpAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, applicationId, createdAt])
+}
+
+/// A discount on one fee charge. The charge keeps its original amount; the
+/// concession says how much comes off, why, and who approved it. Revoking
+/// one keeps the row (history) and stops it counting.
+model FeeConcession {
+  id            String         @id @default(cuid())
+  schoolId      String
+  feeChargeId   String
+  kind          ConcessionKind
+  /// FIXED: paise off. PERCENT: basis points (2500 = 25%).
+  value         Int
+  /// What it came to when approved, for the record. Balances recompute from `value`.
+  discountMinor Int
+  originalMinor Int
+  reason        String
+  approvedById  String?
+  revokedAt     DateTime?
+  revokedById   String?
+  revokeReason  String?
+  createdAt     DateTime       @default(now())
+
+  school     School    @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  charge     FeeCharge @relation(fields: [schoolId, feeChargeId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  approvedBy User?     @relation("ConcessionApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, feeChargeId])
+}
+
+/// One payment at the fee desk covering several siblings. Each child's share
+/// is its own `FeePayment` (their accounts never merge); this row ties them
+/// together under one family receipt.
+model FamilyPayment {
+  id                String        @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  parentId          String
+  receiptNo         String
+  totalMinor        Int
+  paidOn            DateTime      @db.Date
+  method            PaymentMethod @default(CASH)
+  referenceNo       String?
+  notes             String?
+  recordedById      String?
+  voidedAt          DateTime?
+  voidReason        String?
+  createdAt         DateTime      @default(now())
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  parent          Parent          @relation(fields: [schoolId, parentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  recordedBy      User?           @relation("FamilyPaymentRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+  parts           FeePayment[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, receiptNo])
+  @@index([schoolId, parentId])
+}
+
+/// An earlier session's unpaid balance moved into a later session, as an
+/// explicit charge ("Previous outstanding (2025-26)"). The old session then
+/// shows that amount as carried forward, not owed twice.
+model FeeCarryForward {
+  id            String   @id @default(cuid())
+  schoolId      String
+  studentId     String
+  fromSessionId String
+  toSessionId   String
+  amountMinor   Int
+  feeChargeId   String
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  school      School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student     Student         @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  fromSession AcademicSession @relation("CarryFrom", fields: [schoolId, fromSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  toSession   AcademicSession @relation("CarryTo", fields: [schoolId, toSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  charge      FeeCharge       @relation(fields: [schoolId, feeChargeId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy   User?           @relation("CarryForwardCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, studentId, fromSessionId])
+  @@index([schoolId, toSessionId])
+}
+
+// -----------------------------------------------------------------------------
+// Family enquiries: a lead, not an admission. One parent, one or more
+// children, and the fee the school and family are discussing — never an
+// invoice. Nothing financial is created from here without confirmation.
+// -----------------------------------------------------------------------------
+
+enum EnquiryStatus {
+  NEW
+  CONTACTED
+  FOLLOW_UP
+  CONVERTED
+  CLOSED
+}
+
+enum EnquirySource {
+  WEBSITE
+  WALK_IN
+  PHONE
+  REFERRAL
+  OTHER
+}
+
+/// A child in an enquiry: still open, admitted as a student, or no longer coming.
+enum EnquiryChildStatus {
+  OPEN
+  ADMITTED
+  WITHDRAWN
+}
+
+/// A discussed discount: none, a fixed sum, or a percentage.
+enum DiscountKind {
+  NONE
+  FIXED
+  PERCENT
+}
+
+enum FeeDiscussionStatus {
+  NOT_STARTED
+  DISCUSSING
+  AGREED
+}
+
+model Enquiry {
+  id                String        @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  /// ENQ-2026-00015 — separate from APP- (applications) and ADM- (students).
+  enquiryNumber     String
+  status            EnquiryStatus @default(NEW)
+  source            EnquirySource @default(WALK_IN)
+
+  // --- the family contact (one is enough) ---
+  parentName       String
+  relationship     ParentRelationship @default(GUARDIAN)
+  phone            String
+  alternatePhone   String?
+  email            String?
+  addressLine      String?
+  city             String?
+  state            String?
+  postalCode       String?
+  /// A parent already at this school, linked so conversion never duplicates them.
+  existingParentId String?
+  /// Internal notes — never shown publicly.
+  notes            String?
+
+  // --- follow-up ---
+  nextFollowUpOn  DateTime? @db.Date
+  nextAction      String?
+  lastContactedAt DateTime?
+  assignedToId    String?
+
+  // --- fee discussion (a negotiation record, not a fee) ---
+  feeStatus            FeeDiscussionStatus @default(NOT_STARTED)
+  familyDiscountKind   DiscountKind        @default(NONE)
+  /// FIXED: paise. PERCENT: basis points (1000 = 10%).
+  familyDiscountValue  Int                 @default(0)
+  familyDiscountMinor  Int                 @default(0)
+  familyDiscountReason String?
+  /// Internal — never shown publicly.
+  discussionNotes      String?
+  feeAgreedAt          DateTime?
+  feeAgreedById        String?
+
+  closedAt    DateTime?
+  closeReason String?
+  createdById String?
+  updatedById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  existingParent  Parent?         @relation(fields: [schoolId, existingParentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  assignedTo      User?           @relation("EnquiryAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  feeAgreedBy     User?           @relation("EnquiryFeeAgreer", fields: [feeAgreedById], references: [id], onDelete: SetNull)
+  createdBy       User?           @relation("EnquiryCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy       User?           @relation("EnquiryUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  children     EnquiryChild[]
+  followUps    EnquiryFollowUp[]
+  feeRevisions EnquiryFeeRevision[]
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, enquiryNumber])
+  @@index([schoolId, status, createdAt])
+  @@index([schoolId, phone])
+  @@index([schoolId, nextFollowUpOn])
+}
+
+/// One child in a family enquiry, with their own class, stream and fee discussion.
+model EnquiryChild {
+  id             String             @id @default(cuid())
+  schoolId       String
+  enquiryId      String
+  position       Int                @default(0)
+  status         EnquiryChildStatus @default(OPEN)
+  firstName      String
+  lastName       String?
+  dateOfBirth    DateTime?          @db.Date
+  gender         Gender?
+  classId        String
+  /// Nursery–8: none. 9–10: optional. 11–12: required (see lib/stream-rules.ts).
+  streamId       String?
+  previousSchool String?
+  notes          String?
+
+  // --- fee discussion; originalMinor null means not discussed yet ---
+  feeOriginalMinor Int?
+  discountKind     DiscountKind @default(NONE)
+  /// FIXED: paise. PERCENT: basis points.
+  discountValue    Int          @default(0)
+  discountMinor    Int          @default(0)
+  finalMinor       Int?
+  discountReason   String?
+  feeNotes         String?
+  feeUpdatedAt     DateTime?
+
+  // --- once admitted ---
+  convertedStudentId  String?
+  convertedAt         DateTime?
+  /// When the discussed discount became a real concession (after confirmation).
+  concessionAppliedAt DateTime?
+  concessionChargeId  String?
+
+  createdById String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  school           School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  enquiry          Enquiry  @relation(fields: [schoolId, enquiryId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  class            Class    @relation(fields: [schoolId, classId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  stream           Stream?  @relation(fields: [schoolId, streamId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  convertedStudent Student? @relation(fields: [schoolId, convertedStudentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy        User?    @relation("EnquiryChildCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy        User?    @relation("EnquiryChildUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, convertedStudentId])
+  @@index([schoolId, enquiryId])
+  @@index([schoolId, firstName])
+}
+
+model EnquiryFollowUp {
+  id             String    @id @default(cuid())
+  schoolId       String
+  enquiryId      String
+  note           String
+  nextAction     String?
+  nextFollowUpOn DateTime? @db.Date
+  authorId       String?
+  createdAt      DateTime  @default(now())
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  enquiry Enquiry @relation(fields: [schoolId, enquiryId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  author  User?   @relation("EnquiryFollowUpAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, enquiryId, createdAt])
+}
+
+/// Every change to a discussed fee or discount, so the original figures are
+/// never lost. `childId` is null for the family discount; it is a plain
+/// column (no key) so a removed child's history stays.
+model EnquiryFeeRevision {
+  id            String       @id @default(cuid())
+  schoolId      String
+  enquiryId     String
+  childId       String?
+  childName     String?
+  originalMinor Int
+  discountKind  DiscountKind
+  discountValue Int
+  discountMinor Int
+  finalMinor    Int
+  reason        String?
+  notes         String?
+  changedById   String?
+  createdAt     DateTime     @default(now())
+
+  school    School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  enquiry   Enquiry @relation(fields: [schoolId, enquiryId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  changedBy User?   @relation("EnquiryFeeReviser", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
+  @@index([schoolId, enquiryId, createdAt])
+}
+
+/// The public admission page's settings. School name, logo, address, about
+/// and the principal's message come from the website profile; this adds
+/// what only admissions need. No row: open all year, every active class.
+model AdmissionPortal {
+  id           String    @id @default(cuid())
+  schoolId     String    @unique
+  /// Unpublished: the public form is switched off whatever the dates say.
+  /// Existing schools stay published, as before.
+  isPublished  Boolean   @default(true)
+  opensOn      DateTime? @db.Date
+  closesOn     DateTime? @db.Date
+  instructions String?
+  mapUrl       String?
+  websiteUrl   String?
+  highlights   String[]  @default([])
+  /// Classes open for admission; empty means every active class.
+  classIds     String[]  @default([])
+  /// The school's own extra questions: [{ key, label, kind, options, required }].
+  customFields Json      @default("[]")
+  updatedById  String?
+  updatedAt    DateTime  @updatedAt
+
+  school    School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  updatedBy User?  @relation("AdmissionPortalEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([schoolId, id])
 }

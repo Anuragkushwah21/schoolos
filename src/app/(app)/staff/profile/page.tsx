@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 
-import { effectiveStaffPermissions } from "@/lib/validation/operations";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/shared/page-header";
@@ -9,9 +8,9 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/dates";
 import { fullName, humanize } from "@/lib/format";
-import { STAFF_PERMISSION_LABEL } from "@/lib/validation/operations";
+import { STAFF_ROLE_NAMES, type BaseStaffRole, grantDef } from "@/lib/staff-access";
 import { requireTenant } from "@/server/auth/current-user";
-import { requireStaffSelf } from "@/server/auth/staff-access";
+import { requireStaffSelf, staffGrants } from "@/server/auth/staff-access";
 import { orNotFound } from "@/server/page-helpers";
 
 export const metadata: Metadata = { title: "My profile" };
@@ -24,9 +23,11 @@ export const metadata: Metadata = { title: "My profile" };
 export default async function StaffProfilePage() {
   const ctx = await requireTenant("NON_TEACHING_STAFF");
   const staff = await orNotFound(requireStaffSelf(ctx));
+  // Today's access: their own, plus any substitution they are covering.
+  const grants = await staffGrants(ctx);
   const rows: Array<[string, React.ReactNode]> = [
     ["Employee ID", staff.employeeId],
-    ["Designation", humanize(staff.role)],
+    ["Designation", STAFF_ROLE_NAMES[staff.role as BaseStaffRole] ?? humanize(staff.role)],
     ["Job title", staff.designation ?? "—"],
     ["Department", staff.department ?? "—"],
     ["Mobile", staff.phone ?? "—"],
@@ -63,9 +64,9 @@ export default async function StaffProfilePage() {
           </CardHeader>
           <CardContent className="text-sm">
             <ul className="flex list-disc flex-col gap-1 pl-5">
-              <li>Your profile, leave, school notices and meetings you are invited to</li>
-              {effectiveStaffPermissions(staff).map((permission) => (
-                <li key={permission}>{STAFF_PERMISSION_LABEL[permission].label}</li>
+              <li>Your profile, attendance, leave, school notices, events and meetings you are invited to</li>
+              {grants.map((grant) => (
+                <li key={grant}>{grantDef(grant)?.label ?? grant}</li>
               ))}
             </ul>
             <p className="text-muted-foreground mt-4">

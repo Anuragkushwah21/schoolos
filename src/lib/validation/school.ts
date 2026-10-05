@@ -116,6 +116,9 @@ export const streamSchema = z.object({
   name: requiredText("a stream name", 40),
 });
 
+export const updateSubjectSchema = subjectSchema.extend({ subjectId: id });
+export const updateStreamSchema = streamSchema.extend({ streamId: id });
+
 export const classSchema = z.object({
   name: requiredText("a class name", 40),
   level: z.coerce.number().int().min(-5).max(20),
@@ -263,11 +266,41 @@ export const updateParentSchema = z.object({
   email: optionalEmail,
   occupation: optionalText(80),
   addressLine: optionalText(200),
+  // Absent (an API client, an older form): left as they are. Present but blank: cleared.
+  alternatePhone: z.undefined().or(optionalPhone),
+  city: z.undefined().or(optionalText(80)),
+  state: z.undefined().or(optionalText(80)),
+  postalCode: z.undefined().or(optionalText(12)),
   /** Sent only by the form that shows the ID-proof fields; otherwise they are left alone. */
   withIdProof: checkbox,
   idProofType: optionalText(40),
   idProofNumber: optionalText(40),
 });
+
+/**
+ * What a parent may change about themselves (My account). Not here, on
+ * purpose: the sign-in email (a login change), the links to children and the
+ * relationship (the school's to make), and ID proof (office only).
+ */
+export const parentSelfProfileSchema = z
+  .object({
+    firstName: requiredText("your first name", 60),
+    lastName: requiredText("your last name", 60),
+    phone: requiredPhone,
+    alternatePhone: optionalPhone,
+    occupation: optionalText(80),
+    addressLine: optionalText(200),
+    city: optionalText(80),
+    state: optionalText(80),
+    postalCode: z
+      .preprocess((value) => (typeof value === "string" && value.trim() === "" ? undefined : value), z.string().trim().regex(/^[0-9]{6}$/, "Enter the 6-digit PIN code").optional())
+      .transform((value) => value ?? null),
+  })
+  .refine((data) => !data.alternatePhone || data.alternatePhone.replace(/\D/g, "").slice(-10) !== data.phone.replace(/\D/g, "").slice(-10), {
+    message: "The alternate number is the same as your mobile",
+    path: ["alternatePhone"],
+  });
+export type ParentSelfProfileInput = z.infer<typeof parentSelfProfileSchema>;
 
 export const portalAccessSchema = z.object({
   personId: id,

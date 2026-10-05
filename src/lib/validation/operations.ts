@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { grantsFrom } from "@/lib/staff-access";
+
 import { EMPLOYEE_LIFECYCLE } from "@/lib/validation/lifecycle";
 
 import {
@@ -35,74 +37,52 @@ export const STAFF_ROLES = [
   "OTHER",
 ] as const;
 
-/**
- * Modules a School Admin may open to one staff login. A designation grants
- * nothing by itself — "Accountant" is a job title; `COLLECT_FEES` is the
- * permission. `STAFF_ROLE_DEFAULTS` only pre-ticks the usual boxes.
- */
-export const STAFF_PERMISSIONS = ["VIEW_STUDENTS", "VIEW_LIBRARY", "MANAGE_LIBRARY", "VIEW_TRANSPORT", "COLLECT_FEES"] as const;
-
-export const STAFF_PERMISSION_LABEL: Record<(typeof STAFF_PERMISSIONS)[number], { label: string; hint: string }> = {
-  VIEW_STUDENTS: { label: "View students", hint: "Student directory: names, classes and guardian phone numbers. No fees, marks or records." },
-  VIEW_LIBRARY: { label: "View library", hint: "The catalogue and who has which book." },
-  MANAGE_LIBRARY: { label: "Run the library", hint: "Add books, issue and return them, and collect fines." },
-  VIEW_TRANSPORT: { label: "View transport", hint: "Routes, stops, vehicles and rider counts." },
-  COLLECT_FEES: { label: "Collect fees", hint: "See what each student owes, record payments and print receipts. No expenses, salaries or settings." },
-};
-
-/**
- * What a designation always carries, whatever boxes are ticked: a Librarian
- * runs the library — that is the job — and nothing beyond it is implied.
- */
-export const STAFF_ROLE_IMPLIED: Partial<Record<(typeof STAFF_ROLES)[number], Array<(typeof STAFF_PERMISSIONS)[number]>>> = {
-  LIBRARIAN: ["MANAGE_LIBRARY"],
-};
-
-/** Granted permissions plus those the role implies, without duplicates. */
-export function effectiveStaffPermissions<P extends string>(staff: { role: string; permissions: readonly P[] }): P[] {
-  const implied = (STAFF_ROLE_IMPLIED[staff.role as (typeof STAFF_ROLES)[number]] ?? []) as unknown as P[];
-  return [...new Set([...staff.permissions, ...implied])];
-}
-
-/** What each designation usually needs — suggested when a staff member is added, never enforced. */
-export const STAFF_ROLE_DEFAULTS: Partial<Record<(typeof STAFF_ROLES)[number], Array<(typeof STAFF_PERMISSIONS)[number]>>> = {
-  ACCOUNTANT: ["COLLECT_FEES", "VIEW_STUDENTS"],
-  // The issue desk finds borrowers itself; the full directory (with guardian phones) is not needed.
-  LIBRARIAN: ["MANAGE_LIBRARY"],
-  RECEPTIONIST: ["VIEW_STUDENTS"],
-  TRANSPORT_ATTENDANT: ["VIEW_TRANSPORT"],
-};
 export const STAFF_STATUSES = EMPLOYEE_LIFECYCLE;
 
-export const staffSchema = z.object({
-  staffId: optionalId,
-  employeeId: requiredText("an employee ID", 30),
-  firstName: requiredText("a first name", 60),
-  lastName: requiredText("a last name", 60),
-  role: z.enum(STAFF_ROLES, { error: "Choose a role" }),
-  designation: optionalText(80),
-  department: optionalText(80),
-  phone: optionalPhone,
-  email: optionalEmail,
-  /** Joining may be a future date for someone starting next month. */
-  joiningDate: optionalDate,
-  /** New staff start ACTIVE; later changes go through "Change status". Absent = unchanged. */
-  status: z.enum(STAFF_STATUSES).optional(),
-  notes: optionalText(500),
-  /**
-   * Modules this person may open once they have a login. Absent means "leave
-   * as they are", so a CSV import or an API caller that does not mention
-   * permissions never revokes them by accident; the form always sends the list.
-   */
-  permissions: z
-    .preprocess(
-      // The form sends an empty marker alongside its checkboxes so that
-      // unticking every box still arrives, as [].
-      (value) => (value === undefined ? undefined : (Array.isArray(value) ? value : [value]).filter((item) => item !== "")),
-      z.array(z.enum(STAFF_PERMISSIONS)).optional(),
-    )
-    .transform((value) => (value ? [...new Set(value)] : undefined)),
-});
+/** A list field from a form (repeated inputs, with an empty marker) or JSON. Absent stays absent. */
+const grantList = z.preprocess(
+  // The form sends an empty marker alongside its checkboxes so that
+  // unticking every box still arrives, as [].
+  (value) => (value === undefined ? undefined : (Array.isArray(value) ? value : [value]).filter((item) => item !== "")),
+  z.array(z.string().max(60)).max(100).optional(),
+);
+
+export const staffSchema = z
+  .object({
+    staffId: optionalId,
+    employeeId: requiredText("an employee ID", 30),
+    firstName: requiredText("a first name", 60),
+    lastName: requiredText("a last name", 60),
+    /** The role profile (built-in or custom). Its designation decides `role`. */
+    roleProfileId: optionalId,
+    /** The designation, for callers that do not use role profiles (CSV, older API clients). */
+    role: z.enum(STAFF_ROLES, { error: "Choose a role" }).optional(),
+    designation: optionalText(80),
+    department: optionalText(80),
+    phone: optionalPhone,
+    email: optionalEmail,
+    /** Joining may be a future date for someone starting next month. */
+    joiningDate: optionalDate,
+    /** New staff start ACTIVE; later changes go through "Change status". Absent = unchanged. */
+    status: z.enum(STAFF_STATUSES).optional(),
+    notes: optionalText(500),
+    /**
+     * What this person may do (grant keys). Absent means "leave as they are",
+     * so a CSV import or an API caller that does not mention them never
+     * revokes them by accident; a new staff member then starts with their
+     * role's defaults. The old permission names are still understood.
+     */
+    grants: grantList,
+    /** The old name for `grants`, from API clients written before 5 Oct 2026. */
+    permissions: grantList,
+  })
+  .superRefine((data, ctx) => {
+    if (!data.roleProfileId && !data.role) ctx.addIssue({ code: "custom", path: ["roleProfileId"], message: "Choose a role" });
+  })
+  .transform(({ permissions, grants, ...rest }) => {
+    const asked = grants ?? permissions;
+    return { ...rest, grants: asked ? grantsFrom(asked) : undefined };
+  });
 export type StaffInput = z.infer<typeof staffSchema>;
 
 export const VEHICLE_TYPES = ["BUS", "VAN", "CAR", "OTHER"] as const;
@@ -121,6 +101,10 @@ export type VehicleInput = z.infer<typeof vehicleSchema>;
 export const routeSchema = z.object({
   routeId: optionalId,
   name: requiredText("a route name", 80),
+  /** Route number as painted on the bus, e.g. "R-3". */
+  code: optionalText(20),
+  startPoint: optionalText(120),
+  endPoint: optionalText(120),
   vehicleId: optionalId,
   driverId: optionalId,
   attendantId: optionalId,
@@ -131,7 +115,10 @@ export type RouteInput = z.infer<typeof routeSchema>;
 
 export const stopSchema = z.object({
   routeId: id,
+  /** Set when editing a stop; absent when adding one. */
+  stopId: optionalId,
   name: requiredText("the stop name", 80),
+  location: optionalText(160),
   sequence: requiredInt(1, 200),
   pickupMinute: optionalTime,
   dropMinute: optionalTime,

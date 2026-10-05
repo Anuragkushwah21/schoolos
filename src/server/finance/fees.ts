@@ -9,6 +9,7 @@ import { assertRole } from "@/server/auth/assert";
 import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { isUniqueViolation } from "@/server/db/errors";
+import { ACTIVE_CONCESSION, netOf } from "@/server/finance/net";
 
 /**
  * Fees: what a school charges, and what it has received.
@@ -27,8 +28,11 @@ import { isUniqueViolation } from "@/server/db/errors";
  */
 
 export type FeeSummary = {
+  /** What is owed after concessions: the net of every charge. */
   chargedMinor: number;
   paidMinor: number;
+  /** Moved into a later session as "Previous outstanding" — no longer owed here. */
+  carriedForwardMinor: number;
   /** Never negative: an overpayment is shown as paid in full, not as a credit. */
   pendingMinor: number;
   status: "PAID" | "PARTIAL" | "PENDING" | "NONE";
@@ -47,17 +51,18 @@ export function summarise(
   charges: Array<{ amountMinor: number; dueOn: Date }>,
   payments: Array<{ amountMinor: number }>,
   asOf: Date = today(),
+  carriedForwardMinor = 0,
 ): FeeSummary {
   const chargedMinor = charges.reduce((sum, row) => sum + row.amountMinor, 0);
   const paidMinor = payments.reduce((sum, row) => sum + row.amountMinor, 0);
-  const pendingMinor = Math.max(chargedMinor - paidMinor, 0);
+  const pendingMinor = Math.max(chargedMinor - paidMinor - carriedForwardMinor, 0);
 
   const status: FeeSummary["status"] =
     chargedMinor === 0
       ? "NONE"
       : pendingMinor === 0
         ? "PAID"
-        : paidMinor > 0
+        : paidMinor > 0 || carriedForwardMinor > 0
           ? "PARTIAL"
           : "PENDING";
 
@@ -73,6 +78,7 @@ export function summarise(
   return {
     chargedMinor,
     paidMinor,
+    carriedForwardMinor,
     pendingMinor,
     status,
     dueOn,
@@ -87,7 +93,8 @@ export function summarise(
 export async function listFeeHeads(ctx: TenantContext, options: { activeOnly?: boolean } = {}) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   return ctx.db.feeHead.findMany({
-    where: options.activeOnly ? { isActive: true } : {},
+    // System heads ("Previous outstanding (2025-26)") are created by carry-forward, never picked by hand.
+    where: { isSystem: false, ...(options.activeOnly ? { isActive: true } : {}) },
     orderBy: { name: "asc" },
     select: { id: true, name: true, note: true, isActive: true },
   });
@@ -180,7 +187,7 @@ export async function chargeStudent(
       where: { id: input.studentId },
       select: { id: true, firstName: true, lastName: true },
     }),
-    ctx.db.feeHead.findFirst({ where: { id: input.feeHeadId }, select: { id: true, name: true } }),
+    ctx.db.feeHead.findFirst({ where: { id: input.feeHeadId, isSystem: false }, select: { id: true, name: true } }),
   ]);
   // A student or head from another school resolves to nothing, because the
   // client is already tenant-scoped.
@@ -250,7 +257,7 @@ export async function chargeSection(
         stream: { select: { name: true } },
       },
     }),
-    ctx.db.feeHead.findFirst({ where: { id: input.feeHeadId }, select: { id: true, name: true } }),
+    ctx.db.feeHead.findFirst({ where: { id: input.feeHeadId, isSystem: false }, select: { id: true, name: true } }),
   ]);
   if (!section || !head) throw new NotFoundError("That section or fee head was not found.");
 
@@ -304,9 +311,13 @@ export async function removeCharge(ctx: TenantContext, chargeId: string): Promis
       studentId: true,
       feeHead: { select: { name: true } },
       student: { select: { firstName: true, lastName: true } },
+      _count: { select: { carriedForwardBy: true } },
     },
   });
   if (!charge) throw new NotFoundError("That charge was not found.");
+  if (charge._count.carriedForwardBy) {
+    throw new ConflictError("This is a carried-forward balance from an earlier session. It stays on record; collect it, or give a concession on the earlier session's fees.");
+  }
 
   await ctx.db.feeCharge.deleteMany({ where: { id: charge.id } });
 
@@ -347,7 +358,7 @@ export async function recordPayment(
   ctx: TenantContext,
   input: PaymentInput,
 ): Promise<{ id: string }> {
-  await assertAdminOrStaffPermission(ctx, "COLLECT_FEES");
+  await assertAdminOrStaffPermission(ctx, "fees.collect");
   const session = await requireCurrentSession(ctx);
 
   if (input.amountMinor <= 0) {
@@ -437,7 +448,7 @@ export async function voidPayment(ctx: TenantContext, paymentId: string, reason:
 
 /** The next receipt number for this school, so the office does not invent one. */
 export async function suggestReceiptNo(ctx: TenantContext): Promise<string> {
-  await assertAdminOrStaffPermission(ctx, "COLLECT_FEES");
+  await assertAdminOrStaffPermission(ctx, "fees.collect");
   const rows = await ctx.db.feePayment.findMany({
     where: { receiptNo: { startsWith: "REC-" } },
     select: { receiptNo: true },
@@ -465,7 +476,7 @@ export async function getStudentFees(
   studentId: string,
   academicSessionId?: string,
 ) {
-  await assertAdminOrStaffPermission(ctx, "COLLECT_FEES");
+  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect"]);
   return readStudentFees(ctx, studentId, academicSessionId);
 }
 
@@ -497,6 +508,7 @@ export async function readStudentFees(
       session: null,
       charges: [],
       payments: [],
+      carriedOut: null,
       summary: summarise([], []),
     };
   }
@@ -514,7 +526,9 @@ export async function readStudentFees(
         amountMinor: true,
         dueOn: true,
         notes: true,
-        feeHead: { select: { id: true, name: true, note: true } },
+        feeHead: { select: { id: true, name: true, note: true, isSystem: true } },
+        concessions: ACTIVE_CONCESSION,
+        carriedForwardBy: { select: { fromSession: { select: { id: true, name: true } } } },
       },
     }),
     ctx.db.feePayment.findMany({
@@ -530,12 +544,38 @@ export async function readStudentFees(
         notes: true,
         voidedAt: true,
         voidReason: true,
+        familyPaymentId: true,
       },
     }),
   ]);
+  const carriedOut = await ctx.db.feeCarryForward.findMany({
+    where: { studentId, fromSessionId: sessionId },
+    select: { amountMinor: true, toSession: { select: { name: true } } },
+  });
+
+  // Each charge with its original amount, its concession and what is left to pay.
+  const shaped = charges.map(({ concessions, carriedForwardBy, ...row }) => ({
+    ...row,
+    ...netOf({ amountMinor: row.amountMinor, concessions }),
+    concession: concessions[0] ?? null,
+    /** Set for a "Previous outstanding" charge: where it was carried from. */
+    carriedFrom: carriedForwardBy[0]?.fromSession ?? null,
+  }));
+  const carriedForwardMinor = carriedOut.reduce((sum, row) => sum + row.amountMinor, 0);
 
   // A void receipt stays on the list, marked, but paid nothing.
-  return { session, charges, payments, summary: summarise(charges, payments.filter((p) => !p.voidedAt)) };
+  return {
+    session,
+    charges: shaped,
+    payments,
+    carriedOut: carriedOut.length ? { amountMinor: carriedForwardMinor, toSession: carriedOut.map((row) => row.toSession.name).join(", ") } : null,
+    summary: summarise(
+      shaped.map((row) => ({ amountMinor: row.netMinor, dueOn: row.dueOn })),
+      payments.filter((p) => !p.voidedAt),
+      today(),
+      carriedForwardMinor,
+    ),
+  };
 }
 
 export const FEE_STATUSES = ["PAID", "PARTIAL", "PENDING", "NONE"] as const;
@@ -559,7 +599,7 @@ export async function listFeePositions(
     page?: number;
   } = {},
 ) {
-  await assertAdminOrStaffPermission(ctx, "COLLECT_FEES");
+  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect"]);
   const session = filters.academicSessionId
     ? await ctx.db.academicSession.findFirst({
         where: { id: filters.academicSessionId },
@@ -628,7 +668,7 @@ export async function listFeePositions(
     studentIds.length
       ? ctx.db.feeCharge.findMany({
           where: { academicSessionId: session.id, studentId: { in: studentIds } },
-          select: { studentId: true, amountMinor: true, dueOn: true },
+          select: { studentId: true, amountMinor: true, dueOn: true, concessions: ACTIVE_CONCESSION },
         })
       : Promise.resolve([]),
     studentIds.length
@@ -639,10 +679,15 @@ export async function listFeePositions(
       : Promise.resolve([]),
   ]);
 
+  const carried = studentIds.length
+    ? await ctx.db.feeCarryForward.groupBy({ by: ["studentId"], where: { fromSessionId: session.id, studentId: { in: studentIds } }, _sum: { amountMinor: true } })
+    : [];
+  const carriedBy = new Map(carried.map((row) => [row.studentId, row._sum.amountMinor ?? 0]));
+  // Net of concessions, the same arithmetic as the student's own page.
   const chargesBy = new Map<string, Array<{ amountMinor: number; dueOn: Date }>>();
   for (const row of chargeRows) {
     const list = chargesBy.get(row.studentId) ?? [];
-    list.push({ amountMinor: row.amountMinor, dueOn: row.dueOn });
+    list.push({ amountMinor: netOf(row).netMinor, dueOn: row.dueOn });
     chargesBy.set(row.studentId, list);
   }
   const paymentsBy = new Map<string, Array<{ amountMinor: number }>>();
@@ -663,7 +708,7 @@ export async function listFeePositions(
         section: sectionLabel(row.section),
         parentName: primary ? fullName(primary) : null,
         parentPhone: primary?.phone ?? null,
-        summary: summarise(chargesBy.get(row.student.id) ?? [], paymentsBy.get(row.student.id) ?? []),
+        summary: summarise(chargesBy.get(row.student.id) ?? [], paymentsBy.get(row.student.id) ?? [], today(), carriedBy.get(row.student.id) ?? 0),
       };
     })
     .sort((a, b) => a.section.localeCompare(b.section) || a.name.localeCompare(b.name));

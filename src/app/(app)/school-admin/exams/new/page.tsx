@@ -24,7 +24,7 @@ export default async function NewExamPage() {
   return (
     <>
       <PageHeader
-        back={{ href: "/school-admin/exams", label: "Examinations" }}
+        back={{ href: "/school-admin/exams/term", label: "Term exams" }}
         title="New exam"
         description={`${session.name}. Dates may be in the past or future.`}
       />

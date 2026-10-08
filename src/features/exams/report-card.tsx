@@ -1,7 +1,8 @@
 import { formatDate } from "@/lib/dates";
 import { humanize } from "@/lib/format";
-import { OUTCOME_LABEL, passMarkFor } from "@/lib/grades";
+import { OUTCOME_LABEL } from "@/lib/grades";
 import type { ReportCard as ReportCardData } from "@/server/exams/results";
+import { attendedDays } from "@/lib/attendance";
 
 /**
  * The printed report card. Black on white whatever the theme; the school's
@@ -91,9 +92,9 @@ export function ReportCard({ card }: { card: ReportCardData }) {
             <tr key={row.assessmentId} className="border-b border-neutral-200">
               <td className="px-2 py-1.5">{row.subject}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{row.maxMarks}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums">{passMarkFor(row.maxMarks, row.passMarks)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums">{row.passMark}</td>
               <td className="px-2 py-1.5 text-right font-medium tabular-nums">
-                {row.absent ? "AB" : row.marksObtained ?? "—"}
+                {row.exempt ? "EX" : row.absent ? "AB" : row.marksObtained ?? "—"}
                 {row.outcome === "FAIL" ? <span className="text-red-700"> *</span> : null}
               </td>
               <td className="px-2 py-1.5">{row.grade ?? "—"}</td>
@@ -127,13 +128,27 @@ export function ReportCard({ card }: { card: ReportCardData }) {
           <p className="text-lg font-bold tabular-nums">
             {card.attendance.share === null
               ? "—"
-              : `${Math.round(card.attendance.share * 100)}% · ${card.attendance.counts.PRESENT + card.attendance.counts.LATE}/${card.attendance.counts.total} days`}
+              : `${Math.round(card.attendance.share * 100)}% · ${attendedDays(card.attendance.counts)}/${card.attendance.counts.total} days`}
           </p>
         </div>
       </div>
 
+      {card.remarks.length ? (
+        <section className="mt-4 rounded border border-neutral-300 p-3">
+          <p className="mb-1 font-semibold">Teacher&apos;s remarks</p>
+          <ul className="space-y-1">
+            {card.remarks.map((remark, index) => (
+              <li key={index}>
+                {remark.body}
+                <span className="text-neutral-500">{` — ${remark.teacher}${remark.subject ? ` (${remark.subject})` : ""}`}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <p className="mt-3 text-xs text-neutral-500">
-        AB = absent. * = below the pass mark. Grades: A1 91–100, A2 81–90, B1 71–80, B2 61–70, C1 51–60, C2 41–50, D 33–40, E below 33.
+        {`AB = absent (counts as zero). EX = exempt (not counted). * = below the pass mark. A paper without its own pass mark passes at ${card.grading.passPercent}%. Grades: ${card.grading.key}.`}
       </p>
 
       <footer className="mt-14 grid grid-cols-3 gap-6 text-center text-neutral-600">

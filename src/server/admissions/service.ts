@@ -3,12 +3,12 @@ import { today } from "@/lib/dates";
 import { admissionYear, allocateAdmissionNumber, ensureAdmissionCounter } from "@/server/people/admission-number";
 
 import type { AdmissionSource, AdmissionStatus, AdmissionType } from "@/generated/prisma/enums";
-import { AppError, ConflictError, NotFoundError, RateLimitedError } from "@/lib/errors";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, RateLimitedError } from "@/lib/errors";
 import type { AdmissionApplicationInput } from "@/lib/validation/website";
 import { recordAudit } from "@/server/audit/log";
 import { claimSeats } from "@/server/academics/streams";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import { PUBLIC_FORM_RATE_LIMIT, rateLimit } from "@/server/auth/rate-limit";
 import { isUniqueViolation } from "@/server/db/errors";
 import { prisma } from "@/server/db/prisma";
@@ -23,6 +23,9 @@ import { publicPortal, readCustomAnswers } from "@/server/admissions/portal";
 import { ValidationError } from "@/lib/errors";
 import type { CreateStudentInput } from "@/lib/validation/school";
 import { type AdmissionResult, createStudent, phoneKey } from "@/server/people/students";
+import { duplicateStudentError, findPossibleDuplicates } from "@/server/people/duplicates";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Admissions: public applications and the School Admin's review of them.
@@ -178,8 +181,8 @@ export type ApplicationFilters = {
   archived?: boolean;
   q?: string;
   source?: AdmissionSource;
-  /** "online": sent through the public form; "office": entered by the office before enquiries existed. */
-  origin?: "online" | "office";
+  /** "online": sent through the public form; "office": entered by the office before enquiries existed; "drive": entered by teachers in an admission drive. */
+  origin?: "online" | "office" | "drive";
 };
 
 /**
@@ -187,10 +190,10 @@ export type ApplicationFilters = {
  * only — and how many older office-entered applications there are.
  */
 export async function applicationCounts(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "admissions.view");
   const [byStatus, office] = await Promise.all([
     ctx.db.admissionApplication.groupBy({ by: ["status"], where: { source: "WEBSITE", archivedAt: null }, _count: true }),
-    ctx.db.admissionApplication.count({ where: { source: { not: "WEBSITE" }, archivedAt: null } }),
+    ctx.db.admissionApplication.count({ where: { source: { in: ["WALK_IN", "PHONE", "ADMIN"] }, archivedAt: null } }),
   ]);
   const count = (status: AdmissionStatus) => byStatus.find((row) => row.status === status)?._count ?? 0;
   const statuses = ["SUBMITTED", "UNDER_REVIEW", "SHORTLISTED", "APPROVED", "CONVERTED", "REJECTED"] as const;
@@ -200,14 +203,20 @@ export async function applicationCounts(ctx: TenantContext) {
 
 /** Enquiries and applications. Archived ones are hidden unless asked for. */
 export async function listApplications(ctx: TenantContext, filters: ApplicationFilters | AdmissionStatus = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "admissions.view");
   const f: ApplicationFilters = typeof filters === "string" ? { status: filters } : filters;
   const q = f.q?.trim();
   const rows = await ctx.db.admissionApplication.findMany({
     where: {
       ...(f.status ? { status: f.status } : {}),
       ...(f.source ? { source: f.source } : {}),
-      ...(f.origin === "online" ? { source: "WEBSITE" as const } : f.origin === "office" ? { source: { not: "WEBSITE" as const } } : {}),
+      ...(f.origin === "online"
+        ? { source: "WEBSITE" as const }
+        : f.origin === "office"
+          ? { source: { in: ["WALK_IN" as const, "PHONE" as const, "ADMIN" as const] } }
+          : f.origin === "drive"
+            ? { source: "DRIVE" as const }
+            : {}),
       archivedAt: f.archived ? { not: null } : null,
       ...(q
         ? {
@@ -257,7 +266,7 @@ export async function listApplications(ctx: TenantContext, filters: ApplicationF
 }
 
 export async function getApplication(ctx: TenantContext, applicationId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "admissions.view");
   const application = await ctx.db.admissionApplication.findFirst({
     where: { id: applicationId },
     include: {
@@ -267,6 +276,8 @@ export async function getApplication(ctx: TenantContext, applicationId: string) 
       reviewedBy: { select: { firstName: true, lastName: true } },
       createdStudent: { select: { id: true, firstName: true, lastName: true } },
       followUps: { orderBy: { createdAt: "desc" }, select: { id: true, note: true, nextFollowUpOn: true, createdAt: true, author: { select: { firstName: true, lastName: true } } } },
+      drive: { select: { id: true, name: true } },
+      assignment: { select: { id: true, sectionId: true, class: { select: { name: true } }, section: { select: { name: true } }, teacher: { select: { firstName: true, lastName: true } } } },
     },
   });
   if (!application) throw new NotFoundError();
@@ -291,7 +302,11 @@ export async function setApplicationStatus(
   ctx: TenantContext,
   input: { applicationId: string; status: "UNDER_REVIEW" | "SHORTLISTED" | "APPROVED" | "REJECTED"; reviewNotes: string | null },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "admissions.manage");
+  // A teacher's admission-drive application is decided by the School Admin only (see drives.ts).
+  if (!isSchoolLeader(ctx.user.role) && (await ctx.db.admissionApplication.count({ where: { id: input.applicationId, driveId: { not: null } } }))) {
+    throw new ForbiddenError("Applications from an admission drive are decided by the School Admin.");
+  }
 
   const { count } = await ctx.db.admissionApplication.updateMany({
     where: { id: input.applicationId, status: { in: OPEN } },
@@ -330,10 +345,23 @@ export async function acceptApplication(
     rollNumber: string | null;
     admissionNumber: string | null;
     reviewNotes: string | null;
+    confirmDuplicate?: boolean;
   },
 ): Promise<{ studentId: string }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   await assertWithinPlanLimit(ctx, "students");
+
+  // The same child already at the school? Refused until the caller confirms.
+  if (!input.confirmDuplicate) {
+    const applied = await ctx.db.admissionApplication.findFirst({
+      where: { id: input.applicationId },
+      select: { studentFirstName: true, studentLastName: true, dateOfBirth: true, parentPhone: true },
+    });
+    if (applied) {
+      const matches = await findPossibleDuplicates(ctx, { firstName: applied.studentFirstName, lastName: applied.studentLastName, dateOfBirth: applied.dateOfBirth, parentPhones: [applied.parentPhone] });
+      if (matches.length) throw duplicateStudentError(matches);
+    }
+  }
 
   let result: { studentId: string; name: string; applicationNumber: string };
   try {
@@ -461,7 +489,7 @@ export async function acceptApplication(
 
 /** A follow-up: what happened, and optionally when to follow up next. */
 export async function addFollowUp(ctx: TenantContext, input: { applicationId: string; note: string; nextFollowUpOn: Date | null }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "admissions.manage");
   const application = await ctx.db.admissionApplication.findFirst({ where: { id: input.applicationId }, select: { id: true, status: true, applicationNumber: true } });
   if (!application) throw new NotFoundError();
   if (input.nextFollowUpOn && input.nextFollowUpOn < today()) throw new AppError("VALIDATION", "The next follow-up must be today or later.");
@@ -478,7 +506,7 @@ export async function addFollowUp(ctx: TenantContext, input: { applicationId: st
  * the audit trail stay, and an archived application is simply off the list.
  */
 export async function setApplicationArchived(ctx: TenantContext, applicationId: string, archived: boolean): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const application = await ctx.db.admissionApplication.findFirst({ where: { id: applicationId }, select: { id: true, applicationNumber: true, status: true } });
   if (!application) throw new NotFoundError();
   if (archived && OPEN.includes(application.status)) {
@@ -500,7 +528,7 @@ export async function setApplicationArchived(ctx: TenantContext, applicationId: 
  * same child.
  */
 export async function conversionPlan(ctx: TenantContext, applicationId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   const application = await getApplication(ctx, applicationId);
   const phone = phoneKey(application.parentPhone);
   const email = application.parentEmail?.toLowerCase() ?? null;
@@ -563,16 +591,9 @@ export async function convertApplication(
   input: CreateStudentInput,
   extra: { admissionType: AdmissionType; confirmNotDuplicate: boolean },
 ): Promise<AdmissionResult> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const plan = await conversionPlan(ctx, applicationId);
   if (!plan.open) throw new ConflictError(plan.application.status === "CONVERTED" || plan.application.status === "REJECTED" ? "This application has already been converted or rejected." : "Approve the application before converting it.");
-  if (plan.possibleDuplicates.length && !extra.confirmNotDuplicate) {
-    throw new ValidationError("Please correct the highlighted fields.", {
-      confirmNotDuplicate: [
-        `${plan.possibleDuplicates.map((row) => `${row.name} (${row.admissionNumber})`).join(", ")} already exists with this name. Tick "This is a different child" if it really is someone else.`,
-      ],
-    });
-  }
   // Claim the application first — approved and not yet converted becomes
   // CONVERTED — so two clicks cannot admit the same child twice. If the
   // admission then fails, it goes back to approved.
@@ -584,7 +605,8 @@ export async function convertApplication(
   if (!count) throw new ConflictError("This application is being converted, or was converted a moment ago.");
   let result: AdmissionResult;
   try {
-    result = await createStudent(ctx, input);
+    // The possible-duplicate check (and its "Add anyway") is createStudent's.
+    result = await createStudent(ctx, { ...input, confirmDuplicate: input.confirmDuplicate || extra.confirmNotDuplicate });
   } catch (error) {
     await ctx.db.admissionApplication.updateMany({ where: { id: applicationId, createdStudentId: null }, data: { status: previous } });
     throw error;

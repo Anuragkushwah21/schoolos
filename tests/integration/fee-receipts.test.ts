@@ -94,12 +94,10 @@ beforeAll(async () => {
   await saveReceiptSettings(adminOf(schoolA), {
     receiptHeaderNote: "Affiliated to CBSE · No. 1030001",
     receiptFooterNote: "Fees once paid are not refundable.",
-    showFeesToStudents: false,
   });
   await saveReceiptSettings(adminOf(schoolB), {
     receiptHeaderNote: "Affiliated to MP Board",
     receiptFooterNote: "Keep this slip safe.",
-    showFeesToStudents: false,
   });
 
   // A: ₹26,000 across three heads; ₹10,000 paid earlier, then ₹5,000.
@@ -128,6 +126,9 @@ beforeAll(async () => {
       referenceNo: "UPI-448812",
     })
   ).id;
+  // The sibling owes something too (a payment is only taken against a fee).
+  const siblingHead = await createFeeHead(adminOf(schoolA), { name: "Sibling Tuition", note: null });
+  await chargeStudent(adminOf(schoolA), { studentId: schoolA.studentIds[1]!, feeHeadId: siblingHead.id, amountMinor: rs(3_000), dueOn: addDays(today(), 30), notes: null });
   ids.aSibling = (
     await recordPayment(adminOf(schoolA), {
       studentId: schoolA.studentIds[1]!,
@@ -277,12 +278,12 @@ describe("who may open a receipt", () => {
     await expect(getReceipt(parentOf(schoolB), ids.aSecond)).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it("never shows a student a receipt — fees are for parents only, whatever the old setting says", async () => {
+  it("never shows a student a receipt — fees are for parents only", async () => {
     await expect(getReceipt(studentOf(schoolA), ids.aSecond)).rejects.toBeInstanceOf(ForbiddenError);
 
     await saveReceiptSettings(
       adminOf(schoolA),
-      receiptSettingsSchema.parse({ receiptHeaderNote: "Affiliated to CBSE · No. 1030001", showFeesToStudents: "on" }),
+      receiptSettingsSchema.parse({ receiptHeaderNote: "Affiliated to CBSE · No. 1030001" }),
     );
     await expect(getReceipt(studentOf(schoolA), ids.aSecond)).rejects.toBeInstanceOf(ForbiddenError);
     await expect(getReceipt(studentOf(schoolB), ids.b)).rejects.toBeInstanceOf(ForbiddenError);

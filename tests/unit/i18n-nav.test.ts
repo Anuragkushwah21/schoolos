@@ -67,45 +67,91 @@ describe("navigation", () => {
     for (const tab of Object.values(AREA_TABS).flat(2)) expect(t(tab!.labelKey)).not.toBe(tab!.labelKey);
   });
 
-  it("keeps the School Admin sidebar short, with setup screens folded away", () => {
-    const admin = NAV_BY_ROLE.SCHOOL_ADMIN.map((item) => item.href);
-    expect(admin.length).toBeLessThanOrEqual(17);
-    for (const buried of ["/school-admin/academics", "/school-admin/parents", "/school-admin/admissions", "/school-admin/audit"]) {
-      expect(admin).not.toContain(buried);
-    }
-    // Website has its own entry (5 Oct 2026): the public site and admission form are managed there.
-    expect(admin).toContain("/school-admin/website");
+  it("gives the School Admin their daily places directly, in groups", () => {
+    const admin = NAV_BY_ROLE.SCHOOL_ADMIN.map((item) => item.labelKey);
+    expect(admin).toEqual([
+      "nav.dashboard",
+      "nav.students",
+      "nav.attendance",
+      "nav.leave",
+      "nav.parents",
+      "nav.teachers",
+      "nav.nonTeachingStaff",
+      "nav.financeAccounts",
+      "nav.library",
+      "nav.communication",
+      "nav.security",
+      "nav.frontDesk",
+      "nav.transport",
+      "nav.reports",
+      "nav.calendar",
+      "nav.timetable",
+      "nav.classesExams",
+      "nav.responsibilities",
+      "nav.principal",
+      "nav.settings",
+      "nav.profile",
+    ]);
+    const groups = NAV_BY_ROLE.SCHOOL_ADMIN.flatMap((item) => (item.group ? [item.group] : []));
+    expect(groups).toEqual(["nav.groupDaily", "nav.groupOffice", "nav.groupPlanning", "nav.groupAccount"]);
+    for (const group of groups) expect(t(group)).not.toBe(group);
   });
 
-  it("highlights the owning entry for folded screens, and only one of them", () => {
+  it("highlights exactly one owning entry for every admin page", () => {
     const admin = NAV_BY_ROLE.SCHOOL_ADMIN;
     const activeOn = (path: string) => admin.filter((item) => isNavActive(item, path)).map((item) => item.labelKey);
-    expect(activeOn("/school-admin/admissions")).toEqual(["nav.students"]);
-    expect(activeOn("/school-admin/staff/abc")).toEqual(["nav.teachersStaff"]);
-    expect(activeOn("/school-admin/finance")).toEqual(["nav.fees"]);
-    // Expenses, salaries and payroll fold under Fees as tabs.
-    expect(activeOn("/school-admin/finance/expenses")).toEqual(["nav.fees"]);
-    expect(activeOn("/school-admin/finance/payroll")).toEqual(["nav.fees"]);
-    expect(activeOn("/school-admin/dashboard")).toEqual(["nav.dashboard"]);
-    // Staff leave and student leave are both under Leave, not under people.
-    expect(activeOn("/school-admin/leave")).toEqual(["nav.leave"]);
-    expect(activeOn("/school-admin/student-leave")).toEqual(["nav.leave"]);
-    expect(activeOn("/school-admin/homework")).toEqual(["nav.academics"]);
-    expect(activeOn("/school-admin/reports")).toEqual(["nav.attendance"]);
-    expect(activeOn("/school-admin/inventory")).toEqual(["nav.library"]);
-    expect(activeOn("/school-admin/website/admission")).toEqual(["nav.website"]);
+    const owner: Record<string, string> = {
+      "/school-admin/dashboard": "nav.dashboard",
+      "/school-admin/students/abc": "nav.students",
+      "/school-admin/support": "nav.students",
+      "/school-admin/concerns": "nav.students",
+      "/school-admin/attendance": "nav.attendance",
+      "/school-admin/attendance/staff": "nav.attendance",
+      "/school-admin/leave": "nav.leave",
+      "/school-admin/student-leave": "nav.leave",
+      "/school-admin/parents": "nav.parents",
+      "/school-admin/teachers": "nav.teachers",
+      "/school-admin/substitutes": "nav.teachers",
+      "/school-admin/staff/abc": "nav.nonTeachingStaff",
+      "/school-admin/staff/workspaces": "nav.nonTeachingStaff",
+      "/school-admin/finance": "nav.financeAccounts",
+      "/school-admin/finance/payroll": "nav.financeAccounts",
+      "/school-admin/inventory": "nav.library",
+      "/school-admin/notices": "nav.communication",
+      "/school-admin/meetings": "nav.communication",
+      "/school-admin/events": "nav.communication",
+      "/school-admin/visitors": "nav.security",
+      "/school-admin/admissions": "nav.frontDesk",
+      "/school-admin/admissions/enquiries": "nav.frontDesk",
+      "/school-admin/admissions/drives": "nav.frontDesk",
+      "/school-admin/transport": "nav.transport",
+      "/school-admin/reports": "nav.reports",
+      "/school-admin/audit": "nav.reports",
+      "/school-admin/holidays": "nav.calendar",
+      "/school-admin/timetable": "nav.timetable",
+      "/school-admin/academics/classes": "nav.classesExams",
+      "/school-admin/homework": "nav.classesExams",
+      "/school-admin/exams/pending": "nav.classesExams",
+      "/school-admin/responsibilities": "nav.responsibilities",
+      "/school-admin/principal": "nav.principal",
+      "/school-admin/website/admission": "nav.settings",
+      "/account": "nav.profile",
+    };
+    for (const [path, key] of Object.entries(owner)) expect(activeOn(path), path).toEqual([key]);
   });
 
   it("gives Events, Calendar, Notices, Meetings and Leave each their own entry, for every role", () => {
-    const own = { SCHOOL_ADMIN: "/school-admin", TEACHER: "/teacher", PARENT: "/parent", STUDENT: "/student", NON_TEACHING_STAFF: "/staff" } as const;
+    // The School Admin reaches these through the Communication and Operations workspaces (tested above).
+    const own = { TEACHER: "/teacher", PARENT: "/parent", STUDENT: "/student", NON_TEACHING_STAFF: "/staff" } as const;
     for (const [role, base] of Object.entries(own)) {
       const items = NAV_BY_ROLE[role as keyof typeof own];
       const keys = items.map((item) => item.labelKey);
-      for (const key of ["nav.events", "nav.calendar", "nav.notices", "nav.meetings"]) expect(keys, `${role} ${key}`).toContain(key);
+      const noticesKey = "nav.notices";
+      for (const key of ["nav.events", "nav.calendar", noticesKey, "nav.meetings"]) expect(keys, `${role} ${key}`).toContain(key);
       expect(keys.some((key) => key === "nav.leave" || key === "nav.leaveRequests"), `${role} leave`).toBe(true);
       // None of them owns another's page.
       const events = items.find((item) => item.labelKey === "nav.events")!;
-      const notices = items.find((item) => item.labelKey === "nav.notices")!;
+      const notices = items.find((item) => item.labelKey === noticesKey)!;
       const calendar = items.find((item) => item.labelKey === "nav.calendar")!;
       expect(isNavActive(notices, `${base}/events`)).toBe(false);
       expect(isNavActive(notices, `${base}/holidays`)).toBe(false);

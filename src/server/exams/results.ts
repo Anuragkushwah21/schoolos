@@ -6,6 +6,9 @@ import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { addDays } from "@/lib/dates";
+import { gradingKey, passMarkFor } from "@/lib/grades";
+import { gradingRules } from "@/server/exams/grading";
 import { tabulate } from "@/server/exams/service";
 import { findChild } from "@/server/parent/access";
 import { findStudentSelf } from "@/server/student/access";
@@ -24,6 +27,7 @@ const NOT_FOUND = "That report card was not found.";
 async function assertCanSee(ctx: TenantContext, studentId: string, published: boolean): Promise<void> {
   switch (ctx.user.role) {
     case "SCHOOL_ADMIN":
+    case "PRINCIPAL":
       return;
     case "PARENT":
       if (published && (await findChild(ctx, studentId).catch(() => null))) return;
@@ -36,7 +40,7 @@ async function assertCanSee(ctx: TenantContext, studentId: string, published: bo
 }
 
 export async function getReportCard(ctx: TenantContext, examId: string, studentId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "PARENT", "STUDENT");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PRINCIPAL", "PARENT", "STUDENT");
 
   const exam = await ctx.db.exam.findFirst({
     where: { id: examId },
@@ -78,7 +82,7 @@ export async function getReportCard(ctx: TenantContext, examId: string, studentI
   });
   if (!enrollment) throw new NotFoundError(NOT_FOUND);
 
-  const [papers, school, attendance, classTeacher] = await Promise.all([
+  const [papers, school, attendance, classTeacher, rules, remarks] = await Promise.all([
     ctx.db.assessment.findMany({
       where: { examId: exam.id },
       orderBy: [{ subject: { name: "asc" } }],
@@ -90,7 +94,7 @@ export async function getReportCard(ctx: TenantContext, examId: string, studentI
         subject: { select: { id: true, name: true } },
         results: {
           where: { studentId },
-          select: { assessmentId: true, studentId: true, marksObtained: true, absent: true, remarks: true },
+          select: { assessmentId: true, studentId: true, marksObtained: true, absent: true, exempt: true, remarks: true },
         },
       },
     }),
@@ -117,9 +121,19 @@ export async function getReportCard(ctx: TenantContext, examId: string, studentI
       where: { studentId, academicSessionId: exam.academicSessionId, date: { lte: exam.endDate } },
       _count: { _all: true },
     }),
+    // The class teacher at the time of the exam, not whoever holds the class today.
     ctx.db.classTeacherAssignment.findFirst({
-      where: { sectionId: exam.sectionId, toDate: null },
+      where: { sectionId: exam.sectionId, fromDate: { lte: exam.endDate }, OR: [{ toDate: null }, { toDate: { gte: exam.endDate } }] },
+      orderBy: { fromDate: "desc" },
       select: { teacher: { select: { firstName: true, lastName: true } } },
+    }),
+    gradingRules(ctx),
+    // Teachers' written remarks this session, up to a month after the exam.
+    ctx.db.studentRemark.findMany({
+      where: { studentId, academicSessionId: exam.academicSessionId, body: { not: null }, createdAt: { lte: addDays(exam.endDate, 30) } },
+      orderBy: { createdAt: "desc" },
+      take: 3,
+      select: { body: true, createdAt: true, teacher: { select: { firstName: true, lastName: true } }, subject: { select: { name: true } } },
     }),
   ]);
   if (!school) throw new NotFoundError(NOT_FOUND);
@@ -143,6 +157,7 @@ export async function getReportCard(ctx: TenantContext, examId: string, studentI
       },
     ],
     papers.flatMap((paper) => paper.results),
+    rules,
   );
 
   const counts = emptyCounts();
@@ -188,8 +203,12 @@ export async function getReportCard(ctx: TenantContext, examId: string, studentI
       subject: paper.subject.name,
       maxMarks: paper.maxMarks,
       passMarks: paper.passMarks,
+      /** The pass mark printed: the paper's own, or the school's pass percentage of the maximum. */
+      passMark: passMarkFor(paper.maxMarks, paper.passMarks, rules.passPercent),
       ...row!.marks[index]!,
     })),
+    remarks: remarks.map((remark) => ({ body: remark.body!, date: remark.createdAt, teacher: fullName(remark.teacher), subject: remark.subject?.name ?? null })),
+    grading: { key: gradingKey(rules.bands), passPercent: rules.passPercent },
     total: row!.total,
     maxTotal: row!.maxTotal,
     percent: row!.percent,
@@ -202,15 +221,17 @@ export async function getReportCard(ctx: TenantContext, examId: string, studentI
 export type ReportCard = Awaited<ReturnType<typeof getReportCard>>;
 
 /**
- * A student's published exams this session, with the headline figures. Called
- * for the student themselves or, for a parent, after the guardian link check.
+ * A student's published exams, newest first — this session and earlier ones
+ * (a family keeps last year's report cards after the session rolls over),
+ * with the headline figures. Called for the student themselves or, for a
+ * parent, after the guardian link check. Never a draft or unverified result.
  */
 export async function publishedExamsFor(ctx: TenantContext, studentId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "PARENT", "STUDENT");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PRINCIPAL", "PARENT", "STUDENT");
   await assertCanSee(ctx, studentId, true);
 
   const enrollments = await ctx.db.studentEnrollment.findMany({
-    where: { studentId, academicSession: { isCurrent: true } },
+    where: { studentId },
     select: { sectionId: true, academicSessionId: true },
   });
   if (!enrollments.length) return [];
@@ -226,6 +247,7 @@ export async function publishedExamsFor(ctx: TenantContext, studentId: string) {
       name: true,
       startDate: true,
       endDate: true,
+      academicSession: { select: { name: true, isCurrent: true } },
       papers: {
         select: {
           id: true,
@@ -235,13 +257,14 @@ export async function publishedExamsFor(ctx: TenantContext, studentId: string) {
           subject: { select: { id: true, name: true } },
           results: {
             where: { studentId },
-            select: { assessmentId: true, studentId: true, marksObtained: true, absent: true, remarks: true },
+            select: { assessmentId: true, studentId: true, marksObtained: true, absent: true, exempt: true, remarks: true },
           },
         },
       },
     },
   });
 
+  const rules = await gradingRules(ctx);
   return exams.map((exam) => {
     const [row] = tabulate(
       exam.papers.map((paper) => ({
@@ -255,10 +278,13 @@ export async function publishedExamsFor(ctx: TenantContext, studentId: string) {
       })),
       [{ studentId, name: "", admissionNumber: "", rollNumber: null }],
       exam.papers.flatMap((paper) => paper.results),
+      rules,
     );
     return {
       id: exam.id,
       name: exam.name,
+      session: exam.academicSession.name,
+      currentSession: exam.academicSession.isCurrent,
       startDate: exam.startDate,
       endDate: exam.endDate,
       percent: row!.percent,

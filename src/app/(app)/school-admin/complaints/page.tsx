@@ -22,7 +22,7 @@ export const metadata: Metadata = { title: "Complaints" };
 const opts = (values: readonly string[]) => values.map((value) => ({ value, label: humanize(value) }));
 
 export default async function AdminComplaintsPage(props: PageProps<"/school-admin/complaints">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const filters = {
     q: param(search.q),

@@ -9,7 +9,6 @@ import type { Gender, ParentRelationship, StudentStatus } from "@/generated/pris
 import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import type { CreateStudentInput, UpdateStudentInput } from "@/lib/validation/school";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import { type LoginInvite, provisionAccount, sendActivation, unusablePasswordHash } from "@/server/auth/account-links";
 import { assertLoginEmailFree, type EmailMove, moveLoginEmail } from "@/server/people/accounts";
 import { admissionSeatOptions, claimSeats } from "@/server/academics/streams";
@@ -22,6 +21,8 @@ import type { TenantDb } from "@/server/tenancy/scope";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
 import { createPortalUser } from "@/server/people/accounts";
 import { changeStudentStatus } from "@/server/people/lifecycle";
+import { duplicateStudentError, findPossibleDuplicates } from "@/server/people/duplicates";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Students and their guardians, as managed by the School Admin.
@@ -43,14 +44,22 @@ export async function listStudents(
     /** CURRENT = active or on leave — the default list; a single status or none (all) otherwise. */
     status?: StudentStatus | "CURRENT";
     gender?: Gender;
+    /** "NEW" = admitted since the current session began; a year = admitted in that calendar year. */
+    admitted?: "NEW" | number;
     page?: number;
   },
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   const session = await ctx.db.academicSession.findFirst({
     where: { isCurrent: true },
-    select: { id: true },
+    select: { id: true, startDate: true },
   });
+  const admittedWhere: Prisma.StudentWhereInput =
+    filters.admitted === "NEW"
+      ? { admissionDate: { gte: session?.startDate ?? new Date(8.64e15) } }
+      : typeof filters.admitted === "number"
+        ? { admissionDate: { gte: new Date(Date.UTC(filters.admitted, 0, 1)), lt: new Date(Date.UTC(filters.admitted + 1, 0, 1)) } }
+        : {};
 
   const page = Math.max(1, filters.page ?? 1);
   const enrollmentFilter: Prisma.StudentEnrollmentWhereInput | undefined =
@@ -65,6 +74,7 @@ export async function listStudents(
   const where: Prisma.StudentWhereInput = {
     ...(filters.status === "CURRENT" ? { status: { in: [...CURRENT_STUDENT] } } : filters.status ? { status: filters.status } : {}),
     ...(filters.gender ? { gender: filters.gender } : {}),
+    ...admittedWhere,
     ...(enrollmentFilter ? { enrollments: { some: enrollmentFilter } } : {}),
     ...(filters.q
       ? {
@@ -105,6 +115,7 @@ export async function listStudents(
         firstName: true,
         lastName: true,
         admissionNumber: true,
+        admissionDate: true,
         gender: true,
         status: true,
         userId: true,
@@ -170,11 +181,25 @@ export async function listStudents(
     ctx.db.student.count({ where }),
   ]);
 
-  return { rows, total, page, pageCount: Math.max(1, Math.ceil(total / STUDENT_PAGE_SIZE)) };
+  // "New": admitted since the current session began — this year's admissions.
+  const newSince = session?.startDate ?? null;
+  return {
+    rows: rows.map((row) => ({ ...row, isNew: Boolean(newSince && row.admissionDate && row.admissionDate >= newSince) })),
+    total,
+    page,
+    pageCount: Math.max(1, Math.ceil(total / STUDENT_PAGE_SIZE)),
+  };
+}
+
+/** The calendar years students were admitted in, newest first — for the "Admitted" filter. */
+export async function admissionYears(ctx: TenantContext): Promise<number[]> {
+  assertCan(ctx, "students", "EDIT");
+  const rows = await ctx.db.student.findMany({ where: { admissionDate: { not: null } }, distinct: ["admissionDate"], select: { admissionDate: true } });
+  return [...new Set(rows.map((row) => row.admissionDate!.getUTCFullYear()))].sort((a, b) => b - a);
 }
 
 export async function getStudentProfile(ctx: TenantContext, studentId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
 
   const student = await ctx.db.student.findFirst({
     where: { id: studentId },
@@ -296,7 +321,7 @@ export type AdmissionResult = {
  *     if it is free.
  */
 export async function createStudent(ctx: TenantContext, input: CreateStudentInput): Promise<AdmissionResult> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   await assertWithinPlanLimit(ctx, "students");
   const session = await requireCurrentSession(ctx);
   const notes: string[] = [];
@@ -312,6 +337,15 @@ export async function createStudent(ctx: TenantContext, input: CreateStudentInpu
       studentEmail: [`Student email, mobile and login are only for Classes 6 to 12. ${section.class.name} is reached through the parent.`],
     });
   }
+
+  // The same child already at the school? The office sees them and chooses
+  // "Add anyway" or "Don't add" — never added silently, never blocked for good.
+  const parentPhones =
+    input.guardianMode === "existing"
+      ? (await ctx.db.parent.findMany({ where: { id: input.existingParentId ?? "" }, select: { phone: true } })).map((row) => row.phone)
+      : [input.parentPhone ?? ""];
+  const duplicates = await findPossibleDuplicates(ctx, { firstName: input.firstName, lastName: input.lastName, dateOfBirth: input.dateOfBirth ?? null, parentPhones });
+  if (duplicates.length && !input.confirmDuplicate) throw duplicateStudentError(duplicates);
 
   // The parent: an existing one of this school, or a new one that is not
   // already here under the same mobile or email.
@@ -444,7 +478,10 @@ export async function createStudent(ctx: TenantContext, input: CreateStudentInpu
       entityId: created.studentId,
       schoolId: ctx.schoolId,
       actorId: ctx.user.id,
-      summary: `Student ${input.firstName} ${input.lastName} admitted as ${created.admissionNumber}.`,
+      summary: `Student ${input.firstName} ${input.lastName} admitted as ${created.admissionNumber}.${
+        duplicates.length ? ` Added after the possible-duplicate warning, confirmed as a different child: ${duplicates.map((match) => `${match.name} (${match.admissionNumber})`).join(", ")}.` : ""
+      }`,
+      ...(duplicates.length ? { metadata: { confirmedDuplicateOf: duplicates.map((match) => match.admissionNumber) } } : {}),
     });
 
     // After the commit: an email that fails never undoes the admission.
@@ -460,7 +497,7 @@ export async function createStudent(ctx: TenantContext, input: CreateStudentInpu
 }
 
 export async function updateStudent(ctx: TenantContext, input: UpdateStudentInput): Promise<EmailMove> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const { studentId, status, email, ...fields } = input;
 
   const existing = await ctx.db.student.findFirst({
@@ -518,7 +555,7 @@ export async function enrollStudent(
   ctx: TenantContext,
   input: { studentId: string; academicSessionId: string; sectionId: string; streamId?: string | null; rollNumber: string | null },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
 
   const student = await ctx.db.student.findFirst({
     where: { id: input.studentId },
@@ -607,7 +644,7 @@ async function studentDeletionBlockers(ctx: TenantContext, studentId: string) {
  * usually has siblings still enrolled; only the link to this child goes.
  */
 export async function deleteStudent(ctx: TenantContext, studentId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "DELETE");
 
   const student = await ctx.db.student.findFirst({
     where: { id: studentId },
@@ -645,7 +682,7 @@ export async function deleteStudent(ctx: TenantContext, studentId: string): Prom
 // -----------------------------------------------------------------------------
 
 export async function searchParents(ctx: TenantContext, q?: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   return ctx.db.parent.findMany({
     where: {
       // An archived parent is history, not someone to link a new child to.
@@ -682,7 +719,7 @@ export async function linkGuardian(
     isPrimary: boolean;
   },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
 
   await ctx.db.$transaction(async (tx) => {
     const student = await tx.student.findFirst({ where: { id: input.studentId }, select: { id: true } });
@@ -740,7 +777,7 @@ export async function linkGuardian(
 }
 
 export async function unlinkGuardian(ctx: TenantContext, linkId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const { count } = await ctx.db.parentStudent.deleteMany({ where: { id: linkId } });
   if (!count) throw new NotFoundError();
 }
@@ -765,7 +802,7 @@ export async function updateParent(
     idProofNumber?: string | null;
   },
 ): Promise<EmailMove> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   // ID proof is sensitive: School Admin only, and changed only when its fields were on the form.
   const { parentId, withIdProof, idProofType, idProofNumber, ...rest } = input;
   const data = withIdProof ? { ...rest, idProofType: idProofType ?? null, idProofNumber: idProofNumber ?? null } : rest;
@@ -793,7 +830,7 @@ export async function grantStudentPortal(
   studentId: string,
   email: string,
 ): Promise<LoginInvite> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "users", "EDIT");
   const student = await ctx.db.student.findFirst({
     where: { id: studentId },
     select: {
@@ -838,7 +875,7 @@ export async function grantParentPortal(
   parentId: string,
   email: string,
 ): Promise<LoginInvite> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "users", "EDIT");
 
   const parent = await ctx.db.parent.findFirst({
     where: { id: parentId },

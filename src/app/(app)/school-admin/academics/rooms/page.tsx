@@ -44,7 +44,7 @@ export const metadata: Metadata = { title: "Rooms" };
 export default async function RoomsPage(
   props: PageProps<"/school-admin/academics/rooms">,
 ) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const filter = roomListQuery.parse({
     q: param(search.q),

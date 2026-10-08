@@ -23,7 +23,7 @@ export const metadata: Metadata = { title: "Class teachers" };
  * teachers of the same section — those are set on each teacher's own page.
  */
 export default async function ClassTeachersPage(props: PageProps<"/school-admin/academics/class-teachers">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   // The current session by default; `?session=` reviews another one — next
   // year's, straight after promotion.

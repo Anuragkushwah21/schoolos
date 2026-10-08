@@ -23,7 +23,7 @@ export const metadata: Metadata = { title: "Parent" };
  * their standing, and their login.
  */
 export default async function ParentProfilePage(props: PageProps<"/school-admin/parents/[parentId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { parentId } = await props.params;
   const parent = await orNotFound(getParentWithChildren(ctx, parentId));
 

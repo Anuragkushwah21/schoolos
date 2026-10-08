@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { type ActionResult, parseFormData, successResult } from "@/lib/action-result";
 import { ValidationError } from "@/lib/errors";
+import { installmentDates } from "@/lib/dates";
 import { id, optionalText, requiredDate } from "@/lib/validation/common";
 import {
   chargeSectionSchema,
@@ -12,7 +13,9 @@ import {
   expenseSchema,
   feeHeadSchema,
   PAYMENT_METHODS,
+  lateFeePolicySchema,
   paymentSchema,
+  voidPaymentSchema,
   receiptSettingsSchema,
   salaryPaymentSchema,
   salarySchema,
@@ -31,11 +34,13 @@ import { recordExpense, removeExpense } from "@/server/finance/expenses";
 import { payPayroll } from "@/server/finance/payroll";
 import { saveReceiptSettings } from "@/server/finance/receipts";
 import {
+  parsePayeeKey,
   paySalary,
   removeSalary,
   removeSalaryPayment,
   setSalary,
 } from "@/server/finance/salary";
+import { applyLateFees, saveLateFeePolicy } from "@/server/finance/late-fees";
 import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
@@ -50,6 +55,8 @@ type Result = ActionResult<undefined>;
  */
 
 const admin = () => requireTenantForAction("SCHOOL_ADMIN");
+/** The School Admin, or staff whose responsibility it is (fees.manage…) — the service checks which. */
+const accounts = () => requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF");
 
 // A salary change alters what the teacher's own screen shows, and a fee change
 // alters the parent's and the student's, so all three areas are refreshed.
@@ -81,7 +88,7 @@ export async function removeSalaryAction(_p: Result, formData: FormData): Promis
 export async function createFeeHeadAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
+      const ctx = await accounts();
       await createFeeHead(ctx, parseFormData(feeHeadSchema, formData));
       return successResult("Fee head added.");
     },
@@ -92,7 +99,7 @@ export async function createFeeHeadAction(_p: Result, formData: FormData): Promi
 export async function setFeeHeadActiveAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
+      const ctx = await accounts();
       const { feeHeadId, isActive } = parseFormData(
         z.object({ feeHeadId: id, isActive: z.coerce.boolean() }),
         formData,
@@ -107,8 +114,9 @@ export async function setFeeHeadActiveAction(_p: Result, formData: FormData): Pr
 export async function chargeStudentAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
-      await chargeStudent(ctx, parseFormData(chargeStudentSchema, formData));
+      const ctx = await accounts();
+      const { installmentCount, installmentEveryMonths, ...input } = parseFormData(chargeStudentSchema, formData);
+      await chargeStudent(ctx, { ...input, installments: installmentDates(input.dueOn, installmentCount, installmentEveryMonths) });
       return successResult("Charge saved.");
     },
     { revalidate: FINANCE_PAGES },
@@ -118,8 +126,9 @@ export async function chargeStudentAction(_p: Result, formData: FormData): Promi
 export async function chargeSectionAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
-      const { charged } = await chargeSection(ctx, parseFormData(chargeSectionSchema, formData));
+      const ctx = await accounts();
+      const { installmentCount, installmentEveryMonths, ...input } = parseFormData(chargeSectionSchema, formData);
+      const { charged } = await chargeSection(ctx, { ...input, installments: installmentDates(input.dueOn, installmentCount, installmentEveryMonths) });
       return successResult(charged === 1 ? "Charged 1 student." : `Charged ${charged} students.`);
     },
     { revalidate: FINANCE_PAGES },
@@ -129,7 +138,7 @@ export async function chargeSectionAction(_p: Result, formData: FormData): Promi
 export async function removeChargeAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
+      const ctx = await accounts();
       const { chargeId } = parseFormData(z.object({ chargeId: id }), formData);
       await removeCharge(ctx, chargeId);
       return successResult("Charge removed.");
@@ -151,7 +160,11 @@ export async function recordPaymentAction(
       // The fee desk: the School Admin, or staff holding "Collect fees" (checked in the service).
       const ctx = await requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF");
       const input = parseFormData(paymentSchema, formData);
-      const { id } = await recordPayment(ctx, input);
+      const { id, duplicate } = await recordPayment(ctx, input);
+      if (duplicate) {
+        const desk = ctx.user.role === "SCHOOL_ADMIN" ? "/school-admin/finance/payments" : "/staff/fees";
+        return successResult("This payment was already recorded — nothing was taken twice.", { paymentId: id, studentId: input.studentId, desk });
+      }
       const desk = ctx.user.role === "SCHOOL_ADMIN" ? "/school-admin/finance/payments" : "/staff/fees";
       return successResult(`Fee payment recorded. Receipt ${input.receiptNo} is ready to print.`, { paymentId: id, studentId: input.studentId, desk });
     },
@@ -176,9 +189,9 @@ export async function saveReceiptSettingsAction(_p: Result, formData: FormData):
 export async function removePaymentAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await admin();
-      const { paymentId } = parseFormData(z.object({ paymentId: id }), formData);
-      await voidPayment(ctx, paymentId, "Entered by mistake");
+      const ctx = await accounts();
+      const { paymentId, reason } = parseFormData(voidPaymentSchema, formData);
+      await voidPayment(ctx, paymentId, reason);
       return successResult("Receipt voided. It stays on record, marked void.");
     },
     { revalidate: FINANCE_PAGES },
@@ -241,8 +254,9 @@ const payrollSchema = z.object({
 });
 
 /**
- * Pay the ticked teachers for a month. Rows arrive as `pay` (ticked teacher
- * ids) and `amount:<teacherId>` in rupees, which the admin may have adjusted.
+ * Pay the ticked teachers and staff for a month. Rows arrive as `pay` (ticked
+ * "T:<id>" / "S:<id>" keys) and `amount:<key>` in rupees, which the admin may
+ * have adjusted.
  */
 export async function payPayrollAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
@@ -252,10 +266,11 @@ export async function payPayrollAction(_p: Result, formData: FormData): Promise<
       const input = parseFormData(payrollSchema, formData);
       const ticked = formData.getAll("pay").map(String);
       const errors: Record<string, string[]> = {};
-      const entries = ticked.map((teacherId) => {
-        const raw = String(formData.get(`amount:${teacherId}`) ?? "").trim();
-        if (!/^\d+(\.\d{1,2})?$/.test(raw) || Number(raw) <= 0) errors[`amount:${teacherId}`] = ["Enter an amount"];
-        return { teacherId, amountMinor: Math.round(Number(raw) * 100) };
+      // Each ticked row is "T:<teacherId>" or "S:<staffMemberId>".
+      const entries = ticked.map((key) => {
+        const raw = String(formData.get(`amount:${key}`) ?? "").trim();
+        if (!/^\d+(\.\d{1,2})?$/.test(raw) || Number(raw) <= 0) errors[`amount:${key}`] = ["Enter an amount"];
+        return { ...parsePayeeKey(key), amountMinor: Math.round(Number(raw) * 100) };
       });
       if (Object.keys(errors).length) throw new ValidationError("Some amounts need correcting.", errors);
       const [year, month] = input.month.split("-").map(Number) as [number, number];
@@ -266,8 +281,33 @@ export async function payPayrollAction(_p: Result, formData: FormData): Promise<
         reference: input.reference,
         entries,
       });
-      return successResult(`${paid} teacher${paid === 1 ? "" : "s"} paid, ₹${(totalMinor / 100).toLocaleString("en-IN")} in total.`);
+      return successResult(`${paid} ${paid === 1 ? "person" : "people"} paid, ₹${(totalMinor / 100).toLocaleString("en-IN")} in total.`);
     },
     { revalidate: FINANCE_PAGES },
+  );
+}
+
+/** School Admin: the late-fee policy (amount per instalment, grace days). */
+export async function saveLateFeePolicyAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const input = parseFormData(lateFeePolicySchema, formData);
+      await saveLateFeePolicy(ctx, { amountMinor: input.amountMinor, graceDays: input.graceDays });
+      return successResult(input.amountMinor ? "Late fee policy saved." : "Late fees switched off.");
+    },
+    { revalidate: FINANCE_PAGES },
+  );
+}
+
+/** Add the late fee to every instalment unpaid past the grace period (once each). */
+export async function applyLateFeesAction(_p: Result): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await accounts();
+      const { added } = await applyLateFees(ctx);
+      return successResult(added ? `Late fee added to ${added} overdue instalment${added === 1 ? "" : "s"}.` : "No new late fees — every overdue instalment already has one, or nothing is overdue.");
+    },
+    { revalidate: [...FINANCE_PAGES, "/staff"] },
   );
 }

@@ -21,6 +21,8 @@ import type { TenantContext } from "@/server/auth/current-user";
 import { requireTeacherSelf } from "@/server/auth/teacher-access";
 import { findChild, listMyChildren } from "@/server/parent/access";
 import { onLeaveToday, teachesStudentSubject } from "@/server/support/teaching";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Subject-wise parent–teacher concerns.
@@ -227,7 +229,7 @@ async function createConcern(
 
 /** Admin: the whole school. Teacher: concerns routed to them. Parent: their own children's. */
 async function visibleWhere(ctx: TenantContext): Promise<{ viewer: Viewer; where: Prisma.SupportConcernWhereInput; teacherId?: string }> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return { viewer: "SCHOOL_ADMIN", where: {} };
+  if (isSchoolLeader(ctx.user.role)) return { viewer: "SCHOOL_ADMIN", where: {} };
   if (ctx.user.role === "TEACHER") {
     // Only concerns routed to them as the students' subject teacher — never
     // a colleague's, not even while covering one of their periods.
@@ -487,7 +489,7 @@ export async function replyToConcern(ctx: TenantContext, input: ConcernReplyInpu
 
 /** The School Admin asks the teacher for an update. Staff-only; the family does not see it. */
 export async function requestConcernUpdate(ctx: TenantContext, input: ConcernUpdateRequestInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const concern = await ctx.db.supportConcern.findFirst({
     where: { id: input.concernId },
     select: { id: true, number: true, status: true, teacherId: true, teacher: { select: { firstName: true, lastName: true } } },
@@ -525,7 +527,7 @@ export async function requestConcernUpdate(ctx: TenantContext, input: ConcernUpd
  * explicit decision; assignment changes never move concerns on their own.
  */
 export async function assignConcern(ctx: TenantContext, input: ConcernAssignInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const [concern, teacher] = await Promise.all([
     ctx.db.supportConcern.findFirst({ where: { id: input.concernId }, select: { id: true, number: true, status: true, teacherId: true } }),
     ctx.db.teacher.findFirst({ where: { id: input.teacherId, status: { in: [...CURRENT_EMPLOYEE] } }, select: { id: true, firstName: true, lastName: true } }),
@@ -642,7 +644,7 @@ export async function teacherConcernOptions(ctx: TenantContext) {
 
 /** Filter options for the School Admin's list. */
 export async function concernFilterOptions(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   const [classes, sections, streams, subjects, teachers] = await Promise.all([
     ctx.db.class.findMany({ where: { isActive: true }, orderBy: { level: "asc" }, select: { id: true, name: true } }),
     ctx.db.section.findMany({ where: { academicSession: { isCurrent: true } }, select: { id: true, name: true, class: { select: { name: true, level: true } }, stream: { select: { name: true } } } }),

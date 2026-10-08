@@ -27,9 +27,3 @@ export function streamProblem(level: number, streamId: string | null | undefined
   if (rule === "REQUIRED" && !streamId) return `Choose a stream for ${className}.`;
   return null;
 }
-
-export const STREAM_RULE_HINT: Record<StreamRule, string> = {
-  NONE: "Not applicable",
-  OPTIONAL: "Optional",
-  REQUIRED: "Required",
-};

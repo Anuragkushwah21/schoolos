@@ -71,6 +71,7 @@ const STATUS_TONE: Record<string, Tone> = {
   // notices
   PUBLISHED: "positive",
   DRAFT: "neutral",
+  CORRECTION_REQUESTED: "warning",
   ARCHIVED: "neutral",
   // teacher remarks — the three bands read as a traffic light, so a parent
   // scanning a year of them sees the shape without reading every word.

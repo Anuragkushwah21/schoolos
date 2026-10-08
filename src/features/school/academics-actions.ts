@@ -41,7 +41,7 @@ import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
 
-const admin = () => requireTenantForAction("SCHOOL_ADMIN");
+const admin = () => requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
 const REVALIDATE = "/school-admin";
 
 export async function createAcademicSessionAction(_p: Result, formData: FormData): Promise<Result> {

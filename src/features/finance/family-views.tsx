@@ -17,7 +17,27 @@ type Account = Awaited<ReturnType<typeof readStudentFees>>;
  * any concession and the net; what is paid and pending; and earlier sessions
  * still owed — with "Carry forward outstanding" for the School Admin.
  */
-export function StudentFeeAccount({ studentId, account, previous, canManage }: { studentId: string; account: Account; previous: PreviousDue[]; canManage: boolean }) {
+export function StudentFeeAccount({
+  studentId,
+  account,
+  previous,
+  canManage,
+  canConcession = canManage,
+  canCarryForward = canManage,
+  ledgerHref,
+}: {
+  /** The student's ledger page (running balance), when the reader may open it. */
+  ledgerHref?: string;
+  studentId: string;
+  account: Account;
+  previous: PreviousDue[];
+  /** Both of the below (the School Admin). */
+  canManage: boolean;
+  /** Give or withdraw a concession ("Give fee concessions"). */
+  canConcession?: boolean;
+  /** Carry forward an old session's dues ("Fee structure & charges"). */
+  canCarryForward?: boolean;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -32,8 +52,14 @@ export function StudentFeeAccount({ studentId, account, previous, canManage }: {
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <span className="font-medium">
                     {charge.feeHead.name}
+                    {charge.installmentNo > 1 || account.charges.some((other) => other.id !== charge.id && other.feeHead.id === charge.feeHead.id) ? <span className="text-muted-foreground font-normal">{` · instalment ${charge.installmentNo}`}</span> : null}
+                    <span className="text-muted-foreground block text-xs font-normal">
+                      {`Due ${formatDate(charge.dueOn)}`}
+                      {charge.status === "PARTIAL" ? ` · ${rupees(charge.remainingMinor)} still to pay` : ""}
+                    </span>
                     {charge.carriedFrom ? <span className="text-muted-foreground block text-xs">Carried forward from {charge.carriedFrom.name}</span> : null}
                   </span>
+                  <InstallmentBadge status={charge.status} overdue={charge.overdue} />
                   <span className="tabular-nums">
                     {charge.discountMinor ? (
                       <>
@@ -51,14 +77,14 @@ export function StudentFeeAccount({ studentId, account, previous, canManage }: {
                       {charge.concession.reason}
                       {charge.concession.approvedBy ? ` · approved by ${charge.concession.approvedBy.firstName} ${charge.concession.approvedBy.lastName}` : ""}
                     </span>
-                    {canManage ? (
+                    {canConcession ? (
                       <ActionButton action={revokeConcessionAction} fields={{ concessionId: charge.concession.id }} variant="ghost" size="xs" confirm={{ title: "Withdraw this concession?", description: "The full fee applies again. The concession stays in the history.", confirmLabel: "Withdraw" }}>
                         Withdraw
                       </ActionButton>
                     ) : null}
                   </div>
                 ) : null}
-                {canManage && !charge.carriedFrom ? (
+                {canConcession && !charge.carriedFrom ? (
                   <details className="text-xs">
                     <summary className="text-muted-foreground cursor-pointer">{charge.concession ? "Change concession" : "Give a concession"}</summary>
                     <div className="mt-2">
@@ -73,6 +99,11 @@ export function StudentFeeAccount({ studentId, account, previous, canManage }: {
           <p className="text-muted-foreground text-sm">No fees charged this session.</p>
         )}
 
+        {ledgerHref ? (
+          <a className="text-primary text-sm font-medium hover:underline" href={ledgerHref}>
+            Open ledger (every charge, concession and payment with the running balance)
+          </a>
+        ) : null}
         <dl className="grid grid-cols-3 gap-2 text-sm">
           <div>
             <dt className="text-muted-foreground text-xs">Net fees</dt>
@@ -96,7 +127,7 @@ export function StudentFeeAccount({ studentId, account, previous, canManage }: {
                 <span>
                   {due.sessionName}: <strong className="tabular-nums">{rupees(due.pendingMinor)}</strong>
                 </span>
-                {canManage ? (
+                {canCarryForward ? (
                   <ActionButton
                     action={carryForwardAction}
                     fields={{ studentId, fromSessionId: due.sessionId }}
@@ -225,4 +256,11 @@ export function FamilyFeesView({ family }: { family: Family }) {
       ) : null}
     </div>
   );
+}
+
+/** Paid / Part paid / Due / Overdue for one instalment, as the office and parents see it. */
+export function InstallmentBadge({ status, overdue }: { status: "PAID" | "PARTIAL" | "DUE"; overdue: boolean }) {
+  if (status === "PAID") return <StatusBadge status="PAID" tone="positive" label="Paid" />;
+  if (overdue) return <StatusBadge status="OVERDUE" tone="negative" label={status === "PARTIAL" ? "Part paid · overdue" : "Overdue"} />;
+  return <StatusBadge status={status} tone="warning" label={status === "PARTIAL" ? "Part paid" : "Due"} />;
 }

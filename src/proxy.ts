@@ -20,6 +20,7 @@ import { SESSION_COOKIE_NAME } from "@/server/auth/session";
 const PROTECTED_PREFIXES = [
   "/super-admin",
   "/school-admin",
+  "/principal",
   "/teacher",
   "/student",
   "/parent",

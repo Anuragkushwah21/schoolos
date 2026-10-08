@@ -12,7 +12,7 @@ import { searchParents } from "@/server/people/students";
 export const metadata: Metadata = { title: "Add student" };
 
 export default async function NewStudentPage() {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const session = await getCurrentSession(ctx);
   const back = { href: "/school-admin/students" as Route, label: "Students" };
 

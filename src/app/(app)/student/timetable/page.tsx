@@ -34,7 +34,7 @@ export default async function StudentTimetablePage() {
                 dayOfWeek: slot.dayOfWeek,
                 startMinute: slot.startMinute,
                 endMinute: slot.endMinute,
-                title: slot.subject.name,
+                title: slot.stream ? `${slot.subject.name} · ${slot.stream.name}` : slot.subject.name,
                 subtitle: fullName(slot.teacher),
                 meta: slot.room,
               }))}

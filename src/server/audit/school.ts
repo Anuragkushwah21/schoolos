@@ -33,7 +33,7 @@ export type AuditArea = keyof typeof AUDIT_AREAS;
 
 export async function listSchoolAudit(
   ctx: TenantContext,
-  filters: { area?: AuditArea; q?: string; from?: Date; to?: Date; page?: number } = {},
+  filters: { area?: AuditArea; q?: string; from?: Date; to?: Date; page?: number; actorId?: string; actorRole?: string; module?: string; action?: string } = {},
 ) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const page = Math.max(1, filters.page ?? 1);
@@ -41,6 +41,10 @@ export async function listSchoolAudit(
     schoolId: ctx.schoolId,
     ...(filters.area ? { OR: AUDIT_AREAS[filters.area].map((prefix) => ({ action: { startsWith: prefix } })) } : {}),
     ...(filters.q ? { summary: { contains: filters.q, mode: "insensitive" } } : {}),
+    ...(filters.actorId ? { actorId: filters.actorId } : {}),
+    ...(filters.actorRole ? { actorRole: filters.actorRole } : {}),
+    ...(filters.module ? { module: filters.module } : {}),
+    ...(filters.action ? { action: filters.action } : {}),
     ...(filters.from || filters.to
       ? { createdAt: { ...(filters.from ? { gte: filters.from } : {}), ...(filters.to ? { lt: addDays(filters.to, 1) } : {}) } }
       : {}),
@@ -56,7 +60,11 @@ export async function listSchoolAudit(
         id: true,
         action: true,
         entityType: true,
+        entityId: true,
         summary: true,
+        module: true,
+        actorRole: true,
+        metadata: true,
         createdAt: true,
         actor: { select: { firstName: true, lastName: true, role: true } },
       },
@@ -78,3 +86,26 @@ export async function listSchoolAudit(
     pageCount: Math.max(1, Math.ceil(total / SCHOOL_AUDIT_PAGE_SIZE)),
   };
 }
+
+/** Choices for the audit filters: people who acted in this school, the roles and modules and actions seen. */
+export async function auditFilterOptions(ctx: TenantContext) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const [actors, roles, modules, actions] = await Promise.all([
+    prisma.user.findMany({
+      where: { schoolId: ctx.schoolId, auditLogs: { some: { schoolId: ctx.schoolId } } },
+      orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
+      take: 300,
+      select: { id: true, firstName: true, lastName: true },
+    }),
+    prisma.auditLog.findMany({ where: { schoolId: ctx.schoolId, actorRole: { not: null } }, distinct: ["actorRole"], select: { actorRole: true } }),
+    prisma.auditLog.findMany({ where: { schoolId: ctx.schoolId, module: { not: null } }, distinct: ["module"], select: { module: true } }),
+    prisma.auditLog.findMany({ where: { schoolId: ctx.schoolId }, distinct: ["action"], select: { action: true }, take: 300 }),
+  ]);
+  return {
+    actors: actors.map((row) => ({ value: row.id, label: `${row.firstName} ${row.lastName}` })),
+    roles: roles.flatMap((row) => (row.actorRole ? [{ value: row.actorRole, label: row.actorRole }] : [])).sort((a, b) => a.label.localeCompare(b.label)),
+    modules: modules.flatMap((row) => (row.module ? [{ value: row.module, label: row.module }] : [])).sort((a, b) => a.label.localeCompare(b.label)),
+    actions: actions.map((row) => row.action).sort(),
+  };
+}
+

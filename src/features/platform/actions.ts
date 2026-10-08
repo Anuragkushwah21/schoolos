@@ -3,12 +3,16 @@
 import { z } from "zod";
 
 import { type ActionResult, errorResult, parseFormData, successResult } from "@/lib/action-result";
+import { limitsFromForm } from "@/lib/school-roles";
 import { id } from "@/lib/validation/common";
 import {
   createSchoolAdminSchema,
   offerSchema,
+  approveSchoolSchema,
   planSchema,
   reviewSchoolSchema,
+  schoolModulesSchema,
+  schoolRolesSchema,
   subscriptionSchema,
   udiseSchema,
 } from "@/lib/validation/platform";
@@ -22,6 +26,8 @@ import {
   markEmailVerified,
   resetSchoolAdminPassword,
   setSchoolAdminActive,
+  setSchoolModules,
+  setSchoolRolesAndLimits,
   setSchoolUdise,
   setSubscription,
   transitionSchool,
@@ -46,8 +52,11 @@ export async function approveSchoolAction(
   return performAction(
     async () => {
       const actor = await superAdmin();
-      const { schoolId } = parseFormData(reviewSchoolSchema, formData);
-      const { credentials } = await transitionSchool(actor, schoolId, "approve");
+      const { schoolId, planId, moduleChoice, optionalModules } = parseFormData(approveSchoolSchema, formData);
+      const { credentials } = await transitionSchool(actor, schoolId, "approve", null, {
+        planId: planId ?? null,
+        modules: moduleChoice === "custom" ? optionalModules : null,
+      });
       return successResult(
         credentials
           ? "School approved and administrator account created."
@@ -253,8 +262,8 @@ export async function updatePlanAction(
     async () => {
       const actor = await superAdmin();
       const { planId, priceRupees, ...rest } = parseFormData(planSchema, formData);
-      await updatePlan(actor, planId, { ...rest, priceMinor: Math.round(priceRupees * 100) });
-      return successResult("Plan saved.");
+      const { schoolsUpdated } = await updatePlan(actor, planId, { ...rest, priceMinor: Math.round(priceRupees * 100), roleLimits: limitsFromForm(formData) });
+      return successResult(schoolsUpdated ? `Plan saved. ${schoolsUpdated} school${schoolsUpdated === 1 ? "" : "s"} on this plan updated.` : "Plan saved.");
     },
     { revalidate: ["/super-admin/dashboard", "/"] },
   );
@@ -270,6 +279,35 @@ export async function setSchoolUdiseAction(
       const { schoolId, udiseCode } = parseFormData(udiseSchema, formData);
       await setSchoolUdise(actor, schoolId, udiseCode);
       return successResult(udiseCode ? "UDISE code saved." : "UDISE code cleared.");
+    },
+    { revalidate: "/super-admin" },
+  );
+}
+
+/** One school's optional modules (Manage features). */
+export async function setSchoolModulesAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const actor = await superAdmin();
+      const { schoolId, followPlan, optionalModules } = parseFormData(schoolModulesSchema, formData);
+      await setSchoolModules(actor, { schoolId, followPlan, modules: optionalModules });
+      return successResult("Feature access saved. The school sees it on their next page.");
+    },
+    { revalidate: ["/super-admin"] },
+  );
+}
+
+/** One school's roles and limits (Manage roles & limits). */
+export async function setSchoolRolesAction(
+  _previous: ActionResult<undefined>,
+  formData: FormData,
+): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const actor = await superAdmin();
+      const input = parseFormData(schoolRolesSchema, formData);
+      await setSchoolRolesAndLimits(actor, { ...input, limits: limitsFromForm(formData) });
+      return successResult("Roles and limits saved.");
     },
     { revalidate: "/super-admin" },
   );

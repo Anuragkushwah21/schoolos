@@ -13,7 +13,7 @@ import { orNotFound } from "@/server/page-helpers";
 export const metadata: Metadata = { title: "Edit holiday" };
 
 export default async function EditHolidayPage(props: PageProps<"/school-admin/holidays/[holidayId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { holidayId } = await props.params;
   const holiday = await orNotFound(getHoliday(ctx, holidayId));
   const now = today();

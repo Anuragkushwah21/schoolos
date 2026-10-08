@@ -40,6 +40,7 @@ import {
   UsersIcon,
   WalletCardsIcon,
   WalletIcon,
+  DoorOpenIcon,
 } from "lucide-react";
 
 import type { NavIcon } from "@/lib/nav";
@@ -68,6 +69,7 @@ export const NAV_ICONS: Record<NavIcon, LucideIcon> = {
   transport: BusIcon,
   library: LibraryIcon,
   inventory: PackageIcon,
+  visitors: DoorOpenIcon,
   homework: NotebookPenIcon,
   records: ClipboardListIcon,
   materials: FolderOpenIcon,

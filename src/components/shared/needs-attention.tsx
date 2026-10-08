@@ -13,7 +13,18 @@ export type AttentionRow = { key: string; text: string; action: string; href: st
  * attendance]" — each line with the one button that takes them there. When
  * nothing needs attention it says so plainly, which is itself useful to know.
  */
-export function NeedsAttention({ title, rows, allClear }: { title: string; rows: AttentionRow[]; allClear: string }) {
+export function NeedsAttention({
+  title,
+  rows,
+  allClear,
+  stacked = false,
+}: {
+  title: string;
+  rows: AttentionRow[];
+  allClear: string;
+  /** For a narrow column: the button sits under its line instead of beside it. */
+  stacked?: boolean;
+}) {
   return (
     <section aria-labelledby="needs-attention" className="mb-8">
       <h2 id="needs-attention" className="mb-3 flex items-center gap-2 text-base font-semibold">
@@ -23,12 +34,14 @@ export function NeedsAttention({ title, rows, allClear }: { title: string; rows:
       {rows.length ? (
         <ul className="bg-card divide-y rounded-2xl border shadow-[0_1px_3px_rgb(15_23_42/0.06)]">
           {rows.map((row) => (
-            <li key={row.key} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
-              <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", TONE_ICON[row.tone])} aria-hidden>
-                <TriangleAlertIcon className="size-[18px]" />
+            <li key={row.key} className={cn("flex flex-col gap-3 p-4", !stacked && "sm:flex-row sm:items-center")}>
+              <span className="flex min-w-0 flex-1 items-center gap-3">
+                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", TONE_ICON[row.tone])} aria-hidden>
+                  <TriangleAlertIcon className="size-[18px]" />
+                </span>
+                <span className="min-w-0 flex-1 text-sm font-medium">{row.text}</span>
               </span>
-              <span className="min-w-0 flex-1 font-medium">{row.text}</span>
-              <Button asChild variant="outline" className="w-full sm:w-auto">
+              <Button asChild variant="outline" size={stacked ? "sm" : "default"} className={cn("w-full", !stacked && "sm:w-auto")}>
                 <Link href={row.href as Route}>
                   {row.action}
                   <ArrowRightIcon aria-hidden />

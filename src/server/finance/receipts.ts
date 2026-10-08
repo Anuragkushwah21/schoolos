@@ -10,6 +10,7 @@ import { assertRole } from "@/server/auth/assert";
 import { staffHolds } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { findChild } from "@/server/parent/access";
+import { assertModuleEnabled } from "@/server/platform/modules";
 
 /**
  * Printable fee receipts.
@@ -103,6 +104,7 @@ async function assertCanSeeStudentReceipts(ctx: TenantContext, studentId: string
 
 export async function getReceipt(ctx: TenantContext, paymentId: string): Promise<Receipt> {
   assertRole(ctx.user, "SCHOOL_ADMIN", "PARENT", "NON_TEACHING_STAFF");
+  await assertModuleEnabled(ctx, "FINANCE");
 
   const payment = await ctx.db.feePayment.findFirst({
     where: { id: paymentId },
@@ -243,7 +245,9 @@ export async function getReceipt(ctx: TenantContext, paymentId: string): Promise
 
 /** A student's receipts for the receipt list, after the same access check. */
 export async function listStudentReceipts(ctx: TenantContext, studentId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "PARENT", "STUDENT");
+  // Never students: fees are for parents and the office only.
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PARENT", "NON_TEACHING_STAFF");
+  await assertModuleEnabled(ctx, "FINANCE");
   await assertCanSeeStudentReceipts(ctx, studentId);
   return ctx.db.feePayment.findMany({
     where: { studentId },
@@ -254,14 +258,16 @@ export async function listStudentReceipts(ctx: TenantContext, studentId: string)
 
 export async function getReceiptSettings(ctx: TenantContext) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "FINANCE");
   const school = await ctx.db.school.findFirst({
-    select: { receiptHeaderNote: true, receiptFooterNote: true, showFeesToStudents: true },
+    select: { receiptHeaderNote: true, receiptFooterNote: true },
   });
-  return school ?? { receiptHeaderNote: null, receiptFooterNote: null, showFeesToStudents: false };
+  return school ?? { receiptHeaderNote: null, receiptFooterNote: null };
 }
 
 export async function saveReceiptSettings(ctx: TenantContext, input: ReceiptSettingsInput): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "FINANCE");
   await ctx.db.school.updateMany({ where: { id: ctx.schoolId }, data: input });
 
   await recordAudit({

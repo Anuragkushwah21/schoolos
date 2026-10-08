@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: "Attendance history" };
 
 /** Who was away, who covered, and who took each register — day by day. */
 export default async function AttendanceHistoryPage(props: PageProps<"/school-admin/attendance/history">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const to = parseDateInput(param(search.to)) ?? today();
   const from = parseDateInput(param(search.from)) ?? addDays(to, -13);

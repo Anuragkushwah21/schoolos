@@ -22,7 +22,7 @@ import { schoolTracker } from "@/server/analytics/platform";
 import { schoolReport, todayOverview } from "@/server/attendance/service";
 import { listExpenses, removeExpense } from "@/server/finance/expenses";
 import { chargeStudent, listFeePositions, listPayments, recordPayment, voidPayment } from "@/server/finance/fees";
-import { financeOverview, resolveFinanceRange } from "@/server/finance/overview";
+import { financeSnapshot } from "@/server/analytics/admin-dashboard";
 import { listSalaryPayments, paySalary } from "@/server/finance/salary";
 import { parentOptions } from "@/server/people/parents";
 import { forSchool } from "@/server/tenancy/scope";
@@ -345,17 +345,14 @@ describe("dashboard figures are the school's own", () => {
     const report = await schoolReport(ctx, own.academicSessionId, addDays(today(), -7), today());
     expect(JSON.stringify(report)).not.toMatch(FOREIGN[who]);
 
-    const finance = await financeOverview(ctx, resolveFinanceRange({ range: "today" }));
-    expect(finance.today).toEqual({
-      feesMinor: who === "A" ? 10_000_00 : 7_000_00,
-      expensesMinor: who === "A" ? 1_000_00 : 2_000_00,
-      salaryMinor: who === "A" ? 25_000_00 : 30_000_00,
-    });
-    expect(finance.pending.pendingMinor).toBe(who === "A" ? 20_000_00 : 23_000_00);
+    const finance = await financeSnapshot(ctx, own.academicSessionId);
+    expect(finance.collectedTodayMinor).toBe(who === "A" ? 10_000_00 : 7_000_00);
+    expect(finance.expensesTodayMinor).toBe(who === "A" ? 1_000_00 : 2_000_00);
+    expect(finance.pendingMinor).toBe(who === "A" ? 20_000_00 : 23_000_00);
 
     expect(JSON.stringify(await listPayments(ctx))).not.toMatch(FOREIGN[who]);
     expect(JSON.stringify(await listExpenses(ctx))).not.toMatch(FOREIGN[who]);
-    expect((await listSalaryPayments(ctx)).map((row) => row.teacher.firstName)).toEqual([`${who}-Teacher-1`]);
+    expect((await listSalaryPayments(ctx)).map((row) => row.teacher?.firstName)).toEqual([`${who}-Teacher-1`]);
   });
 });
 

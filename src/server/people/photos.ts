@@ -10,6 +10,7 @@ import { canAccessSection } from "@/server/auth/teacher-access";
 import { forSchool } from "@/server/tenancy/scope";
 import { studentOnMyRoutes } from "@/server/transport/driver";
 import { deleteStoredFile, readStoredFile, storeImage, validateImage } from "@/server/storage/files";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Profile photos for students, teachers, staff, parents and School Admins.
@@ -125,7 +126,7 @@ export async function photoUrlFor(ctx: TenantContext, target: PhotoTarget): Prom
  *   * a parent's or admin's — only the admin and the person.
  */
 async function canViewPhoto(ctx: TenantContext, owner: PhotoTarget): Promise<boolean> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return true;
+  if (isSchoolLeader(ctx.user.role)) return true;
   const own = await selfTarget(ctx).catch(() => null);
   if (own && own.type === owner.type && own.id === owner.id) return true;
   if (owner.type === "TEACHER" || owner.type === "STAFF") {

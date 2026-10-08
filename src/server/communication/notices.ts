@@ -1,16 +1,17 @@
 import "server-only";
 
-import type { NoticeAudience, NoticeStatus, UserRole } from "@/generated/prisma/enums";
+import type { NoticeAudience, NoticeKind, NoticeStatus, UserRole } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 import { isAllowedScheduleDate, today } from "@/lib/dates";
 import { NotFoundError, ValidationError } from "@/lib/errors";
 import { CURRENT_STUDENT } from "@/lib/validation/lifecycle";
 import type { NoticeInput } from "@/lib/validation/communication";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { accessibleSectionIds } from "@/server/auth/teacher-access";
 import { prisma } from "@/server/db/prisma";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Notices. `audience` decides who sees a notice once signed in; `isPublic`
@@ -47,6 +48,7 @@ const NOTICE_CARD = {
   body: true,
   audience: true,
   scope: true,
+  kind: true,
   isPublic: true,
   publishAt: true,
   expiresAt: true,
@@ -60,7 +62,8 @@ const NOTICE_CARD = {
  * teacher through the sections they teach or are class teacher of.
  */
 export async function visibleNoticeWhere(ctx: TenantContext): Promise<Prisma.NoticeWhereInput> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return {};
+  // The office and the Principal (who oversees, read-only) see every notice.
+  if (isSchoolLeader(ctx.user.role)) return {};
   const audience = AUDIENCE_FOR_ROLE[ctx.user.role];
   const audienceWhere: Prisma.NoticeWhereInput = { audience: { in: ["ALL", ...(audience ? [audience] : [])] } };
 
@@ -70,6 +73,7 @@ export async function visibleNoticeWhere(ctx: TenantContext): Promise<Prisma.Not
   let sectionIds: string[] = [];
   let classIds: string[] = [];
   let studentIds: string[] = [];
+  let streamIds: string[] = [];
 
   if (ctx.user.role === "TEACHER") {
     const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
@@ -93,15 +97,20 @@ export async function visibleNoticeWhere(ctx: TenantContext): Promise<Prisma.Not
         academicSession: { isCurrent: true },
         ...(studentIds.length ? { studentId: { in: studentIds } } : { sectionId: { in: sectionIds } }),
       },
-      distinct: ["sectionId"],
-      select: { sectionId: true, classId: true },
+      select: { sectionId: true, classId: true, streamId: true, section: { select: { streamId: true } } },
     });
-    if (studentIds.length) sectionIds = placements.map((row) => row.sectionId);
+    if (studentIds.length) {
+      sectionIds = [...new Set(placements.map((row) => row.sectionId))];
+      // A student's stream: their own, or the section's when the whole section is one stream.
+      streamIds = [...new Set(placements.flatMap((row) => { const id = row.streamId ?? row.section.streamId; return id ? [id] : []; }))];
+    }
     classIds = [...new Set(placements.map((row) => row.classId))];
     if (!studentIds.length) {
       // A teacher's classes come from their sections, whether or not anyone is enrolled yet.
-      const sections = await ctx.db.section.findMany({ where: { id: { in: sectionIds } }, select: { classId: true } });
+      const sections = await ctx.db.section.findMany({ where: { id: { in: sectionIds } }, select: { classId: true, streamId: true, streamAllocations: { select: { streamId: true } } } });
       classIds = [...new Set(sections.map((row) => row.classId))];
+      // A teacher reaches the streams of the sections they teach or class-teach.
+      streamIds = [...new Set(sections.flatMap((row) => [...(row.streamId ? [row.streamId] : []), ...row.streamAllocations.map((share) => share.streamId)]))];
     }
   }
 
@@ -112,6 +121,7 @@ export async function visibleNoticeWhere(ctx: TenantContext): Promise<Prisma.Not
       ...(classIds.length ? [{ scope: "CLASS" as const, classId: { in: classIds } }] : []),
       ...(sectionIds.length ? [{ scope: "SECTION" as const, sectionId: { in: sectionIds } }] : []),
       ...(studentIds.length ? [{ scope: "STUDENTS" as const, recipients: { some: { studentId: { in: studentIds } } } }] : []),
+      ...(streamIds.length ? [{ scope: "STREAM" as const, streamId: { in: streamIds } }] : []),
     ],
   };
 }
@@ -154,7 +164,8 @@ export async function myNotices(ctx: TenantContext, options: { historyTake?: num
   ]);
   const read = await readNoticeIds(ctx, [...live, ...history].map((row) => row.id));
   const mark = <T extends { id: string }>(rows: T[]) => rows.map((row) => ({ ...row, isRead: read.has(row.id) }));
-  const marked = mark(live);
+  // Emergency alerts first; the rest newest first, as fetched.
+  const marked = mark([...live.filter((row) => row.kind === "EMERGENCY"), ...live.filter((row) => row.kind !== "EMERGENCY")]);
   return { live: marked, history: mark(history), unread: marked.filter((row) => !row.isRead).length };
 }
 
@@ -215,10 +226,10 @@ export async function publicNotices(schoolId: string, take = 20) {
   });
 }
 
-export async function listNoticesForAdmin(ctx: TenantContext, status?: NoticeStatus) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+export async function listNoticesForAdmin(ctx: TenantContext, status?: NoticeStatus, kind?: NoticeKind) {
+  assertCan(ctx, "communication", "VIEW");
   return ctx.db.notice.findMany({
-    where: status ? { status } : {},
+    where: { ...(status ? { status } : {}), ...(kind ? { kind } : {}) },
     orderBy: [{ updatedAt: "desc" }],
     select: {
       ...NOTICE_CARD,
@@ -226,12 +237,15 @@ export async function listNoticesForAdmin(ctx: TenantContext, status?: NoticeSta
       expiresAt: true,
       updatedAt: true,
       author: { select: { firstName: true, lastName: true } },
+      class: { select: { name: true } },
+      section: { select: { name: true, class: { select: { name: true } } } },
+      stream: { select: { name: true } },
     },
   });
 }
 
 export async function getNotice(ctx: TenantContext, noticeId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "VIEW");
   const notice = await ctx.db.notice.findFirst({
     where: { id: noticeId },
     include: { recipients: { select: { student: { select: { admissionNumber: true } } } } },
@@ -249,12 +263,17 @@ async function resolveTarget(ctx: TenantContext, input: NoticeInput) {
     case "CLASS": {
       const klass = await ctx.db.class.findFirst({ where: { id: input.classId! }, select: { id: true } });
       if (!klass) throw new NotFoundError("That class was not found.");
-      return { classId: klass.id, sectionId: null, studentIds: [] as string[] };
+      return { classId: klass.id, sectionId: null, streamId: null, studentIds: [] as string[] };
     }
     case "SECTION": {
       const section = await ctx.db.section.findFirst({ where: { id: input.sectionId! }, select: { id: true } });
       if (!section) throw new NotFoundError("That section was not found.");
-      return { classId: null, sectionId: section.id, studentIds: [] as string[] };
+      return { classId: null, sectionId: section.id, streamId: null, studentIds: [] as string[] };
+    }
+    case "STREAM": {
+      const stream = await ctx.db.stream.findFirst({ where: { id: input.streamId!, isActive: true }, select: { id: true } });
+      if (!stream) throw new NotFoundError("That stream was not found.");
+      return { classId: null, sectionId: null, streamId: stream.id, studentIds: [] as string[] };
     }
     case "STUDENTS": {
       const wanted = [...new Set(input.studentAdmissionNumbers.map((value) => value.toLowerCase()))];
@@ -269,21 +288,22 @@ async function resolveTarget(ctx: TenantContext, input: NoticeInput) {
           studentAdmissionNumbers: [`Not found: ${unknown.slice(0, 10).join(", ")}${unknown.length > 10 ? "…" : ""}`],
         });
       }
-      return { classId: null, sectionId: null, studentIds: students.map((student) => student.id) };
+      return { classId: null, sectionId: null, streamId: null, studentIds: students.map((student) => student.id) };
     }
     default:
-      return { classId: null, sectionId: null, studentIds: [] as string[] };
+      return { classId: null, sectionId: null, streamId: null, studentIds: [] as string[] };
   }
 }
 
 export async function saveNotice(ctx: TenantContext, input: NoticeInput): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "EDIT");
   const noticeId = input.noticeId;
   const target = await resolveTarget(ctx, input);
   const fields = {
     title: input.title,
     body: input.body,
     audience: input.audience,
+    kind: input.kind,
     status: input.status,
     isPublic: input.isPublic,
     publishAt: input.publishAt,
@@ -296,6 +316,7 @@ export async function saveNotice(ctx: TenantContext, input: NoticeInput): Promis
     ...fields,
     classId: target.classId,
     sectionId: target.sectionId,
+    streamId: target.streamId,
     // Only a whole-school notice may appear on the public website.
     isPublic: fields.scope === "SCHOOL" ? fields.isPublic : false,
     publishAt: fields.status === "PUBLISHED" && !fields.publishAt ? new Date() : fields.publishAt,
@@ -345,7 +366,7 @@ export async function saveNotice(ctx: TenantContext, input: NoticeInput): Promis
     entityId: id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Notice "${data.title}" ${data.status === "PUBLISHED" && !wasPublished ? "published" : "saved"}${
+    summary: `${data.kind === "EMERGENCY" ? "Emergency alert" : data.kind === "ANNOUNCEMENT" ? "Announcement" : "Notice"} "${data.title}" ${data.status === "PUBLISHED" && !wasPublished ? "published" : "saved"}${
       data.scope === "SCHOOL" ? "" : ` for ${target.studentIds.length ? `${target.studentIds.length} students` : data.scope.toLowerCase()}`
     }.`,
   });
@@ -354,22 +375,24 @@ export async function saveNotice(ctx: TenantContext, input: NoticeInput): Promis
 }
 
 export async function deleteNotice(ctx: TenantContext, noticeId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "DELETE");
   const { count } = await ctx.db.notice.deleteMany({ where: { id: noticeId } });
   if (!count) throw new NotFoundError();
 }
 
-/** Classes and this session's sections, for choosing a notice's target. */
+/** Classes, this session's sections and the school's streams, for choosing a notice's target. */
 export async function noticeTargetOptions(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
-  const [classes, sections] = await Promise.all([
+  assertCan(ctx, "communication", "VIEW");
+  const [classes, sections, streams] = await Promise.all([
     ctx.db.class.findMany({ where: { isActive: true }, orderBy: { level: "asc" }, select: { id: true, name: true } }),
     ctx.db.section.findMany({
       where: { academicSession: { isCurrent: true } },
       select: { id: true, name: true, class: { select: { name: true, level: true } }, stream: { select: { name: true } } },
     }),
+    ctx.db.stream.findMany({ where: { isActive: true }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
   ]);
   return {
+    streams: streams.map((stream) => ({ value: stream.id, label: stream.name })),
     classes: classes.map((klass) => ({ value: klass.id, label: klass.name })),
     sections: sections
       .sort((a, b) => a.class.level - b.class.level || a.name.localeCompare(b.name))
@@ -379,3 +402,55 @@ export async function noticeTargetOptions(ctx: TenantContext) {
       })),
   };
 }
+
+/** Live messages by kind, and the emergency alerts live now with how many have read each — the Communication Center. */
+export async function communicationSummary(ctx: TenantContext) {
+  assertCan(ctx, "communication", "VIEW");
+  const live = liveWhere(new Date());
+  const [byKind, emergencies] = await Promise.all([
+    ctx.db.notice.groupBy({ by: ["kind"], where: live, _count: { _all: true } }),
+    ctx.db.notice.findMany({
+      where: { AND: [live, { kind: "EMERGENCY" }] },
+      orderBy: [{ publishAt: "desc" }],
+      take: 5,
+      select: { id: true, title: true, publishAt: true, _count: { select: { reads: true } } },
+    }),
+  ]);
+  const count = (kind: NoticeKind) => byKind.find((row) => row.kind === kind)?._count._all ?? 0;
+  return {
+    live: { NOTICE: count("NOTICE"), ANNOUNCEMENT: count("ANNOUNCEMENT"), EMERGENCY: count("EMERGENCY") },
+    emergencies: emergencies.map((row) => ({ id: row.id, title: row.title, publishAt: row.publishAt, reads: row._count.reads })),
+  };
+}
+
+const NOTICES_PAGE: Record<string, string> = {
+  SCHOOL_ADMIN: "/school-admin/notices",
+  TEACHER: "/teacher/notices",
+  STUDENT: "/student/notices",
+  PARENT: "/parent/notices",
+  NON_TEACHING_STAFF: "/staff/notices",
+};
+
+/**
+ * Live emergency alerts addressed to the signed-in person, as notifications:
+ * the notification center raises them as critical, with the usual read state.
+ */
+export async function emergencyNotifications(ctx: TenantContext) {
+  const rows = await ctx.db.notice.findMany({
+    where: { AND: [liveWhere(new Date()), { kind: "EMERGENCY" }, await visibleNoticeWhere(ctx)] },
+    orderBy: [{ publishAt: "desc" }],
+    take: 10,
+    select: { id: true, title: true, body: true, publishAt: true, createdAt: true },
+  });
+  return rows.map((row) => ({
+    kind: "emergency",
+    childId: null,
+    title: `Emergency: ${row.title}`,
+    detail: row.body.length > 160 ? `${row.body.slice(0, 157)}…` : row.body,
+    at: row.publishAt ?? row.createdAt,
+    href: NOTICES_PAGE[ctx.user.role] ?? null,
+    tone: "critical" as const,
+    key: `emergency:${row.id}`,
+  }));
+}
+

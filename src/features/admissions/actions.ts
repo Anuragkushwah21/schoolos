@@ -8,10 +8,10 @@ import { type ActionResult, parseFormData, successResult } from "@/lib/action-re
 import { checkbox, id } from "@/lib/validation/common";
 import { createStudentSchema } from "@/lib/validation/school";
 import { publicApplicationSchema } from "@/lib/validation/enquiries";
-import { acceptAdmissionSchema, admissionFollowUpSchema, admissionStatusSchema } from "@/lib/validation/website";
+import { admissionFollowUpSchema, admissionStatusSchema } from "@/lib/validation/website";
 import { inviteMessage } from "@/server/auth/account-links";
 import { requireTenantForAction } from "@/server/auth/current-user";
-import { acceptApplication, addFollowUp, convertApplication, setApplicationArchived, setApplicationStatus, submitApplications } from "@/server/admissions/service";
+import { addFollowUp, convertApplication, setApplicationArchived, setApplicationStatus, submitApplications } from "@/server/admissions/service";
 import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
@@ -49,37 +49,24 @@ export async function submitApplicationAction(
 export async function setApplicationStatusAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      // Staff with "Move applications along" too; the service checks.
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "NON_TEACHING_STAFF");
       await setApplicationStatus(ctx, parseFormData(admissionStatusSchema, formData));
       return successResult("Application updated.");
     },
-    { revalidate: "/school-admin" },
+    { revalidate: ["/school-admin", "/staff"] },
   );
 }
 
-export async function acceptApplicationAction(
-  _p: ActionResult<{ studentId: string }>,
-  formData: FormData,
-): Promise<ActionResult<{ studentId: string }>> {
-  return performAction(
-    async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
-      const { studentId } = await acceptApplication(ctx, parseFormData(acceptAdmissionSchema, formData));
-      return successResult("Application accepted and student admitted.", { studentId });
-    },
-    { revalidate: "/school-admin", redirectTo: ({ studentId }) => `/school-admin/students/${studentId}` as Route },
-  );
-}
-
-const admin = () => requireTenantForAction("SCHOOL_ADMIN");
+const admin = () => requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
 
 export async function addFollowUpAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      await addFollowUp(await admin(), parseFormData(admissionFollowUpSchema, formData));
+      await addFollowUp(await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "NON_TEACHING_STAFF"), parseFormData(admissionFollowUpSchema, formData));
       return successResult("Follow-up saved.");
     },
-    { revalidate: "/school-admin" },
+    { revalidate: ["/school-admin", "/staff"] },
   );
 }
 

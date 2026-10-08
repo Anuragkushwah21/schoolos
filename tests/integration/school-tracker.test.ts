@@ -14,6 +14,7 @@ import { recordPayment } from "@/server/finance/fees";
 import { setSchoolUdise } from "@/server/platform/schools";
 
 import { adminOf } from "../helpers/context";
+import { owe } from "../helpers/fees";
 import {
   type SeededSchool,
   createIsolationFixture,
@@ -28,6 +29,8 @@ const asRole = (role: SessionUser["role"]): SessionUser => ({ ...superAdmin, rol
 
 beforeAll(async () => {
   ({ schoolA, schoolB } = await createIsolationFixture());
+  // A payment is only taken against a fee: the first two students owe one.
+  for (const studentId of schoolA.studentIds.slice(0, 2)) await owe(adminOf(schoolA), studentId, 1_00_000_00);
   const user = await prisma.user.create({
     data: {
       email: "super@tracker-test.test",

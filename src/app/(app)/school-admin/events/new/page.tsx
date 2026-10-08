@@ -8,7 +8,7 @@ import { requireTenant } from "@/server/auth/current-user";
 export const metadata: Metadata = { title: "New event" };
 
 export default async function NewEventPage() {
-  await requireTenant("SCHOOL_ADMIN");
+  await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   return (
     <>
       <PageHeader back={{ href: "/school-admin/events", label: "Events" }} title="New event" />

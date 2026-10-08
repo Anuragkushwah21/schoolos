@@ -6,9 +6,10 @@ import { z } from "zod";
 import { type ActionResult, errorResult, parseFormData, successResult } from "@/lib/action-result";
 import { ValidationError } from "@/lib/errors";
 import { id } from "@/lib/validation/common";
-import { classTestSchema, createExamSchema, examIdsSchema, type MarkEntry, reopenMarksSchema, updateClassTestSchema, updateExamSchema } from "@/lib/validation/exams";
+import { classTestSchema, correctResultSchema, createExamSchema, examIdsSchema, gradingRulesSchema, resultSchemeSchema, type MarkEntry, reopenMarksSchema, unpublishExamSchema, updateClassTestSchema, updateExamSchema } from "@/lib/validation/exams";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import {
+  correctPublishedResult,
   createClassTest,
   createExams,
   deleteClassTest,
@@ -22,8 +23,11 @@ import {
   unpublishExam,
   updateClassTest,
   updateExam,
+  verifyExam,
 } from "@/server/exams/service";
 import { saveAttentionSettings } from "@/server/exams/attention";
+import { parseComponents, saveResultScheme } from "@/server/exams/final-results";
+import { saveGradingRules } from "@/server/exams/grading";
 import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
@@ -31,7 +35,7 @@ type Result = ActionResult<undefined>;
 /** Results reach every portal, so all four areas are refreshed. */
 const EXAM_PAGES = ["/school-admin", "/teacher", "/student", "/parent"];
 
-const admin = () => requireTenantForAction("SCHOOL_ADMIN");
+const admin = () => requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
 
 export async function createExamAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
@@ -83,15 +87,15 @@ export async function unpublishExamAction(_p: Result, formData: FormData): Promi
   return performAction(
     async () => {
       const ctx = await admin();
-      const { examId } = parseFormData(z.object({ examId: id }), formData);
-      await unpublishExam(ctx, examId);
-      return successResult("Results withdrawn. Marks can be corrected now.");
+      const { examId, reason } = parseFormData(unpublishExamSchema, formData);
+      await unpublishExam(ctx, examId, reason);
+      return successResult("Results withdrawn. Marks can be corrected now; verify again before republishing.");
     },
     { revalidate: EXAM_PAGES },
   );
 }
 
-/** Marks arrive as `marks:<id>`, `absent:<id>` and `remark:<id>` per student row. */
+/** Marks arrive as `marks:<id>`, `status:<id>` (MARKS / ABSENT / EXEMPT; or the older `absent:<id>`) and `remark:<id>` per student row. */
 function readMarks(formData: FormData): MarkEntry[] {
   const entries: MarkEntry[] = [];
   const errors: Record<string, string[]> = {};
@@ -99,13 +103,15 @@ function readMarks(formData: FormData): MarkEntry[] {
     if (!key.startsWith("row:")) continue;
     const studentId = key.slice("row:".length);
     const raw = String(formData.get(`marks:${studentId}`) ?? "").trim();
-    const absent = formData.get(`absent:${studentId}`) === "on";
+    const status = String(formData.get(`status:${studentId}`) ?? "");
+    const absent = formData.get(`absent:${studentId}`) === "on" || status === "ABSENT";
+    const exempt = status === "EXEMPT";
     const remark = String(formData.get(`remark:${studentId}`) ?? "").trim().slice(0, 300) || null;
     if (raw !== "" && !/^\d+$/.test(raw)) {
       errors[`marks:${studentId}`] = ["Enter a whole number"];
       continue;
     }
-    entries.push({ studentId, marks: raw === "" ? null : Number(raw), absent, remark });
+    entries.push({ studentId, marks: exempt || absent ? null : raw === "" ? null : Number(raw), absent: exempt ? false : absent, exempt, remark });
   }
   if (Object.keys(errors).length) throw new ValidationError("Some marks need correcting.", errors);
   return entries;
@@ -114,7 +120,7 @@ function readMarks(formData: FormData): MarkEntry[] {
 export async function saveMarksAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
       const { assessmentId } = parseFormData(z.object({ assessmentId: id }), formData);
       // "Submit results" saves what is on screen first, then hands it in.
       if (formData.get("intent") === "submit") {
@@ -138,7 +144,7 @@ export type ImportResult = ActionResult<{ errors: ImportError[] } | undefined>;
 export async function importMarksAction(_p: ImportResult, formData: FormData): Promise<ImportResult> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
       const { assessmentId } = parseFormData(z.object({ assessmentId: id }), formData);
       const file = formData.get("file");
       if (!(file instanceof File) || file.size === 0) return errorResult("Choose the CSV file to import.");
@@ -189,7 +195,7 @@ export async function reopenMarksAction(_p: Result, formData: FormData): Promise
 export async function updateClassTestAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
       await updateClassTest(ctx, parseFormData(updateClassTestSchema, formData));
       return successResult("Test updated.");
     },
@@ -232,6 +238,68 @@ export async function saveAttentionSettingsAction(_p: Result, formData: FormData
       const ctx = await admin();
       await saveAttentionSettings(ctx, parseFormData(attentionSettingsSchema, formData));
       return successResult("Needs Attention rule saved.");
+    },
+    { revalidate: EXAM_PAGES },
+  );
+}
+
+/** Review step: verify the submitted marks (School Admin or Principal). */
+export async function verifyExamAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const { examId } = parseFormData(z.object({ examId: id }), formData);
+      await verifyExam(ctx, examId);
+      return successResult("Results verified. They can be published now.");
+    },
+    { revalidate: EXAM_PAGES },
+  );
+}
+
+/** Correct one published mark, with the reason (kept on the audit log). */
+export async function correctResultAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      await correctPublishedResult(ctx, parseFormData(correctResultSchema, formData));
+      return successResult("Mark corrected. Families see the corrected result now.");
+    },
+    { revalidate: [...EXAM_PAGES, "/parent", "/student", "/report-cards"] },
+  );
+}
+
+/** Settings → Grading: the school's scale (one "grade: from %" per line) and pass percentage. */
+export async function saveGradingRulesAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const input = parseFormData(gradingRulesSchema, formData);
+      const bands = input.useDefault
+        ? null
+        : input.bands
+            .split(/\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => {
+              const match = line.match(/^(.+?)\s*[:=]\s*(\d+)\s*%?$/);
+              if (!match) throw new ValidationError("Please correct the highlighted fields.", { bands: [`Write each line as "Grade: from %", e.g. "A1: 91" — not "${line}".`] });
+              return { grade: match[1]!.trim(), min: Number(match[2]) };
+            });
+      await saveGradingRules(ctx, { bands, passPercent: input.passPercent });
+      return successResult("Grading rules saved. Every result and report card uses them now.");
+    },
+    { revalidate: [...EXAM_PAGES, "/report-cards"] },
+  );
+}
+
+/** The session's final result: which exams count, and how much. */
+export async function saveResultSchemeAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      const input = parseFormData(resultSchemeSchema, formData);
+      await saveResultScheme(ctx, { name: input.name, components: parseComponents(input.components) });
+      return successResult("Final result saved.");
     },
     { revalidate: EXAM_PAGES },
   );

@@ -5,9 +5,9 @@ import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { checkSectionChange } from "@/server/academics/streams";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { isForeignKeyViolation, isUniqueViolation } from "@/server/db/errors";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Academic structure: sessions, classes, streams, subjects and sections.
@@ -73,7 +73,7 @@ export async function createAcademicSession(
   ctx: TenantContext,
   input: { name: string; startDate: Date; endDate: Date; makeCurrent: boolean },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
 
   const overlapping = await ctx.db.academicSession.findFirst({
     where: { startDate: { lte: input.endDate }, endDate: { gte: input.startDate } },
@@ -118,7 +118,7 @@ export async function createAcademicSession(
  * is no moment at which a school has none — or two.
  */
 export async function setCurrentSession(ctx: TenantContext, sessionId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
 
   const target = await ctx.db.academicSession.findFirst({
     where: { id: sessionId },
@@ -157,7 +157,7 @@ export async function createClass(
   ctx: TenantContext,
   input: { name: string; level: number },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   try {
     await ctx.db.class.create({ data: { schoolId: ctx.schoolId, ...input } });
   } catch (error) {
@@ -176,7 +176,7 @@ export async function createClass(
 }
 
 export async function setClassActive(ctx: TenantContext, classId: string, isActive: boolean) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const { count } = await ctx.db.class.updateMany({ where: { id: classId }, data: { isActive } });
   if (!count) throw new NotFoundError();
   await recordAudit({
@@ -194,7 +194,7 @@ export async function updateClass(
   classId: string,
   input: { name: string; level: number },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   try {
     const { count } = await ctx.db.class.updateMany({ where: { id: classId }, data: input });
     if (!count) throw new NotFoundError();
@@ -221,7 +221,7 @@ export async function updateClass(
  * history with it — "Stop offering" is the way to retire one of those.
  */
 export async function deleteClass(ctx: TenantContext, classId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "DELETE");
   const klass = await ctx.db.class.findFirst({ where: { id: classId }, select: { name: true } });
   if (!klass) throw new NotFoundError();
   try {
@@ -253,7 +253,7 @@ export async function listStreams(ctx: TenantContext, options: { activeOnly?: bo
 }
 
 export async function createStream(ctx: TenantContext, name: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   try {
     await ctx.db.stream.create({ data: { schoolId: ctx.schoolId, name } });
   } catch (error) {
@@ -270,7 +270,7 @@ export async function createStream(ctx: TenantContext, name: string): Promise<vo
 }
 
 export async function setStreamActive(ctx: TenantContext, streamId: string, isActive: boolean) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const { count } = await ctx.db.stream.updateMany({ where: { id: streamId }, data: { isActive } });
   if (!count) throw new NotFoundError();
 }
@@ -287,7 +287,7 @@ export async function createSubject(
   ctx: TenantContext,
   input: { name: string; code: string },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   try {
     await ctx.db.subject.create({ data: { schoolId: ctx.schoolId, ...input } });
   } catch (error) {
@@ -304,7 +304,7 @@ export async function createSubject(
 }
 
 export async function setSubjectActive(ctx: TenantContext, subjectId: string, isActive: boolean) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const { count } = await ctx.db.subject.updateMany({ where: { id: subjectId }, data: { isActive } });
   if (!count) throw new NotFoundError();
 }
@@ -316,7 +316,7 @@ export async function setSubjectActive(ctx: TenantContext, subjectId: string, is
  * one off instead (`setSubjectActive`).
  */
 export async function updateSubject(ctx: TenantContext, input: { subjectId: string; name: string; code: string }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const current = await ctx.db.subject.findFirst({ where: { id: input.subjectId }, select: { name: true, code: true } });
   if (!current) throw new NotFoundError("That subject was not found.");
   try {
@@ -337,7 +337,7 @@ export async function updateSubject(ctx: TenantContext, input: { subjectId: stri
 
 /** Rename a stream. Like subjects, streams are switched off, never deleted. */
 export async function updateStream(ctx: TenantContext, input: { streamId: string; name: string }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const current = await ctx.db.stream.findFirst({ where: { id: input.streamId }, select: { name: true } });
   if (!current) throw new NotFoundError("That stream was not found.");
   try {
@@ -466,7 +466,7 @@ export async function classSectionOptions(ctx: TenantContext, academicSessionId:
  */
 export async function resolveSectionChoice(ctx: TenantContext, choice: string): Promise<string> {
   if (!choice.startsWith(CLASS_OPTION_PREFIX)) return choice;
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const classId = choice.slice(CLASS_OPTION_PREFIX.length);
   const session = await requireCurrentSession(ctx);
   const existing = await ctx.db.section.findFirst({
@@ -548,7 +548,7 @@ export async function createSection(
     classTeacherId: string | null;
   },
 ): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
 
   const [session, klass] = await Promise.all([
     ctx.db.academicSession.findFirst({ where: { id: input.academicSessionId }, select: { id: true } }),
@@ -584,7 +584,7 @@ export async function updateSection(
   sectionId: string,
   input: { name: string; streamId: string | null; capacity: number | null; classTeacherId: string | null },
 ): Promise<{ warning: string | null }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   await assertStreamAndTeacher(ctx, input);
 
   const existing = await ctx.db.section.findFirst({
@@ -644,7 +644,7 @@ export async function setClassTeacher(
   ctx: TenantContext,
   input: { sectionId: string; teacherId: string | null },
 ): Promise<{ changed: boolean }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
 
   const section = await ctx.db.section.findFirst({
     where: { id: input.sectionId },
@@ -739,7 +739,7 @@ async function recordClassTeacherChange(
 
 /** Who has been class teacher of this section, newest first. */
 export async function classTeacherHistory(ctx: TenantContext, sectionId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "VIEW");
 
   const rows = await ctx.db.classTeacherAssignment.findMany({
     where: { sectionId },
@@ -767,7 +767,7 @@ export async function classTeacherHistory(ctx: TenantContext, sectionId: string)
 
 /** Only an empty section can be removed; anything with history is kept. */
 export async function deleteSection(ctx: TenantContext, sectionId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "DELETE");
   try {
     // Its stream shares are configuration, not history: they go with it. Anything
     // else attached (students, records) still blocks the delete and rolls this back.

@@ -23,7 +23,7 @@ export default async function AttendanceSettingsPage() {
       />
       <Card className="max-w-2xl">
         <CardContent className="pt-6">
-          <AttendanceSettingsForm timing={settings.timing} submission={settings.submission} />
+          <AttendanceSettingsForm timing={settings.timing} halfDay={settings.halfDay} />
         </CardContent>
       </Card>
     </>

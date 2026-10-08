@@ -10,7 +10,7 @@ export const GET = apiRoute<Params>({ roles: ["SCHOOL_ADMIN", "TEACHER"] }, asyn
 );
 
 /**
- * Save marks: `{ entries: [{ studentId, marks, absent?, remark? }] }`. Every
+ * Save marks: `{ entries: [{ studentId, marks, absent?, exempt?, remark? }] }`. Every
  * row is validated first; one bad row refuses the save. Locked once published.
  */
 export const PUT = apiRoute<Params>({ roles: ["SCHOOL_ADMIN", "TEACHER"] }, async ({ request, ctx, params }) => {
@@ -22,6 +22,7 @@ export const PUT = apiRoute<Params>({ roles: ["SCHOOL_ADMIN", "TEACHER"] }, asyn
       studentId: entry.studentId,
       marks: entry.absent ? null : (entry.marks ?? null),
       absent: entry.absent ?? false,
+      exempt: entry.exempt ?? false,
       remark: entry.remark,
     })),
   );

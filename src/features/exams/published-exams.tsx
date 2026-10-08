@@ -23,7 +23,7 @@ export function PublishedExams({
     <Card className="mb-6">
       <CardHeader>
         <CardTitle>Exam results</CardTitle>
-        <CardDescription>Published by the school. Open a report card to print or save it.</CardDescription>
+        <CardDescription>Published by the school, this year and earlier. Open a report card to print or save it.</CardDescription>
       </CardHeader>
       <CardContent>
         <ul className="divide-y">
@@ -32,7 +32,7 @@ export function PublishedExams({
               <span className="min-w-0 flex-1">
                 <span className="block font-medium">{exam.name}</span>
                 <span className="text-muted-foreground block text-xs">
-                  {formatDate(exam.startDate)} – {formatDate(exam.endDate)}
+                  {`${formatDate(exam.startDate)} – ${formatDate(exam.endDate)}${exam.currentSession ? "" : ` · ${exam.session}`}`}
                 </span>
               </span>
               <span className="text-sm tabular-nums">

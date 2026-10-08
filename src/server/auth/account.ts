@@ -40,7 +40,8 @@ export async function changePassword(
   await prisma.$transaction([
     prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash: await hashPassword(input.newPassword) },
+      // Their own password now: the "change it first" requirement is met.
+      data: { passwordHash: await hashPassword(input.newPassword), mustChangePassword: false },
     }),
     prisma.session.deleteMany({
       where: {

@@ -14,6 +14,7 @@ import type { TenantContext } from "@/server/auth/current-user";
 import { requireStaffSelf } from "@/server/auth/staff-access";
 import { requireTeacherSelf } from "@/server/auth/teacher-access";
 import { getSchoolCalendar } from "@/server/calendar/holidays";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Staff leave: apply, cancel, approve, reject — for teachers and for
@@ -200,7 +201,7 @@ export async function listLeaveRequests(
   ctx: TenantContext,
   filters: { status?: LeaveStatus; teacherId?: string; staffMemberId?: string } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   const rows = await ctx.db.leaveRequest.findMany({
     where: {
       ...(filters.status ? { status: filters.status } : {}),
@@ -278,7 +279,7 @@ export async function affectedPeriods(ctx: TenantContext, teacherId: string, sta
 }
 
 export async function getLeaveRequest(ctx: TenantContext, leaveId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   const leave = await ctx.db.leaveRequest.findFirst({ where: { id: leaveId }, select: LEAVE_SELECT });
   if (!leave) throw new NotFoundError("That leave request was not found.");
   const [withDays] = await withWorkingDays(ctx, [leave]);
@@ -296,7 +297,7 @@ export async function getLeaveRequest(ctx: TenantContext, leaveId: string) {
  * reached, in the same transaction.
  */
 export async function decideLeave(ctx: TenantContext, input: LeaveDecisionInput): Promise<{ decided: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "APPROVE");
   const ids = [...new Set(input.leaveIds)];
   const requests = await ctx.db.leaveRequest.findMany({
     where: { id: { in: ids } },
@@ -400,10 +401,6 @@ export async function approvedLeaveOn(ctx: TenantContext, date: Date) {
   return new Map(rows.flatMap((row) => (row.teacherId ? [[row.teacherId, row] as const] : [])));
 }
 
-export function leaveLabel(leave: { type: string; startDate: Date; endDate: Date }): string {
-  return `${humanize(leave.type)} leave, ${formatSpan(leave.startDate, leave.endDate)}`;
-}
-
 
 /** The dashboard's Leave card for a teacher's or staff member's own leave. */
 export async function myLeaveSummary(ctx: TenantContext) {
@@ -420,6 +417,6 @@ export async function myLeaveSummary(ctx: TenantContext) {
 
 /** The School Admin's count of staff leave waiting for a decision. */
 export async function pendingStaffLeaveCount(ctx: TenantContext): Promise<number> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   return ctx.db.leaveRequest.count({ where: { status: "PENDING" } });
 }

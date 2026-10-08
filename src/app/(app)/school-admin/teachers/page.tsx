@@ -29,7 +29,7 @@ import { listTeachers } from "@/server/people/teachers";
 export const metadata: Metadata = { title: "Teachers" };
 
 export default async function TeachersPage(props: PageProps<"/school-admin/teachers">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const q = param(search.q);
   // Current teachers by default; former ones stay one filter away.

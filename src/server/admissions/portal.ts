@@ -4,9 +4,9 @@ import { today } from "@/lib/dates";
 import { ValidationError } from "@/lib/errors";
 import type { AdmissionPortalInput } from "@/lib/validation/enquiries";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { prisma } from "@/server/db/prisma";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * The public admission page's own settings: when applications open and
@@ -31,13 +31,13 @@ export function readCustomFields(value: unknown): CustomField[] {
 }
 
 export async function getPortalSettings(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   const portal = await ctx.db.admissionPortal.findFirst({ include: { updatedBy: { select: { firstName: true, lastName: true } } } });
   return portal ? { ...portal, customFields: readCustomFields(portal.customFields) } : null;
 }
 
 export async function savePortalSettings(ctx: TenantContext, input: AdmissionPortalInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "settings", "EDIT");
   const classes = input.classIds.length ? await ctx.db.class.findMany({ where: { id: { in: input.classIds } }, select: { id: true } }) : [];
   if (classes.length !== new Set(input.classIds).size) throw new ValidationError("Please correct the highlighted fields.", { classIds: ["Choose classes from the list"] });
   const errors: Record<string, string[]> = {};
@@ -107,7 +107,7 @@ export async function publicPortal(schoolId: string) {
 
 /** Publish or unpublish the public admission form. Settings and dates are kept either way. */
 export async function setPortalPublished(ctx: TenantContext, isPublished: boolean): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   await ctx.db.admissionPortal.upsert({
     where: { schoolId: ctx.schoolId },
     create: { schoolId: ctx.schoolId, isPublished, updatedById: ctx.user.id },

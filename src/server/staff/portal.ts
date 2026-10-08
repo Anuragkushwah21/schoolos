@@ -6,6 +6,7 @@ import { sectionLabel } from "@/server/academics/structure";
 import type { TenantContext } from "@/server/auth/current-user";
 import { addDays, today } from "@/lib/dates";
 import { assertAdminOrStaffPermission, requireStaffSelf, staffHolds } from "@/server/auth/staff-access";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Read-only views for non-teaching staff who have been granted a module.
@@ -20,7 +21,7 @@ export const DIRECTORY_PAGE_SIZE = 50;
 export async function staffStudentDirectory(ctx: TenantContext, filters: { q?: string; sectionId?: string; page?: number } = {}) {
   await assertAdminOrStaffPermission(ctx, "students.directory");
   // Guardian name and phone need their own permission; basic details do not.
-  const withContacts = ctx.user.role === "SCHOOL_ADMIN" || (await staffHolds(ctx, "students.contact"));
+  const withContacts = isSchoolLeader(ctx.user.role) || (await staffHolds(ctx, "students.contact"));
   const page = Math.max(1, filters.page ?? 1);
   const where: Prisma.StudentWhereInput = {
     status: "ACTIVE",
@@ -99,7 +100,7 @@ export async function myStaffAttendance(ctx: TenantContext) {
  * today across the school and by this person, voided receipts left out.
  */
 export async function feeDeskToday(ctx: TenantContext) {
-  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect"]);
+  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect", "fees.manage"]);
   const date = today();
   const where = { paidOn: date, voidedAt: null };
   const [all, mine, recent] = await Promise.all([

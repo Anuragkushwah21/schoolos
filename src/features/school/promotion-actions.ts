@@ -33,7 +33,7 @@ function parse<S extends z.ZodType>(schema: S, value: unknown): z.infer<S> {
 
 export async function previewPromotionAction(input: unknown): Promise<ActionResult<PromotionPreview>> {
   return runAction(async () => {
-    const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+    const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
     return successResult(undefined, await previewPromotion(ctx, parse(promotionPreviewSchema, input)));
   });
 }
@@ -41,7 +41,7 @@ export async function previewPromotionAction(input: unknown): Promise<ActionResu
 export async function promotionBatchAction(input: unknown): Promise<ActionResult<PromotionBatchResult>> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { destination, ...rest } = parse(promotionBatchSchema, input);
       const decoded = decodeDestination(destination);
       if (!decoded) throw new AppError("VALIDATION", "Choose where this section goes.");
@@ -60,7 +60,7 @@ const reversalSchema = z.object({
 export async function reversePromotionAction(_p: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { runId, reason } = parseFormData(reversalSchema, formData);
       const { undone, kept } = await reversePromotionRun(ctx, runId, reason);
       return successResult(`Promotion undone for ${undone} student${undone === 1 ? "" : "s"}.${kept.length ? ` ${kept.length} kept in the new class because they already have records there.` : ""}`);

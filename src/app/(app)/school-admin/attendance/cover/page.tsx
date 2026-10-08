@@ -26,7 +26,7 @@ const PHASE_TONE = { NOT_TAKEN: "warning", DRAFT: "info", CORRECTABLE: "positive
  * Whoever is assigned sees it on their own dashboard.
  */
 export default async function CoverPage(props: PageProps<"/school-admin/attendance/cover">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const date = parseDateInput(param(search.date)) ?? today();
   const iso = toDateInput(date);

@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { ActionForm } from "@/components/forms/action-form";
 import {
   FieldRow,
@@ -17,6 +19,8 @@ import {
   paySalaryAction,
   recordExpenseAction,
   recordPaymentAction,
+  removePaymentAction,
+  saveLateFeePolicyAction,
   saveReceiptSettingsAction,
   setSalaryAction,
 } from "./actions";
@@ -47,10 +51,13 @@ const METHOD_OPTIONS = [
 
 export function SalaryForm({
   teacherId,
+  staffMemberId,
   today,
   current,
 }: {
-  teacherId: string;
+  /** One of the two: whose salary this is. */
+  teacherId?: string;
+  staffMemberId?: string;
   today: string;
   /** Prefilled from the figure in force, so a raise is an edit of one number. */
   current?: {
@@ -62,7 +69,8 @@ export function SalaryForm({
 }) {
   return (
     <ActionForm action={setSalaryAction}>
-      <input type="hidden" name="teacherId" value={teacherId} />
+      {teacherId ? <input type="hidden" name="teacherId" value={teacherId} /> : null}
+      {staffMemberId ? <input type="hidden" name="staffMemberId" value={staffMemberId} /> : null}
       <FieldRow>
         <TextField
           name="amountMinor"
@@ -153,6 +161,10 @@ export function ChargeSectionForm({
         <TextField name="amountMinor" label="Amount per student (₹)" type="number" min={1} step="1" required />
         <TextField name="dueOn" label="Due on" type="date" defaultValue={defaultDueOn} required />
       </FieldRow>
+      <FieldRow>
+        <SelectField name="installmentCount" label="Pay in" options={INSTALLMENT_OPTIONS} defaultValue="1" hint="Split equally; the first instalment is due on the date above." />
+        <SelectField name="installmentEveryMonths" label="Instalments every" options={EVERY_OPTIONS} defaultValue="1" />
+      </FieldRow>
       <div>
         <SubmitButton pendingLabel="Charging…">Charge the class</SubmitButton>
       </div>
@@ -181,6 +193,10 @@ export function ChargeStudentForm({
         <TextField name="dueOn" label="Due on" type="date" defaultValue={defaultDueOn} required />
         <TextField name="notes" label="Note" />
       </FieldRow>
+      <FieldRow>
+        <SelectField name="installmentCount" label="Pay in" options={INSTALLMENT_OPTIONS} defaultValue="1" hint="Split equally; the first instalment is due on the date above." />
+        <SelectField name="installmentEveryMonths" label="Instalments every" options={EVERY_OPTIONS} defaultValue="1" />
+      </FieldRow>
       <div>
         <SubmitButton variant="outline" pendingLabel="Saving…">
           Add charge
@@ -199,9 +215,12 @@ export function PaymentForm({
   today: string;
   suggestedReceiptNo: string;
 }) {
+  const [idempotencyKey] = useState(() => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   return (
     <ActionForm action={recordPaymentAction} resetOnSuccess className="gap-3">
       <input type="hidden" name="studentId" value={studentId} />
+      {/* One key per form: pressing twice, or a retried request, records one payment. */}
+      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
       <FieldRow>
         <TextField name="amountMinor" label="Amount received (₹)" type="number" min={1} step="1" required />
         <TextField name="paidOn" label="Paid on" type="date" defaultValue={today} max={today} required />
@@ -230,7 +249,27 @@ export function PaymentForm({
 }
 
 
-export function ExpenseForm({ today }: { today: string }) {
+const INSTALLMENT_OPTIONS = [1, 2, 3, 4, 6, 12].map((n) => ({ value: String(n), label: n === 1 ? "One payment" : `${n} instalments` }));
+const EVERY_OPTIONS = [1, 2, 3, 4, 6].map((n) => ({ value: String(n), label: n === 1 ? "Every month" : `Every ${n} months` }));
+
+/** Void a receipt — always with the reason, which prints on the receipt and goes on the audit log. */
+export function VoidPaymentForm({ paymentId, receiptNo }: { paymentId: string; receiptNo: string }) {
+  return (
+    <details className="inline-block text-left">
+      <summary className="text-muted-foreground hover:text-foreground cursor-pointer px-2 text-xs">Void…</summary>
+      <ActionForm action={removePaymentAction} className="bg-card absolute right-4 z-10 mt-1 w-72 gap-2 rounded-lg border p-3 shadow-lg">
+        <input type="hidden" name="paymentId" value={paymentId} />
+        <p className="text-xs">{`Receipt ${receiptNo} stays on record marked VOID; the family's balance goes back up.`}</p>
+        <TextField name="reason" label="Why" placeholder="Entered twice, wrong student…" minLength={3} required />
+        <SubmitButton size="sm" variant="destructive" pendingLabel="Voiding…">
+          Void receipt
+        </SubmitButton>
+      </ActionForm>
+    </details>
+  );
+}
+
+export function ExpenseForm({ today, defaultCategory }: { today: string; defaultCategory?: string | null }) {
   return (
     <ActionForm action={recordExpenseAction} resetOnSuccess className="gap-3">
       <FieldRow>
@@ -239,6 +278,8 @@ export function ExpenseForm({ today }: { today: string }) {
           label="Category"
           options={EXPENSE_CATEGORY_OPTIONS}
           placeholder="Choose a category"
+          defaultValue={defaultCategory ?? undefined}
+          hint={defaultCategory === "EQUIPMENT" ? "A purchase for the school — a computer, projector, lab item…" : undefined}
           required
         />
         <TextField name="amountMinor" label="Amount (₹)" type="number" min={1} step="1" required />
@@ -257,20 +298,21 @@ export function ExpenseForm({ today }: { today: string }) {
 }
 
 export function SalaryPaymentForm({
-  teachers,
+  people,
   today,
 }: {
-  teachers: SelectOption[];
+  /** Teachers and staff; each value is "T:<teacherId>" or "S:<staffMemberId>". */
+  people: SelectOption[];
   today: string;
 }) {
   return (
     <ActionForm action={paySalaryAction} resetOnSuccess className="gap-3">
       <SelectField
-        name="teacherId"
-        label="Teacher"
-        options={teachers}
-        placeholder={teachers.length ? "Choose a teacher" : "No active teachers"}
-        disabled={!teachers.length}
+        name="payee"
+        label="Teacher or staff member"
+        options={people}
+        placeholder={people.length ? "Choose who was paid" : "No active teachers or staff"}
+        disabled={!people.length}
         required
       />
       <FieldRow>
@@ -293,7 +335,7 @@ export function SalaryPaymentForm({
 export function ReceiptSettingsForm({
   settings,
 }: {
-  settings: { receiptHeaderNote: string | null; receiptFooterNote: string | null; showFeesToStudents: boolean };
+  settings: { receiptHeaderNote: string | null; receiptFooterNote: string | null };
 }) {
   return (
     <ActionForm action={saveReceiptSettingsAction} className="max-w-3xl">
@@ -314,6 +356,23 @@ export function ReceiptSettingsForm({
       />
       <div>
         <SubmitButton>Save receipt settings</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** School Admin: the late-fee policy. */
+export function LateFeePolicyForm({ amountRupees, graceDays }: { amountRupees: number; graceDays: number }) {
+  return (
+    <ActionForm action={saveLateFeePolicyAction} className="gap-3">
+      <FieldRow>
+        <TextField name="amountMinor" label="Late fee per overdue instalment (₹)" type="number" min={0} step="1" defaultValue={amountRupees} hint="0 switches late fees off." />
+        <TextField name="graceDays" label="Days after the due date" type="number" min={0} max={365} step="1" defaultValue={graceDays} />
+      </FieldRow>
+      <div>
+        <SubmitButton variant="outline" pendingLabel="Saving…">
+          Save late fee policy
+        </SubmitButton>
       </div>
     </ActionForm>
   );

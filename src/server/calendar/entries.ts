@@ -5,6 +5,7 @@ import type { TenantContext } from "@/server/auth/current-user";
 import { accessibleSectionIds } from "@/server/auth/teacher-access";
 import { approvedLeavesBetween } from "@/server/attendance/student-leave";
 import { visibleMeetingWhere } from "@/server/communication/meetings";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * The school calendar beyond holidays: events, exams and meetings, each shown only to those it concerns.
@@ -31,6 +32,7 @@ export type CalendarEntry = {
 async function visibleSectionIds(ctx: TenantContext): Promise<string[] | "ALL"> {
   switch (ctx.user.role) {
     case "SCHOOL_ADMIN":
+    case "PRINCIPAL":
       return "ALL";
     case "TEACHER": {
       const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
@@ -53,7 +55,7 @@ async function visibleSectionIds(ctx: TenantContext): Promise<string[] | "ALL"> 
 }
 
 export async function getCalendarEntries(ctx: TenantContext, from: Date, to: Date): Promise<CalendarEntry[]> {
-  const admin = ctx.user.role === "SCHOOL_ADMIN";
+  const admin = isSchoolLeader(ctx.user.role);
   const sections = await visibleSectionIds(ctx);
   const sectionWhere = sections === "ALL" ? {} : { sectionId: { in: sections } };
 

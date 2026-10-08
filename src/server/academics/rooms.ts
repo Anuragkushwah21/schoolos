@@ -5,10 +5,10 @@ import { ConflictError, NotFoundError } from "@/lib/errors";
 import { pluralize } from "@/lib/format";
 import { ROOM_TYPE_LABEL, type RoomInput, type RoomTypeValue } from "@/lib/validation/rooms";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { getCurrentSession } from "@/server/academics/structure";
 import { isForeignKeyViolation, isUniqueViolation } from "@/server/db/errors";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * The school's rooms.
@@ -32,7 +32,7 @@ function cleanName(name: string): string {
 export type RoomFilter = { q?: string; type?: RoomTypeValue; status?: "active" | "inactive" | "all" };
 
 export async function listRooms(ctx: TenantContext, filter: RoomFilter = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "VIEW");
   const session = await getCurrentSession(ctx);
   const q = filter.q?.trim();
   const where: Prisma.RoomWhereInput = {
@@ -79,7 +79,7 @@ export async function listRooms(ctx: TenantContext, filter: RoomFilter = {}) {
 export type RoomRow = Awaited<ReturnType<typeof listRooms>>[number];
 
 export async function getRoom(ctx: TenantContext, roomId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "VIEW");
   const room = await ctx.db.room.findFirst({
     where: { id: roomId },
     select: {
@@ -154,7 +154,7 @@ function duplicate(name: string) {
 }
 
 export async function createRoom(ctx: TenantContext, input: RoomInput): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const data = roomData(input);
   if (await ctx.db.room.count({ where: { nameKey: data.nameKey } })) throw duplicate(data.name);
   try {
@@ -176,7 +176,7 @@ export async function createRoom(ctx: TenantContext, input: RoomInput): Promise<
 
 /** Edit a room. A new name is carried onto every period that uses it. */
 export async function updateRoom(ctx: TenantContext, roomId: string, input: RoomInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const current = await ctx.db.room.findFirst({ where: { id: roomId }, select: { id: true, name: true } });
   if (!current) throw new NotFoundError("That room was not found.");
   const data = roomData(input);
@@ -209,7 +209,7 @@ export async function updateRoom(ctx: TenantContext, roomId: string, input: Room
  * periods this session still use it, so the page can say so.
  */
 export async function setRoomActive(ctx: TenantContext, roomId: string, active: boolean): Promise<number> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const room = await ctx.db.room.findFirst({ where: { id: roomId }, select: { id: true, name: true } });
   if (!room) throw new NotFoundError("That room was not found.");
   await ctx.db.room.updateMany({ where: { id: roomId }, data: { isActive: active } });
@@ -228,7 +228,7 @@ export async function setRoomActive(ctx: TenantContext, roomId: string, active: 
 
 /** Delete a room nobody has ever timetabled. Anything else is history. */
 export async function deleteRoom(ctx: TenantContext, roomId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "DELETE");
   const room = await ctx.db.room.findFirst({
     where: { id: roomId },
     select: { id: true, name: true, _count: { select: { timetableSlots: true } } },

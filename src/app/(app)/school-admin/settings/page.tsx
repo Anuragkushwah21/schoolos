@@ -1,7 +1,9 @@
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 import {
+  GraduationCapIcon,
   BookOpenIcon,
+  Building2Icon,
   BuildingIcon,
   CalendarOffIcon,
   ChevronRightIcon,
@@ -15,6 +17,7 @@ import {
   ScrollTextIcon,
   SettingsIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   UserCogIcon,
 } from "lucide-react";
 
@@ -31,9 +34,13 @@ const ITEMS: Array<{ href: Route; icon: LucideIcon; title: MessageKey; hint: Mes
   { href: "/school-admin/academics", icon: BookOpenIcon, title: "settings.academicYear", hint: "settings.academicYearHint" },
   { href: "/school-admin/academics/classes", icon: LayersIcon, title: "settings.classes", hint: "settings.classesHint" },
   { href: "/school-admin/settings/attendance", icon: ClipboardCheckIcon, title: "settings.attendance", hint: "settings.attendanceHint" },
+  { href: "/school-admin/settings/grading" as Route, icon: GraduationCapIcon, title: "settings.grading", hint: "settings.gradingHint" },
   { href: "/school-admin/holidays", icon: CalendarOffIcon, title: "settings.calendar", hint: "settings.calendarHint" },
   { href: "/school-admin/finance/receipts", icon: ReceiptIcon, title: "settings.fees", hint: "settings.feesHint" },
   { href: "/school-admin/staff", icon: ShieldCheckIcon, title: "settings.staffAccess", hint: "settings.staffAccessHint" },
+  { href: "/school-admin/campuses" as Route, icon: Building2Icon, title: "settings.campuses", hint: "settings.campusesHint" },
+  { href: "/school-admin/plan" as Route, icon: SparklesIcon, title: "settings.plan", hint: "settings.planHint" },
+  { href: "/school-admin/settings/principal" as Route, icon: GraduationCapIcon, title: "settings.principal", hint: "settings.principalHint" },
   { href: "/school-admin/settings/export" as Route, icon: DownloadIcon, title: "settings.exportData", hint: "settings.exportDataHint", download: true },
   { href: "/school-admin/audit", icon: ScrollTextIcon, title: "settings.auditLog", hint: "settings.auditLogHint" },
   { href: "/api-tokens", icon: KeyRoundIcon, title: "settings.apiTokens", hint: "settings.apiTokensHint" },

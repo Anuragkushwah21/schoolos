@@ -14,6 +14,7 @@ import { enumParam } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
 import { REPORT_PERIODS, getChildReport } from "@/server/parent/child";
+import { attendedDays } from "@/lib/attendance";
 
 export const metadata: Metadata = { title: "Reports" };
 
@@ -87,7 +88,7 @@ export default async function ChildReportPage(
                 attendance.share === null
                   ? "—"
                   : formatPercent(
-                      attendance.counts.PRESENT + attendance.counts.LATE,
+                      attendedDays(attendance.counts),
                       attendance.counts.total,
                     )
               }

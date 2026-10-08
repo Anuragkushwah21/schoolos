@@ -46,7 +46,7 @@ function readEntries<S extends string>(formData: FormData, allowed: readonly S[]
 export async function markAttendanceAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
       const { sectionId, date } = parseFormData(registerSchema, formData);
       const entries: AttendanceEntry[] = readEntries(formData, ATTENDANCE_STATUSES).map((entry) => ({
         studentId: entry.id,
@@ -77,24 +77,25 @@ const draftSchema = z.object({
  * Auto-save while the register is being taken. Called as the teacher taps;
  * it only ever writes a draft — submission is a separate, server-side step.
  */
-export async function saveRegisterDraftAction(input: unknown): Promise<ActionResult<{ savedAt: string; finalizeAt: string | null }>> {
+export async function saveRegisterDraftAction(input: unknown): Promise<ActionResult<{ savedAt: string }>> {
   return runAction(async () => {
-    const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER");
+    const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
     const parsed = draftSchema.safeParse(input);
     if (!parsed.success) throw new ValidationError("That draft could not be saved.");
     const date = parseDateInput(parsed.data.date);
     if (!date) throw new ValidationError("That draft could not be saved.");
     const entries = parsed.data.entries.map((entry) => ({ ...entry, remarks: entry.remarks || null }));
-    if (!entries.length) return successResult(undefined, { savedAt: new Date().toISOString(), finalizeAt: null });
+    if (!entries.length) return successResult(undefined, { savedAt: new Date().toISOString() });
+    // A draft only — never a submission (see `register.ts`).
     const saved = await saveRegisterDraft(ctx, { sectionId: parsed.data.sectionId, date, entries });
-    return successResult(undefined, { savedAt: saved.savedAt.toISOString(), finalizeAt: saved.finalizeAt?.toISOString() ?? null });
+    return successResult(undefined, { savedAt: saved.savedAt.toISOString() });
   });
 }
 
 export async function markStaffAttendanceAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { date } = parseFormData(staffSchema, formData);
       // Rows arrive keyed "t:<teacher id>" or "s:<staff id>"; the service
       // checks every id inside this school.

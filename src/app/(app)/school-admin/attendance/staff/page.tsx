@@ -14,7 +14,7 @@ import { describeClosure, schoolClosureOn } from "@/server/calendar/holidays";
 export const metadata: Metadata = { title: "Staff attendance" };
 
 export default async function StaffAttendancePage(props: PageProps<"/school-admin/attendance/staff">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const date = parseDateInput(param(search.date)) ?? today();
   const [rows, closure] = await Promise.all([getStaffRegister(ctx, date), schoolClosureOn(ctx, date)]);

@@ -17,10 +17,10 @@ import {
 } from "@/lib/validation/lifecycle";
 import { setClassTeacher } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { invalidateAllSessionsForUser } from "@/server/auth/session";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * People lifecycle: JOIN → ACTIVE → status change → access → history kept.
@@ -107,7 +107,7 @@ export async function changeStudentStatus(
   status: StudentStatus,
   options: ChangeOptions,
 ): Promise<StatusChangeResult> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   if (!(STUDENT_LIFECYCLE as readonly string[]).includes(status)) throw new ValidationError("Please correct the highlighted fields.", { status: ["Choose a student status"] });
   checkDate(options.effectiveDate);
 
@@ -167,7 +167,7 @@ export async function changeEmployeeStatus(
   status: TeacherStatus,
   options: ChangeOptions,
 ): Promise<StatusChangeResult> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   if (!(EMPLOYEE_LIFECYCLE as readonly string[]).includes(status)) throw new ValidationError("Please correct the highlighted fields.", { status: ["Choose an employment status"] });
   checkDate(options.effectiveDate);
 
@@ -264,7 +264,7 @@ async function findPerson(ctx: TenantContext, person: PersonKind, personId: stri
 
 /** Open or close someone's login, without touching their status. */
 export async function setLoginAccess(ctx: TenantContext, input: LoginAccessInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "users", "EDIT");
   const row = await findPerson(ctx, input.person, input.personId);
   if (!row) throw new NotFoundError("That person was not found.");
   if (!row.user) throw new ConflictError(`${fullName(row)} has no login yet.`);
@@ -372,7 +372,7 @@ export type PersonHistoryEntry = {
 
 /** Everything the office needs on a profile: status, login, when they left, and the history. */
 export async function personLifecycle(ctx: TenantContext, person: PersonKind, personId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const row = await findPerson(ctx, person, personId);
   if (!row) throw new NotFoundError("That person was not found.");
   const where =
@@ -455,7 +455,7 @@ export function parentStanding(children: Array<{ status: string }>): "ACTIVE" | 
  * apart, so "active students" never quietly includes those who have left.
  */
 export async function peopleSummary(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const [students, teachers, staff] = await Promise.all([
     ctx.db.student.groupBy({ by: ["status"], _count: { _all: true } }),
     ctx.db.teacher.groupBy({ by: ["status"], _count: { _all: true } }),

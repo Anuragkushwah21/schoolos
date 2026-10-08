@@ -4,6 +4,7 @@ import type { Gender } from "@/generated/prisma/enums";
 
 import { addDays, today } from "@/lib/dates";
 import { fullName } from "@/lib/format";
+import { streamChoicesBySection } from "@/server/academics/stream-scope";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import {
@@ -21,6 +22,7 @@ import {
   attendedShare,
   emptyCounts,
 } from "@/server/attendance/service";
+import { attendedDays } from "@/lib/attendance";
 
 /**
  * What a teacher sees of their own working life: their classes, the children
@@ -396,7 +398,7 @@ export async function getMyAttendance(
     counts,
     // Present and late both mean they turned up. Leave is neither credit nor
     // blame, so it is shown separately rather than folded into a percentage.
-    share: counts.total ? (counts.PRESENT + counts.LATE) / counts.total : null,
+    share: counts.total ? attendedDays(counts) / counts.total : null,
   };
 }
 
@@ -404,7 +406,14 @@ export type TeachingOption = {
   sectionId: string;
   label: string;
   /** The subjects this teacher may set work in, for this section. */
-  subjects: Array<{ id: string; name: string }>;
+  subjects: Array<{
+    id: string;
+    name: string;
+    /** May set work for the whole section (always, in a section that is one group). */
+    whole: boolean;
+    /** The section's streams they may set work for; empty when it is not split into streams. */
+    streams: Array<{ id: string; name: string }>;
+  }>;
 };
 
 /**
@@ -425,6 +434,7 @@ export async function myTeachingOptions(ctx: TenantContext): Promise<TeachingOpt
   const rows = await ctx.db.teacherSubjectAssignment.findMany({
     where: { teacherId: teacher.id, academicSessionId: session.id },
     select: {
+      streamId: true,
       subject: { select: { id: true, name: true } },
       section: {
         select: {
@@ -437,6 +447,7 @@ export async function myTeachingOptions(ctx: TenantContext): Promise<TeachingOpt
     },
   });
 
+  const choices = await streamChoicesBySection(ctx, [...new Set(rows.map((row) => row.section.id))]);
   const bySection = new Map<string, TeachingOption & { level: number }>();
   for (const row of rows) {
     const entry =
@@ -447,8 +458,20 @@ export async function myTeachingOptions(ctx: TenantContext): Promise<TeachingOpt
         level: row.section.class.level,
         subjects: [],
       };
-    if (!entry.subjects.some((subject) => subject.id === row.subject.id)) {
-      entry.subjects.push(row.subject);
+    let subject = entry.subjects.find((item) => item.id === row.subject.id);
+    if (!subject) {
+      subject = { ...row.subject, whole: false, streams: [] };
+      entry.subjects.push(subject);
+    }
+    // A whole-section assignment covers the section and each of its streams;
+    // a stream assignment only that stream. A section that is one group has none.
+    const split = choices[row.section.id] ?? [];
+    if (!split.length || row.streamId === null) {
+      subject.whole = true;
+      subject.streams = split;
+    } else if (!subject.whole) {
+      const stream = split.find((choice) => choice.id === row.streamId);
+      if (stream && !subject.streams.some((item) => item.id === stream.id)) subject.streams.push(stream);
     }
     bySection.set(row.section.id, entry);
   }

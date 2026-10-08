@@ -3,6 +3,7 @@ import { z } from "zod";
 import { grantsFrom } from "@/lib/staff-access";
 
 import { EMPLOYEE_LIFECYCLE } from "@/lib/validation/lifecycle";
+import { GENDERS } from "@/lib/validation/school";
 
 import {
   checkbox,
@@ -10,6 +11,8 @@ import {
   optionalDate,
   optionalEmail,
   optionalId,
+  optionalEnum,
+  optionalInt,
   optionalPastDate,
   optionalPhone,
   optionalText,
@@ -39,6 +42,13 @@ export const STAFF_ROLES = [
 
 export const STAFF_STATUSES = EMPLOYEE_LIFECYCLE;
 
+export const EMPLOYMENT_TYPES = ["FULL_TIME", "PART_TIME", "CONTRACT", "TEMPORARY", "VOLUNTEER"] as const;
+
+/** Absent stays undefined (left as it is); present goes through `schema`. */
+function keep<S extends z.ZodType>(schema: S) {
+  return z.union([z.undefined(), schema]);
+}
+
 /** A list field from a form (repeated inputs, with an empty marker) or JSON. Absent stays absent. */
 const grantList = z.preprocess(
   // The form sends an empty marker alongside its checkboxes so that
@@ -66,6 +76,18 @@ export const staffSchema = z
     /** New staff start ACTIVE; later changes go through "Change status". Absent = unchanged. */
     status: z.enum(STAFF_STATUSES).optional(),
     notes: optionalText(500),
+    // --- personal & employment: a field left out is unchanged (CSV, older API
+    // clients); sent empty, it is cleared ---
+    dateOfBirth: keep(optionalPastDate("A date of birth")),
+    gender: keep(optionalEnum(GENDERS)),
+    addressLine: keep(optionalText(200)),
+    city: keep(optionalText(80)),
+    state: keep(optionalText(80)),
+    postalCode: keep(optionalText(12)),
+    experienceYears: keep(optionalInt(0, 60)),
+    employmentType: keep(optionalEnum(EMPLOYMENT_TYPES)),
+    emergencyContactName: keep(optionalText(120)),
+    emergencyContactPhone: keep(optionalPhone),
     /**
      * What this person may do (grant keys). Absent means "leave as they are",
      * so a CSV import or an API caller that does not mention them never

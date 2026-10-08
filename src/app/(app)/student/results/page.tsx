@@ -15,7 +15,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { FinalResultCard } from "@/features/exams/final-result-card";
 import { PublishedExams } from "@/features/exams/published-exams";
+import { finalResultFor } from "@/server/exams/final-results";
 import { StudentTabs } from "@/features/student/nav";
 import { formatDate } from "@/lib/dates";
 import { pluralize } from "@/lib/format";
@@ -38,7 +40,7 @@ const DIRECTION = { up: "Improving", down: "Slipping", flat: "Steady" } as const
 export default async function StudentResultsPage() {
   const ctx = await requireTenant("STUDENT");
   const { me, upcoming, past, progress } = await orNotFound(getMyResults(ctx));
-  const exams = await publishedExamsFor(ctx, me.student.id);
+  const [exams, finalResult] = await Promise.all([publishedExamsFor(ctx, me.student.id), finalResultFor(ctx, me.student.id).catch(() => null)]);
 
   const sat = past.filter((entry) => entry.sat);
   const overall = sat.length
@@ -52,6 +54,7 @@ export default async function StudentResultsPage() {
         description={`${me.placement.sectionLabel} · ${me.placement.sessionName}`}
       />
       <StudentTabs active="results" />
+      {finalResult ? <FinalResultCard result={finalResult} /> : null}
       <PublishedExams exams={exams} studentId={me.student.id} />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">

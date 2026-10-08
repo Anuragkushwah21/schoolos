@@ -99,6 +99,22 @@ export function addDays(date: Date, days: number): Date {
   return next;
 }
 
+/**
+ * The same calendar day `months` later (UTC date-only), clamped to the end of
+ * a shorter month: 31 Jan + 1 month is 28/29 Feb, not 3 Mar.
+ */
+export function addMonths(date: Date, months: number): Date {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + months;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(date.getUTCDate(), lastDay)));
+}
+
+/** Instalment due dates: the first on `firstDue`, then every `everyMonths` months. */
+export function installmentDates(firstDue: Date, count: number, everyMonths: number): Date[] {
+  return Array.from({ length: count }, (_, index) => addMonths(firstDue, index * everyMonths));
+}
+
 export function isSameDay(a: Date, b: Date): boolean {
   return toDateInput(a) === toDateInput(b);
 }

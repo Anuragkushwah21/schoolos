@@ -2,10 +2,10 @@ import { z } from "zod";
 
 import { id, optionalId, optionalText, requiredDate } from "@/lib/validation/common";
 
-/** Student leave — asked for by a parent (or a student with a login), decided by the class teacher. */
+/** Student leave — asked for by a parent (or a student with a login), reviewed by the class teacher, finally approved by the School Admin. */
 
 export const STUDENT_LEAVE_REASONS = ["SICK", "FAMILY_FUNCTION", "MEDICAL_APPOINTMENT", "PERSONAL", "TRAVEL", "OTHER"] as const;
-export const STUDENT_LEAVE_STATUSES = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] as const;
+export const STUDENT_LEAVE_STATUSES = ["PENDING", "TEACHER_APPROVED", "APPROVED", "REJECTED", "CANCELLED"] as const;
 
 export const studentLeaveSchema = z
   .object({

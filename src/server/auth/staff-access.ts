@@ -5,9 +5,13 @@ import { redirect } from "next/navigation";
 
 import { today } from "@/lib/dates";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
-import { type StaffGrant, allowedGrants } from "@/lib/staff-access";
+import { type BaseStaffRole, PREVIOUS_ROLE_DEFAULT_GRANTS, STAFF_ROLE_DEFAULT_GRANTS, type StaffGrant, allowedGrants, grantDef } from "@/lib/staff-access";
+import { recordAudit } from "@/server/audit/log";
 import { employeeMaySignIn } from "@/lib/validation/lifecycle";
 import { assertRole } from "@/server/auth/assert";
+import { moduleOfGrant } from "@/lib/school-modules";
+import { PRINCIPAL_GRANTS } from "@/lib/permissions";
+import { assertModuleEnabled, grantsInPlan } from "@/server/platform/modules";
 import type { TenantContext } from "@/server/auth/current-user";
 
 /**
@@ -72,10 +76,50 @@ export async function effectiveGrantsFor(ctx: TenantContext, staff: { id: string
 /** What the signed-in staff member may do right now (cached for one render). */
 export const staffGrants = cache(async (ctx: TenantContext): Promise<StaffGrant[]> => {
   if (ctx.user.role !== "NON_TEACHING_STAFF") return [];
-  const staff = await ctx.db.staffMember.findFirst({ where: { userId: ctx.user.id }, select: { id: true, status: true, role: true, grants: true } });
+  const staff = await ctx.db.staffMember.findFirst({
+    where: { userId: ctx.user.id },
+    select: { id: true, status: true, role: true, grants: true, grantsCustomized: true, firstName: true, lastName: true, roleProfile: { select: { isCustom: true } } },
+  });
   if (!staff) return [];
-  return effectiveGrantsFor(ctx, staff);
+  const grants = await upgradeUntouchedGrants(ctx, staff);
+  // A grant in a module the school's plan lacks opens nothing.
+  return grantsInPlan(ctx.schoolId, await effectiveGrantsFor(ctx, { ...staff, grants }));
 });
+
+const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((key) => b.includes(key));
+
+/**
+ * A staff member still holding exactly an older shipped default of their
+ * built-in role — never customised by the School Admin — moves to the role's
+ * current default responsibilities, with an audit entry. Anyone the admin
+ * gave or took anything from is left exactly as the admin set them.
+ */
+export async function upgradeUntouchedGrants(
+  ctx: TenantContext,
+  staff: { id: string; role: string; grants: readonly string[]; grantsCustomized: boolean; firstName: string; lastName: string; roleProfile: { isCustom: boolean } | null },
+): Promise<readonly string[]> {
+  // The admin's own choices are final: never widened behind their back.
+  if (staff.grantsCustomized || staff.roleProfile?.isCustom) return staff.grants;
+  const role = staff.role as BaseStaffRole;
+  const older = PREVIOUS_ROLE_DEFAULT_GRANTS[role] ?? [];
+  if (!older.some((grants) => sameSet(grants, staff.grants))) return staff.grants;
+  const next = allowedGrants(role, STAFF_ROLE_DEFAULT_GRANTS[role]);
+  const { count } = await ctx.db.staffMember.updateMany({ where: { id: staff.id, grantsCustomized: false, grants: { equals: [...staff.grants] } }, data: { grants: next } });
+  if (count) {
+    const added = next.filter((key) => !staff.grants.includes(key));
+    await recordAudit({
+      action: "STAFF_PERMISSION_ADDED",
+      entityType: "StaffMember",
+      entityId: staff.id,
+      schoolId: ctx.schoolId,
+      // Not a person's act: the role's default responsibilities were updated.
+      actorId: null,
+      summary: `${staff.firstName} ${staff.lastName} given the role's updated default responsibilities: ${added.map((key) => grantDef(key)?.label ?? key).join(", ")}.`,
+      metadata: { added, before: staff.grants, after: next, reason: "Role defaults updated; this person's access had never been customised." },
+    });
+  }
+  return next;
+}
 
 /** Whether the signed-in staff member holds any of these grants. */
 export async function staffHolds(ctx: TenantContext, grant: StaffGrant | readonly StaffGrant[]): Promise<boolean> {
@@ -90,7 +134,16 @@ export async function staffHolds(ctx: TenantContext, grant: StaffGrant | readonl
  * else is refused.
  */
 export async function assertAdminOrStaffPermission(ctx: TenantContext, grant: StaffGrant | readonly StaffGrant[]): Promise<void> {
+  // The module must be in the school's plan — for the School Admin too.
+  const wanted: readonly StaffGrant[] = typeof grant === "string" ? [grant] : grant;
+  const open = await grantsInPlan(ctx.schoolId, wanted);
+  if (!open.length) {
+    const owner = moduleOfGrant(wanted[0]!);
+    if (owner) await assertModuleEnabled(ctx, owner);
+  }
   if (ctx.user.role === "SCHOOL_ADMIN") return;
+  // The Principal's share of staff-run services (lib/permissions.ts) — never fee collection, expenses or payroll.
+  if (ctx.user.role === "PRINCIPAL" && wanted.some((key) => PRINCIPAL_GRANTS.includes(key))) return;
   if (ctx.user.role === "NON_TEACHING_STAFF" && (await staffHolds(ctx, grant))) return;
   throw new ForbiddenError();
 }

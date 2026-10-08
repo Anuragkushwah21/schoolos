@@ -22,7 +22,7 @@ const RAISED_BY = ["PARENT", "TEACHER"] as const;
  * class, section, stream, subject, teacher, status and who raised it.
  */
 export default async function AdminConcernsPage(props: PageProps<"/school-admin/concerns">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const statusParam = param(search.status);
   const filters = {

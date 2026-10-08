@@ -1,3 +1,4 @@
+// i18n-ignore-file: sample spreadsheet rows (names), not interface text.
 import { NextResponse } from "next/server";
 
 import { AppError } from "@/lib/errors";

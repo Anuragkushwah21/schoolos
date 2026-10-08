@@ -9,13 +9,14 @@ import { ViewTabs } from "@/components/shared/view-tabs";
  *     phone calls, referrals — followed up as enquiries and converted child
  *     by child into students.
  */
-export function AdmissionTabs({ active, counts }: { active: "online" | "walkin"; counts?: { online?: number; walkin?: number } }) {
+export function AdmissionTabs({ active, counts }: { active: "online" | "walkin" | "drives"; counts?: { online?: number; walkin?: number; drives?: number } }) {
   return (
     <ViewTabs
       label="Admissions by source"
       tabs={[
         { href: "/school-admin/admissions", label: "Online admissions", count: counts?.online, active: active === "online" },
         { href: "/school-admin/admissions/enquiries", label: "Walk-in admissions", count: counts?.walkin, active: active === "walkin" },
+        { href: "/school-admin/admissions/drives", label: "Admission drives", count: counts?.drives, active: active === "drives" },
       ]}
     />
   );

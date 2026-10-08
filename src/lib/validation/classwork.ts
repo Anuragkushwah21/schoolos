@@ -133,6 +133,8 @@ export const homeworkSchema = z
     homeworkId: optionalId,
     sectionId: id,
     subjectId: id,
+    /** One stream of a section split into streams; blank for the whole section. */
+    streamId: optionalId,
     title: requiredText("a title", 160),
     description: optionalText(4000),
     /** Step-by-step: "Complete Exercise 4.2, Questions 1-10." */

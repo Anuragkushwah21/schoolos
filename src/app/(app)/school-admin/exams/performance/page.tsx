@@ -21,7 +21,7 @@ export const metadata: Metadata = { title: "Student performance" };
  * subject, and why — by a rule the school sets and every row explains.
  */
 export default async function PerformancePage(props: PageProps<"/school-admin/exams/performance">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const session = await getCurrentSession(ctx);
   if (!session) return <SetupNotice title="Student performance" need="session" />;
   const search = await props.searchParams;
@@ -63,7 +63,11 @@ export default async function PerformancePage(props: PageProps<"/school-admin/ex
           <CardDescription>Applies to submitted tests and published exams, this session.</CardDescription>
         </CardHeader>
         <CardContent>
-          <AttentionSettingsForm percent={settings.percent} repeat={settings.repeat} />
+          {ctx.user.role === "SCHOOL_ADMIN" ? (
+            <AttentionSettingsForm percent={settings.percent} repeat={settings.repeat} />
+          ) : (
+            <p className="text-sm">{`A student needs attention below ${settings.percent}% in a subject, or when ${settings.repeat} of their last three tests are below it. The School Admin sets this rule.`}</p>
+          )}
         </CardContent>
       </Card>
     </>

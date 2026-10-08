@@ -20,7 +20,7 @@ export const GET = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }
 
 /**
  * Pay a batch for one month: `{ month, paidOn, method, reference?, entries:
- * [{ teacherId, amountMinor }] }`. All or nothing; nobody is paid twice.
+ * [{ teacherId | staffMemberId, amountMinor }] }`. All or nothing; nobody is paid twice.
  */
 export const POST = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx }) => {
   const input = await readJson(
@@ -30,7 +30,11 @@ export const POST = apiRoute({ roles: ["SCHOOL_ADMIN"] }, async ({ request, ctx 
       paidOn: dateQuery,
       method: z.enum(PAYMENT_METHODS),
       reference: z.string().trim().max(60).nullish().transform((value) => value || null),
-      entries: z.array(z.object({ teacherId: id, amountMinor: z.number().int().positive() })).min(1).max(500),
+      // Each entry names a teacher or a non-teaching staff member.
+      entries: z
+        .array(z.object({ teacherId: id.optional(), staffMemberId: id.optional(), amountMinor: z.number().int().positive() }))
+        .min(1)
+        .max(500),
     }),
   );
   return apiSuccess(await payPayroll(ctx, input), { status: 201 });

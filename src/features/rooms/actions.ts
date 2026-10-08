@@ -13,7 +13,7 @@ const REVALIDATE = { revalidate: ["/school-admin/academics/rooms", "/school-admi
 
 export async function saveRoomAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+    const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
     const { roomId, ...input } = parseFormData(roomSchema, formData);
     if (roomId) {
       await updateRoom(ctx, roomId, { roomId, ...input });
@@ -26,7 +26,7 @@ export async function saveRoomAction(_p: Result, formData: FormData): Promise<Re
 
 export async function setRoomActiveAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+    const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
     const { roomId, active } = parseFormData(roomStatusSchema, formData);
     const inUse = await setRoomActive(ctx, roomId, active);
     if (active) return successResult("Room activated.");
@@ -40,7 +40,7 @@ export async function setRoomActiveAction(_p: Result, formData: FormData): Promi
 
 export async function deleteRoomAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+    const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
     const { roomId } = parseFormData(roomIdSchema, formData);
     await deleteRoom(ctx, roomId);
     return successResult("Room deleted.");

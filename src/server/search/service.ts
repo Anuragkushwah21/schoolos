@@ -8,6 +8,7 @@ import { sectionLabel } from "@/server/academics/structure";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { staffHolds } from "@/server/auth/staff-access";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * One search box across the school's people and classes.
@@ -43,13 +44,13 @@ function nameWhere(q: string) {
 }
 
 export async function searchSchool(ctx: TenantContext, raw: string): Promise<SearchHit[]> {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "TEACHER", "NON_TEACHING_STAFF");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PRINCIPAL", "TEACHER", "NON_TEACHING_STAFF");
   const q = raw.trim().slice(0, 60);
   if (q.length < SEARCH_MIN_LENGTH) return [];
 
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
 
-  if (ctx.user.role === "SCHOOL_ADMIN") return adminSearch(ctx, q, session?.id ?? null);
+  if (isSchoolLeader(ctx.user.role)) return adminSearch(ctx, q, session?.id ?? null);
   if (ctx.user.role === "TEACHER") return teacherSearch(ctx, q, session?.id ?? null);
   // Non-teaching staff: only with the student directory granted.
   if (!(await staffHolds(ctx, "students.directory"))) return [];

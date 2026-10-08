@@ -79,8 +79,8 @@ export async function validateDocument(file: File): Promise<ValidatedDocument> {
 }
 
 /** Write a validated document and return the key it is stored under. */
-export async function storeDocument(schoolId: string, document: ValidatedDocument): Promise<string> {
-  const key = `${schoolId}/lesson-materials/${randomUUID()}.pdf`;
+export async function storeDocument(schoolId: string, document: ValidatedDocument, folder: "lesson-materials" | "admission-documents" = "lesson-materials"): Promise<string> {
+  const key = `${schoolId}/${folder}/${randomUUID()}.pdf`;
   const full = resolveKey(key);
   await mkdir(path.dirname(full), { recursive: true });
   await writeFile(full, document.bytes, { flag: "wx" });
@@ -184,5 +184,35 @@ export async function storeImage(schoolId: string, image: ValidatedImage): Promi
   const full = resolveKey(key);
   await mkdir(path.dirname(full), { recursive: true });
   await writeFile(full, image.bytes, { flag: "wx" });
+  return key;
+}
+
+// -----------------------------------------------------------------------------
+// Staff documents: PDF or a scanned image
+// -----------------------------------------------------------------------------
+
+export type ValidatedRecordFile = { bytes: Buffer; fileName: string; mimeType: "application/pdf" | "image/jpeg" | "image/png"; ext: "pdf" | "jpg" | "png"; size: number };
+
+/**
+ * A record document — a PDF, or a JPG / PNG scan (an Aadhaar photo, say) — of
+ * at most 10 MB, judged by its own first bytes, never its name.
+ */
+export async function validateRecordFile(file: File): Promise<ValidatedRecordFile> {
+  if (file.size === 0) throw new AppError("VALIDATION", "That file is empty.");
+  if (file.size > MAX_DOCUMENT_BYTES) throw new AppError("VALIDATION", "That file is too large. The limit is 10 MB.");
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const fileName = path.basename(file.name || "document").replace(/[^\w.\- ()]+/g, "_").slice(0, 120);
+  if (bytes.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC)) return { bytes, fileName, mimeType: "application/pdf", ext: "pdf", size: bytes.length };
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { bytes, fileName, mimeType: "image/jpeg", ext: "jpg", size: bytes.length };
+  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { bytes, fileName, mimeType: "image/png", ext: "png", size: bytes.length };
+  throw new AppError("VALIDATION", "Upload a PDF, JPG or PNG file.");
+}
+
+/** Write a validated record file under the school's private folder and return its key. */
+export async function storeRecordFile(schoolId: string, folder: "staff-documents", file: ValidatedRecordFile): Promise<string> {
+  const key = `${schoolId}/${folder}/${randomUUID()}.${file.ext}`;
+  const full = resolveKey(key);
+  await mkdir(path.dirname(full), { recursive: true });
+  await writeFile(full, file.bytes, { flag: "wx" });
   return key;
 }

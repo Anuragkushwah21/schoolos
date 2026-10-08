@@ -20,7 +20,7 @@ export const metadata: Metadata = { title: "Apply agreed discount" };
  * Nothing is written until the office confirms.
  */
 export default async function ApplyDiscountPage(props: PageProps<"/school-admin/admissions/enquiries/[enquiryId]/fees">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { enquiryId } = await props.params;
   const { enquiry, rows } = await orNotFound(concessionPlan(ctx, enquiryId));
   const pending = rows.filter((row) => row.discussed && !row.appliedAt && row.agreedDiscountMinor > 0);

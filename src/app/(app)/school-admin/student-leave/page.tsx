@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { CalendarOffIcon, CheckCircle2Icon, HourglassIcon, XCircleIcon } from "lucide-react";
+import { CalendarOffIcon, CheckCircle2Icon, HourglassIcon, ShieldCheckIcon, XCircleIcon } from "lucide-react";
 
 import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
@@ -18,7 +18,7 @@ export const metadata: Metadata = { title: "Student leave" };
 
 /** "All Student Leave Requests": every request in the school, with the power to decide or overturn. */
 export default async function AdminStudentLeavePage(props: PageProps<"/school-admin/student-leave">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const status = enumParam(search.status, STUDENT_LEAVE_STATUSES);
   const filters = { status, q: param(search.q), sectionId: param(search.section) };
@@ -33,12 +33,17 @@ export default async function AdminStudentLeavePage(props: PageProps<"/school-ad
 
   return (
     <>
-      <PageHeader icon={CalendarOffIcon} tone="blue" title="Leave Management" description="Student leave requests. Class teachers approve their students' leave; you can see, decide or change any of them. Staff leave is in the next tab." />
+      <PageHeader
+        icon={CalendarOffIcon}
+        tone="blue"
+        title="Student leave"
+        description="Every leave request from parents and students. The class teacher reviews it first, then you give the final approval. You can also decide any request yourself. Staff leave is in the next tab."
+      />
       <div className="mb-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <StatCard tone="amber" icon={HourglassIcon} label="Pending" value={count("PENDING")} />
+        <StatCard tone="red" icon={ShieldCheckIcon} label="Waiting for your approval" value={count("TEACHER_APPROVED")} hint="approved by the class teacher" href="/school-admin/student-leave?status=TEACHER_APPROVED" />
+        <StatCard tone="amber" icon={HourglassIcon} label="With class teachers" value={count("PENDING")} hint="not reviewed yet" href="/school-admin/student-leave?status=PENDING" />
         <StatCard tone="green" icon={CheckCircle2Icon} label="Approved" value={count("APPROVED")} />
-        <StatCard tone="red" icon={XCircleIcon} label="Rejected" value={count("REJECTED")} />
-        <StatCard tone="neutral" icon={CalendarOffIcon} label="Cancelled" value={count("CANCELLED")} />
+        <StatCard tone="neutral" icon={XCircleIcon} label="Rejected / cancelled" value={count("REJECTED") + count("CANCELLED")} />
       </div>
       <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
         <div className="flex flex-col gap-4">
@@ -46,7 +51,8 @@ export default async function AdminStudentLeavePage(props: PageProps<"/school-ad
             label="Leave requests by status"
             tabs={[
               { href: "/school-admin/student-leave", label: "All requests", count: all.length, active: !status },
-              { href: "/school-admin/student-leave?status=PENDING", label: "Pending", count: count("PENDING"), active: status === "PENDING" },
+              { href: "/school-admin/student-leave?status=TEACHER_APPROVED", label: "Waiting for you", count: count("TEACHER_APPROVED"), active: status === "TEACHER_APPROVED" },
+              { href: "/school-admin/student-leave?status=PENDING", label: "With class teacher", count: count("PENDING"), active: status === "PENDING" },
               { href: "/school-admin/student-leave?status=APPROVED", label: "Approved", count: count("APPROVED"), active: status === "APPROVED" },
               { href: "/school-admin/student-leave?status=REJECTED", label: "Rejected", count: count("REJECTED"), active: status === "REJECTED" },
             ]}
@@ -59,8 +65,9 @@ export default async function AdminStudentLeavePage(props: PageProps<"/school-ad
               { name: "section", label: "Class", defaultValue: filters.sectionId, allLabel: "All classes", options: sections },
             ]}
           />
-          <LeaveList rows={rows} />
+          <LeaveList rows={rows} admin />
         </div>
+        {ctx.user.role === "SCHOOL_ADMIN" ? (
         <Card className="h-fit">
           <CardHeader>
             <CardTitle>Leave rules</CardTitle>
@@ -70,6 +77,7 @@ export default async function AdminStudentLeavePage(props: PageProps<"/school-ad
             <LeaveSettingsForm backdateDays={settings.backdateDays} />
           </CardContent>
         </Card>
+        ) : null}
       </div>
     </>
   );

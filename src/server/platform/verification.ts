@@ -275,11 +275,3 @@ export async function verifyCode(
     ipAddress: meta.ipAddress ?? null,
   });
 }
-
-/** Housekeeping: drop codes that are long dead. */
-export async function deleteExpiredCodes(): Promise<number> {
-  const { count } = await prisma.emailVerification.deleteMany({
-    where: { expiresAt: { lte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
-  });
-  return count;
-}

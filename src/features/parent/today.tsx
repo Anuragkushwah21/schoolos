@@ -1,6 +1,6 @@
 import type { Route } from "next";
 import Link from "next/link";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon } from "lucide-react";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { StatCard } from "@/components/shared/stat-card";
@@ -79,16 +79,16 @@ export function TodaysUpdate({
             }
             hint={today.attendance?.remarks ?? today.closure?.label ?? undefined}
           />
-          <StatCard label="Classes" value={tally.scheduled} hint="on the timetable" />
+          <StatCard label="Classes today" value={tally.scheduled} />
           <StatCard
-            label="Written up"
+            label="Classes taught"
             value={tally.completed + tally.substitute}
-            hint={tally.notRecorded ? `${tally.notRecorded} still to come` : "all of them"}
+            hint={tally.notRecorded ? `${tally.notRecorded} still to come` : undefined}
           />
           <StatCard
-            label="Missed"
+            label="Classes missed"
             value={tally.missed + tally.cancelled}
-            hint={tally.substitute ? `${tally.substitute} covered` : undefined}
+            hint={tally.substitute ? `${tally.substitute} taken by another teacher` : undefined}
           />
         </div>
 
@@ -218,6 +218,8 @@ function Panel({
  */
 export type FeedAlert = Pick<ParentAlert, "title" | "detail" | "href" | "tone"> & { kind: string; childId: string | null };
 
+const MAX_ALERTS = 5;
+
 export function AlertList({ alerts, emptyText = "Nothing needs your attention today." }: { alerts: FeedAlert[]; emptyText?: string }) {
   if (alerts.length === 0) {
     return (
@@ -234,27 +236,40 @@ export function AlertList({ alerts, emptyText = "Nothing needs your attention to
     info: "var(--viz-neutral, var(--muted-foreground))",
   } as const;
 
+  // A long list is skimmed past; the rest are one tap away in Notifications.
+  const shown = alerts.slice(0, MAX_ALERTS);
+  const row = (alert: FeedAlert) => (
+    <>
+      <span className="mt-1 size-2.5 shrink-0 rounded-full" style={{ backgroundColor: TONE_COLOR[alert.tone] }} aria-hidden />
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold">{alert.title}</span>
+        <span className="text-muted-foreground block text-xs">{alert.detail}</span>
+      </span>
+      {alert.href ? <ChevronRightIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden /> : null}
+    </>
+  );
+
   return (
-    <ul className="divide-y">
-      {alerts.map((alert, index) => (
-        <li key={`${alert.kind}-${alert.childId ?? "school"}-${index}`} className="flex gap-3 py-2.5">
-          <span
-            className="mt-1.5 size-2 shrink-0 rounded-full"
-            style={{ backgroundColor: TONE_COLOR[alert.tone] }}
-            aria-hidden
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium">{alert.title}</span>
-            <span className="text-muted-foreground block text-xs">{alert.detail}</span>
-          </span>
-          {alert.href ? (
-            <Button asChild variant="ghost" size="xs">
-              <Link href={alert.href as Route}>Open</Link>
-            </Button>
-          ) : null}
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="-mx-2 divide-y">
+        {shown.map((alert, index) => (
+          <li key={`${alert.kind}-${alert.childId ?? "school"}-${index}`}>
+            {alert.href ? (
+              <Link href={alert.href as Route} className="hover:bg-muted/50 flex min-h-14 items-start gap-3 rounded-xl px-2 py-3">
+                {row(alert)}
+              </Link>
+            ) : (
+              <div className="flex min-h-14 items-start gap-3 px-2 py-3">{row(alert)}</div>
+            )}
+          </li>
+        ))}
+      </ul>
+      {alerts.length > shown.length ? (
+        <Button asChild variant="outline" size="sm" className="mt-3 w-full">
+          <Link href="/notifications">{`See all ${alerts.length}`}</Link>
+        </Button>
+      ) : null}
+    </>
   );
 }
 

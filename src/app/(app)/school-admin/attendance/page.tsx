@@ -13,7 +13,7 @@ import { getCurrentSession, sectionOptions } from "@/server/academics/structure"
 export const metadata: Metadata = { title: "Attendance" };
 
 export default async function AdminAttendancePage(props: PageProps<"/school-admin/attendance">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const session = await getCurrentSession(ctx);
 

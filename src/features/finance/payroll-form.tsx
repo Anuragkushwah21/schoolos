@@ -10,14 +10,17 @@ import { payPayrollAction } from "./actions";
 import { rupees, toRupeeInput } from "./money";
 
 type Row = {
-  teacherId: string;
+  /** "T:<teacherId>" or "S:<staffMemberId>". */
+  key: string;
+  /** "Teacher", or the staff role. */
+  role: string;
   name: string;
   employeeId: string;
   designation: string | null;
   structure: { salaryType: string; baseMinor: number; allowancesMinor: number; deductionsMinor: number } | null;
   dueMinor: number | null;
   unpaidLeaveDays: number;
-  payment: { amountMinor: number; paidOn: string; method: string } | null;
+  payment: { amountMinor: number; paidOn: string; method: string; paidBy: string | null } | null;
 };
 
 const METHODS = [
@@ -30,7 +33,7 @@ const METHODS = [
 
 function PayrollRow({ row, readOnly }: { row: Row; readOnly: boolean }) {
   const { fieldErrors } = useFormContext();
-  const errors = fieldErrors?.[`amount:${row.teacherId}`];
+  const errors = fieldErrors?.[`amount:${row.key}`];
   return (
     <tr className="border-t align-top">
       <td className="px-3 py-2">
@@ -38,7 +41,7 @@ function PayrollRow({ row, readOnly }: { row: Row; readOnly: boolean }) {
           <input
             type="checkbox"
             name="pay"
-            value={row.teacherId}
+            value={row.key}
             defaultChecked={row.dueMinor !== null}
             aria-label={`Pay ${row.name}`}
             className="accent-primary size-4"
@@ -48,8 +51,8 @@ function PayrollRow({ row, readOnly }: { row: Row; readOnly: boolean }) {
       <td className="px-3 py-2">
         <span className="font-medium">{row.name}</span>
         <span className="text-muted-foreground block text-xs">
-          {row.employeeId}
-          {row.designation ? ` · ${row.designation}` : ""}
+          {row.employeeId} · {row.role}
+          {row.designation && row.designation !== row.role ? ` · ${row.designation}` : ""}
         </span>
       </td>
       <td className="text-muted-foreground px-3 py-2 text-xs tabular-nums">
@@ -68,20 +71,21 @@ function PayrollRow({ row, readOnly }: { row: Row; readOnly: boolean }) {
           <span className="flex flex-col gap-1">
             <span className="tabular-nums">{rupees(row.payment.amountMinor)}</span>
             <StatusBadge status="PAID" label={`Paid ${row.payment.paidOn}`} tone="positive" />
+            {row.payment.paidBy ? <span className="text-muted-foreground block text-xs">{`by ${row.payment.paidBy}`}</span> : null}
           </span>
         ) : readOnly ? (
           <span className="text-muted-foreground tabular-nums">{row.dueMinor !== null ? `${rupees(row.dueMinor)} due` : "—"}</span>
         ) : (
           <>
             <Input
-              name={`amount:${row.teacherId}`}
+              name={`amount:${row.key}`}
               aria-label={`Amount for ${row.name}`}
               inputMode="decimal"
               defaultValue={row.dueMinor !== null ? toRupeeInput(row.dueMinor) : ""}
               placeholder="₹"
               className="w-32"
             />
-            <FieldError id={`amount-${row.teacherId}-error`} messages={errors} />
+            <FieldError id={`amount-${row.key.replace(":", "-")}-error`} messages={errors} />
           </>
         )}
       </td>
@@ -102,7 +106,7 @@ export function PayrollForm({ month, today, rows, readOnly = false }: { month: s
               <th className="w-10 px-3 py-2">
                 <span className="sr-only">Select</span>
               </th>
-              <th className="px-3 py-2 font-medium">Teacher</th>
+              <th className="px-3 py-2 font-medium">Teacher / staff</th>
               <th className="px-3 py-2 font-medium">Structure (base + allowances − deductions)</th>
               <th className="px-3 py-2 font-medium">Leave</th>
               <th className="px-3 py-2 font-medium">Amount (₹)</th>
@@ -110,7 +114,7 @@ export function PayrollForm({ month, today, rows, readOnly = false }: { month: s
           </thead>
           <tbody>
             {rows.map((row) => (
-              <PayrollRow key={row.teacherId} row={row} readOnly={readOnly} />
+              <PayrollRow key={row.key} row={row} readOnly={readOnly} />
             ))}
           </tbody>
         </table>

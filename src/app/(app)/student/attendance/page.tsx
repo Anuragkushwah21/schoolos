@@ -12,6 +12,7 @@ import { formatPercent } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
 import { getMyAttendance } from "@/server/student/me";
+import { attendedDays } from "@/lib/attendance";
 
 export const metadata: Metadata = { title: "Attendance" };
 
@@ -40,16 +41,17 @@ export default async function StudentAttendancePage() {
         </div>
       ) : null}
 
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-6">
         <StatCard
           label="Attended"
-          value={share === null ? "—" : formatPercent(counts.PRESENT + counts.LATE, counts.total)}
+          value={share === null ? "—" : formatPercent(attendedDays(counts), counts.total)}
           hint={`${counts.total} days marked`}
         />
         <StatCard label="Present" value={counts.PRESENT} />
         <StatCard label="Absent" value={counts.ABSENT} />
         <StatCard label="Late" value={counts.LATE} />
-        <StatCard label="Excused" value={counts.EXCUSED} />
+        <StatCard label="Half day" value={counts.HALF_DAY} hint="counts as half a day" />
+        <StatCard label="Leave" value={counts.EXCUSED} />
       </div>
 
       {counts.total === 0 ? (
@@ -62,14 +64,15 @@ export default async function StudentAttendancePage() {
             <CardContent>
               <ChartFigure
                 title="Month by month"
-                subtitle="Share of marked days attended. Present and late both count as attended."
+                subtitle="Share of marked days attended. Present and late count as attended; a half day counts as half."
                 table={{
-                  head: ["Month", "Attended", "Present", "Late", "Excused", "Absent", "Marked"],
+                  head: ["Month", "Attended", "Present", "Late", "Half day", "Leave", "Absent", "Marked"],
                   rows: data.months.map((month) => [
                     month.fullLabel,
                     month.share === null ? "—" : `${Math.round(month.share * 100)}%`,
                     month.counts.PRESENT,
                     month.counts.LATE,
+                    month.counts.HALF_DAY,
                     month.counts.EXCUSED,
                     month.counts.ABSENT,
                     month.counts.total,
@@ -81,7 +84,7 @@ export default async function StudentAttendancePage() {
                     key: month.key,
                     label: month.label,
                     value: month.share === null ? 0 : Math.round(month.share * 100),
-                    detail: `${month.counts.PRESENT + month.counts.LATE} of ${month.counts.total} days`,
+                    detail: `${attendedDays(month.counts)} of ${month.counts.total} days`,
                   }))}
                   formatValue={(value) => `${value}%`}
                 />

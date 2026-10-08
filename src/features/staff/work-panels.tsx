@@ -1,13 +1,12 @@
 import type { Route } from "next";
 import Link from "next/link";
-import { BusIcon, ClipboardCheckIcon, WalletIcon } from "lucide-react";
+import { BusIcon, ClipboardCheckIcon } from "lucide-react";
 
 import { StatusBadge } from "@/components/shared/status-badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate, minutesToTime } from "@/lib/dates";
-import { formatMoney, humanize } from "@/lib/format";
-import type { feeDeskToday, myStaffAttendance } from "@/server/staff/portal";
+import { humanize } from "@/lib/format";
+import type { myStaffAttendance } from "@/server/staff/portal";
 import type { myAssignedRoutes } from "@/server/transport/driver";
 
 /**
@@ -46,65 +45,6 @@ export function MyAttendanceCard({ attendance, todayIso }: { attendance: Awaited
         <Link href="/staff/attendance" className="text-primary text-xs font-medium hover:underline">
           Last 30 days →
         </Link>
-      </CardContent>
-    </Card>
-  );
-}
-
-/** Today's collection at the fee desk. */
-export function FeeDeskTodayPanel({ desk, canCollect = true }: { desk: Awaited<ReturnType<typeof feeDeskToday>>; canCollect?: boolean }) {
-  return (
-    <section aria-labelledby="fees-today" className="mb-6 flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="fees-today" className="text-base font-semibold">
-          Today&apos;s fee desk
-        </h2>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild size="sm">
-            <Link href="/staff/fees">
-              <WalletIcon aria-hidden />
-              {canCollect ? "Collect fee" : "Pending fees"}
-            </Link>
-          </Button>
-          {canCollect ? (
-            <Button asChild size="sm" variant="outline">
-              <Link href="/staff/fees/family">Family payment</Link>
-            </Button>
-          ) : null}
-        </div>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Collected today" value={formatMoney(desk.totalMinor)} hint={`${desk.receipts} ${desk.receipts === 1 ? "receipt" : "receipts"}`} />
-        <Stat label="Taken by you" value={formatMoney(desk.myTotalMinor)} hint={`${desk.myReceipts} ${desk.myReceipts === 1 ? "receipt" : "receipts"}`} />
-        <Card size="sm" className="sm:row-span-1">
-          <CardContent>
-            <p className="text-muted-foreground mb-1 text-xs">Latest receipts</p>
-            {desk.recent.length ? (
-              <ul className="flex flex-col gap-1 text-sm">
-                {desk.recent.slice(0, 3).map((row) => (
-                  <li key={row.id} className="flex items-baseline justify-between gap-2">
-                    <span className="min-w-0 truncate">{row.student}</span>
-                    <span className="tabular-nums">{formatMoney(row.amountMinor)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-muted-foreground text-sm">None yet today.</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </section>
-  );
-}
-
-function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
-  return (
-    <Card size="sm">
-      <CardContent>
-        <p className="text-muted-foreground text-xs">{label}</p>
-        <p className="text-2xl font-semibold tabular-nums">{value}</p>
-        <p className="text-muted-foreground text-xs">{hint}</p>
       </CardContent>
     </Card>
   );

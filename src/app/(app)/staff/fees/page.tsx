@@ -1,5 +1,5 @@
 import { WalletIcon } from "lucide-react";
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 
 import { PageHeader } from "@/components/shared/page-header";
 import { SetupNotice } from "@/components/shared/setup-notice";
@@ -13,21 +13,31 @@ import { param } from "@/lib/search-params";
 import { getCurrentSession } from "@/server/academics/structure";
 import { requireTenant } from "@/server/auth/current-user";
 import { requireStaffModule, staffHolds } from "@/server/auth/staff-access";
-import { listFeePositions, readStudentFees, suggestReceiptNo } from "@/server/finance/fees";
+import { toDateInput, today } from "@/lib/dates";
+import { listFeeHeads, listFeePositions, readStudentFees, suggestReceiptNo } from "@/server/finance/fees";
+import { StudentCharges } from "@/features/finance/student-charges";
 
 export const metadata: Metadata = { title: "Collect fees" };
 
 /**
  * The fee desk for staff with "Collect fees" — or, with "Fee dashboard" only,
- * the same screen read-only.
- * Taking payments and printing receipts only — charging fees, voiding
- * receipts, expenses and salaries stay with the School Admin.
+ * the same screen read-only. With "Fee structure & charges" (the Accountant's
+ * default) the desk also adds a fee to the student in front of them — so a
+ * family that walks in to pay a fee not yet charged can be charged and then
+ * collected from on the same screen — and removes a wrong charge.
+ * "Give fee concessions" adds the concession buttons. The School Admin keeps
+ * all of it.
  */
 export default async function StaffFeesPage(props: PageProps<"/staff/fees">) {
   const ctx = await requireTenant("NON_TEACHING_STAFF");
-  await requireStaffModule(ctx, ["fees.view", "fees.collect"]);
+  await requireStaffModule(ctx, ["fees.view", "fees.collect", "fees.manage"]);
   // "fees.view" alone: the same desk, read-only — find a student, see what they owe.
-  const canCollect = await staffHolds(ctx, "fees.collect");
+  const [canCollect, canManage, canConcession, canReport] = await Promise.all([
+    staffHolds(ctx, "fees.collect"),
+    staffHolds(ctx, "fees.manage"),
+    staffHolds(ctx, "fees.concessions"),
+    staffHolds(ctx, "fees.reports"),
+  ]);
   const session = await getCurrentSession(ctx);
   if (!session) return <SetupNotice title="Collect fees" need="session" />;
 
@@ -45,7 +55,13 @@ export default async function StaffFeesPage(props: PageProps<"/staff/fees">) {
   ]);
   const selected =
     positions.rows.find((row) => row.studentId === studentId) ?? (q && positions.rows.length === 1 ? positions.rows[0] : null);
-  const account = selected ? await readStudentFees(ctx, selected.studentId, session.id) : null;
+  const [account, heads, previous] = selected
+    ? await Promise.all([
+        readStudentFees(ctx, selected.studentId, session.id),
+        canManage ? listFeeHeads(ctx) : Promise.resolve([]),
+        previousDues(ctx, selected.studentId),
+      ])
+    : [null, [], []];
 
   return (
     <>
@@ -55,10 +71,24 @@ export default async function StaffFeesPage(props: PageProps<"/staff/fees">) {
         title={canCollect ? "Collect fees" : "Fees"}
         description={canCollect ? `${session.name} · take a payment and print the receipt` : `${session.name} · pending fees and payment history`}
         actions={
-          canCollect ? (
-            <Button asChild variant="outline">
-              <Link href="/staff/fees/family">Family payment</Link>
-            </Button>
+          canCollect || canManage || canReport ? (
+            <>
+              {canReport ? (
+                <Button asChild variant="outline">
+                  <Link href={"/staff/fees/reports" as Route}>Fee reports</Link>
+                </Button>
+              ) : null}
+              {canManage ? (
+                <Button asChild variant="outline">
+                  <Link href="/staff/fees/structure">Fee structure &amp; charges</Link>
+                </Button>
+              ) : null}
+              {canCollect ? (
+                <Button asChild variant="outline">
+                  <Link href="/staff/fees/family">Family payment</Link>
+                </Button>
+              ) : null}
+            </>
           ) : undefined
         }
       />
@@ -73,7 +103,28 @@ export default async function StaffFeesPage(props: PageProps<"/staff/fees">) {
           justRecorded={justRecorded}
           canCollect={canCollect}
         />
-        {selected && account ? <StudentFeeAccount studentId={selected.studentId} account={account} previous={await previousDues(ctx, selected.studentId)} canManage={false} /> : null}
+        {selected && account && canManage ? (
+          <StudentCharges
+            studentId={selected.studentId}
+            studentName={selected.name}
+            charges={account.charges}
+            status={account.summary.status}
+            heads={heads.filter((head) => head.isActive).map((head) => ({ value: head.id, label: head.name }))}
+            canManage
+            defaultDueOn={toDateInput(today())}
+          />
+        ) : null}
+        {selected && account ? (
+          <StudentFeeAccount
+              ledgerHref={`/staff/fees/ledger/${selected.studentId}`}
+            studentId={selected.studentId}
+            account={account}
+            previous={previous}
+            canManage={false}
+            canConcession={canConcession}
+            canCarryForward={canManage}
+          />
+        ) : null}
       </div>
     </>
   );

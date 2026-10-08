@@ -34,6 +34,7 @@ import { listRoutes } from "@/server/operations/transport";
 import { applyForLeave, cancelLeave, decideLeave, listLeaveRequests, listMyLeave } from "@/server/staff/leave";
 
 import { adminOf, contextFor, teacherOf } from "../helpers/context";
+import { owe } from "../helpers/fees";
 import { type SeededSchool, createIsolationFixture, destroyIsolationFixture } from "../helpers/isolation-fixture";
 
 let schoolA: SeededSchool;
@@ -67,6 +68,8 @@ const leave = (start: Date, end: Date) =>
 
 beforeAll(async () => {
   ({ schoolA, schoolB } = await createIsolationFixture());
+  // A payment is only taken against a fee: the first two students owe one.
+  for (const studentId of schoolA.studentIds.slice(0, 2)) await owe(adminOf(schoolA), studentId, 1_00_000_00);
   accountant = await addStaff(schoolA, "accountant", ["COLLECT_FEES"]);
   librarian = await addStaff(schoolA, "librarian", ["MANAGE_LIBRARY"]);
   reader = await addStaff(schoolA, "reader", ["VIEW_LIBRARY"]);

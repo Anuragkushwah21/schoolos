@@ -17,18 +17,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { removeChargeAction, removePaymentAction } from "@/features/finance/actions";
+import { StudentCharges } from "@/features/finance/student-charges";
 import { FeeDesk } from "@/features/finance/fee-desk";
 import { StudentFeeAccount } from "@/features/finance/family-views";
 import { previousDues } from "@/server/finance/carry-forward";
 import { ReceiptLinks } from "@/features/finance/receipt-links";
-import { FEE_STATUS_LABEL, FEE_STATUS_TONE, rupees } from "@/features/finance/money";
-import { formatDate } from "@/lib/dates";
+import { VoidPaymentForm } from "@/features/finance/forms";
+import { rupees } from "@/features/finance/money";
+import { formatDate, toDateInput, today } from "@/lib/dates";
 import { humanize } from "@/lib/format";
 import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession } from "@/server/academics/structure";
 import {
+  listFeeHeads,
   listFeePositions,
   listPayments,
   readStudentFees,
@@ -55,7 +57,7 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
   const studentId = param(search.student);
   const receiptId = param(search.receipt);
 
-  const [positions, payments, receiptNo, justRecorded] = await Promise.all([
+  const [positions, payments, receiptNo, justRecorded, heads] = await Promise.all([
     listFeePositions(ctx, { q }),
     listPayments(ctx, { academicSessionId: session.id, take: 50 }),
     suggestReceiptNo(ctx),
@@ -67,6 +69,7 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
           select: { id: true, receiptNo: true, amountMinor: true },
         })
       : Promise.resolve(null),
+    listFeeHeads(ctx),
   ]);
 
   // The student being paid for: the one asked for if they are in this school's
@@ -106,7 +109,7 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
             receiptNo={receiptNo}
             justRecorded={justRecorded}
           />
-          {selected && account ? <StudentFeeAccount studentId={selected.studentId} account={account} previous={await previousDues(ctx, selected.studentId)} canManage /> : null}
+          {selected && account ? <StudentFeeAccount studentId={selected.studentId} account={account} previous={await previousDues(ctx, selected.studentId)} canManage ledgerHref={`/school-admin/finance/ledger/${selected.studentId}`} /> : null}
         </div>
 
         <Card>
@@ -153,21 +156,7 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
                         <TableCell className="text-right whitespace-nowrap">
                           <ReceiptLinks paymentId={payment.id} receiptNo={payment.receiptNo} />
                           {payment.voidedAt ? null : (
-                          <ActionButton
-                            action={removePaymentAction}
-                            fields={{ paymentId: payment.id }}
-                            variant="ghost"
-                            size="xs"
-                            pendingLabel="Voiding…"
-                            confirm={{
-                              title: `Void receipt ${payment.receiptNo}?`,
-                              description:
-                                "For a receipt entered by mistake. It stays on record marked VOID, and the family's pending amount goes back up by this much.",
-                              confirmLabel: "Void receipt",
-                            }}
-                          >
-                            Void
-                          </ActionButton>
+                          <VoidPaymentForm paymentId={payment.id} receiptNo={payment.receiptNo} />
                           )}
                         </TableCell>
                       </TableRow>
@@ -182,51 +171,18 @@ export default async function PaymentsPage(props: PageProps<"/school-admin/finan
         </Card>
       </div>
 
-      {selected && account && account.charges.length ? (
-        <Card className="mt-6">
-          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle>{selected.name} — breakdown</CardTitle>
-              <CardDescription>What has been charged this session.</CardDescription>
-            </div>
-            <StatusBadge
-              status={account.summary.status}
-              label={FEE_STATUS_LABEL[account.summary.status]}
-              tone={FEE_STATUS_TONE[account.summary.status]}
-            />
-          </CardHeader>
-          <CardContent>
-            <ul className="divide-y">
-              {account.charges.map((charge) => (
-                <li key={charge.id} className="flex items-center justify-between gap-3 py-2">
-                  <span className="min-w-0 text-sm">
-                    <span className="font-medium">{charge.feeHead.name}</span>
-                    <span className="text-muted-foreground block text-xs">
-                      due {formatDate(charge.dueOn)}
-                    </span>
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <span className="text-sm tabular-nums">{rupees(charge.amountMinor)}</span>
-                    <ActionButton
-                      action={removeChargeAction}
-                      fields={{ chargeId: charge.id }}
-                      variant="ghost"
-                      size="xs"
-                      pendingLabel="Removing…"
-                      confirm={{
-                        title: `Remove ${charge.feeHead.name} from ${selected.name}?`,
-                        description: "The family's total fee and pending amount go down by this much. Payments already recorded are not touched.",
-                        confirmLabel: "Remove",
-                      }}
-                    >
-                      Remove
-                    </ActionButton>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+      {selected && account ? (
+        <div className="mt-6">
+          <StudentCharges
+            studentId={selected.studentId}
+            studentName={selected.name}
+            charges={account.charges}
+            status={account.summary.status}
+            heads={heads.filter((head) => head.isActive).map((head) => ({ value: head.id, label: head.name }))}
+            canManage
+            defaultDueOn={toDateInput(today())}
+          />
+        </div>
       ) : null}
     </>
   );

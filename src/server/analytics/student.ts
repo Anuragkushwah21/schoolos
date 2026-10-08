@@ -1,5 +1,6 @@
 import type { AttendanceStatus } from "@/generated/prisma/enums";
 import { emptyCounts, attendedShare, type AttendanceCounts } from "@/server/attendance/service";
+import { attendedValue } from "@/lib/attendance";
 
 /**
  * Shaping one person's attendance for their own dashboard.
@@ -49,7 +50,7 @@ export function monthlyAttendance(
     });
 }
 
-/** The last `take` marked days as 1 (attended) or 0, oldest first, for a sparkline. */
+/** The last `take` marked days as 1 (attended), 0.5 (half day) or 0, oldest first, for a sparkline. */
 export function attendanceSpark(
   rows: Array<{ date: Date; status: AttendanceStatus }>,
   take = 12,
@@ -57,5 +58,5 @@ export function attendanceSpark(
   return [...rows]
     .sort((a, b) => a.date.getTime() - b.date.getTime())
     .slice(-take)
-    .map((row) => (row.status === "PRESENT" || row.status === "LATE" ? 1 : 0));
+    .map((row) => attendedValue(row.status));
 }

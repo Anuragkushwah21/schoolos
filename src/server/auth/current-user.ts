@@ -2,7 +2,7 @@ import "server-only";
 
 import { cache } from "react";
 import { cookies } from "next/headers";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 
 import type { UserRole } from "@/generated/prisma/enums";
 import { ForbiddenError, UnauthenticatedError } from "@/lib/errors";
@@ -54,6 +54,8 @@ export async function requireRole(
 ): Promise<SessionUser> {
   const user = await requireUser();
   if (!roles.includes(user.role)) redirect(roleHomePath(user.role));
+  // A default password (a seeded or issued one) is changed before anything else.
+  if (user.mustChangePassword) redirect("/account?changePassword=required");
   return user;
 }
 
@@ -80,6 +82,7 @@ export async function requireTenant(
   ...roles: readonly UserRole[]
 ): Promise<TenantContext> {
   const user = roles.length ? await requireRole(...roles) : await requireUser();
+  if (user.mustChangePassword) redirect("/account?changePassword=required");
 
   // SUPER_ADMIN has no school; platform pages use requireSuperAdmin instead.
   if (!user.schoolId) redirect(roleHomePath(user.role));
@@ -91,18 +94,6 @@ export async function requireTenant(
     schoolName: user.schoolName ?? "",
     db: forSchool(user.schoolId),
   };
-}
-
-/**
- * Assert that a lookup scoped to the tenant actually found something.
- *
- * Renders the 404 page when it did not. A record belonging to another school
- * is indistinguishable from one that does not exist, so probing ids never
- * confirms what another school holds.
- */
-export function assertFound<T>(record: T | null | undefined): T {
-  if (record === null || record === undefined) notFound();
-  return record;
 }
 
 /**
@@ -124,6 +115,7 @@ export async function requireRoleForAction(
 ): Promise<SessionUser> {
   const user = await requireUserForAction();
   if (!roles.includes(user.role)) throw new ForbiddenError();
+  if (user.mustChangePassword) throw new ForbiddenError("Change your password first, on My account.");
   return user;
 }
 
@@ -133,6 +125,7 @@ export async function requireTenantForAction(
   const user = roles.length
     ? await requireRoleForAction(...roles)
     : await requireUserForAction();
+  if (user.mustChangePassword) throw new ForbiddenError("Change your password first, on My account.");
 
   if (!user.schoolId) throw new ForbiddenError();
 

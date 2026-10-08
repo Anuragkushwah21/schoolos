@@ -12,7 +12,7 @@ import { orNotFound } from "@/server/page-helpers";
 export const metadata: Metadata = { title: "Edit notice" };
 
 export default async function EditNoticePage(props: PageProps<"/school-admin/notices/[noticeId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { noticeId } = await props.params;
   const [notice, options] = await Promise.all([orNotFound(getNotice(ctx, noticeId)), noticeTargetOptions(ctx)]);
 
@@ -37,6 +37,7 @@ export default async function EditNoticePage(props: PageProps<"/school-admin/not
         }
       />
       <NoticeForm
+        streams={options.streams}
         minExpiry={toDateInput(notice.expiresAt && notice.expiresAt < today() ? notice.expiresAt : today())}
         notice={{
           id: notice.id,
@@ -48,6 +49,8 @@ export default async function EditNoticePage(props: PageProps<"/school-admin/not
           publishAt: notice.publishAt ? toDateInput(notice.publishAt) : "",
           expiresAt: notice.expiresAt ? toDateInput(notice.expiresAt) : "",
           scope: notice.scope,
+          kind: notice.kind,
+          streamId: notice.streamId,
           classId: notice.classId,
           sectionId: notice.sectionId,
           admissionNumbers: notice.recipients.map((row) => row.student.admissionNumber).join(", "),

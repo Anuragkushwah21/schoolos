@@ -1,5 +1,6 @@
 "use client";
 
+import { CheckIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
 import { ActionForm } from "@/components/forms/action-form";
@@ -61,7 +62,11 @@ export function ApplyLeaveForm({ targets, defaultStudentId, today }: { targets: 
       />
       {reason === "OTHER" ? <TextField name="reasonText" label="Your reason" required /> : null}
       <TextareaField name="note" label="Additional note (optional)" rows={2} />
-      {target?.classTeacher ? <p className="text-muted-foreground text-xs">It goes to {target.classTeacher}, the class teacher, to approve.</p> : null}
+      <p className="text-muted-foreground text-xs">
+        {target?.classTeacher
+          ? `It goes to ${target.classTeacher} (class teacher) first, then the school gives the final approval.`
+          : "It goes to the school office for approval."}
+      </p>
       <div>
         <SubmitButton size="lg" pendingLabel="Submitting…">
           Submit Leave Request
@@ -72,19 +77,31 @@ export function ApplyLeaveForm({ targets, defaultStudentId, today }: { targets: 
 }
 
 /** Approve / Reject with an optional comment. */
-export function LeaveDecisionForm({ leaveId, status }: { leaveId: string; status: string }) {
+/**
+ * Approve or reject, as two clear buttons. For the class teacher, approving
+ * sends the request on to the School Admin. For the admin (principal) it is
+ * the final decision — both buttons are always there while it waits, after
+ * the class teacher's approval too; once decided, the admin may change it.
+ */
+export function LeaveDecisionForm({ leaveId, status, finalStep = false }: { leaveId: string; status: string; finalStep?: boolean }) {
+  const decided = status === "APPROVED" || status === "REJECTED";
   return (
-    <ActionForm action={decideStudentLeaveAction} className="gap-2">
+    <ActionForm action={decideStudentLeaveAction} className="border-primary/20 bg-primary-soft/40 gap-2 rounded-xl border p-3">
       <input type="hidden" name="leaveId" value={leaveId} />
+      <p className="text-sm font-semibold">
+        {finalStep ? (decided ? "Change the final decision" : status === "TEACHER_APPROVED" ? "Class teacher approved — your final decision" : "Your decision (final)") : "Your review"}
+      </p>
       <TextField name="comment" label="Comment (optional)" />
       <div className="flex flex-wrap gap-2">
         {status !== "APPROVED" ? (
-          <SubmitButton size="sm" name="decision" value="APPROVE" pendingLabel="Saving…">
-            Approve
+          <SubmitButton name="decision" value="APPROVE" pendingLabel="Saving…" className="bg-success hover:bg-success/90 bg-none text-white shadow-none">
+            <CheckIcon aria-hidden />
+            {finalStep ? "Approve (final)" : "Approve & send to school"}
           </SubmitButton>
         ) : null}
         {status !== "REJECTED" ? (
-          <SubmitButton size="sm" variant="outline" name="decision" value="REJECT" pendingLabel="Saving…">
+          <SubmitButton name="decision" value="REJECT" pendingLabel="Saving…" className="bg-destructive hover:bg-destructive/90 bg-none text-white shadow-none">
+            <XIcon aria-hidden />
             Reject
           </SubmitButton>
         ) : null}

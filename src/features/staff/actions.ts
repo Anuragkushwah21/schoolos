@@ -41,7 +41,7 @@ export async function cancelLeaveAction(_p: Result, formData: FormData): Promise
 export async function decideLeaveAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const input = parseFormData(leaveDecisionSchema, formData);
       const { decided } = await decideLeave(ctx, input);
       const verb = input.decision === "APPROVED" ? "approved" : "rejected";
@@ -56,7 +56,7 @@ const coverSchema = z.object({ timetableSlotId: id, date: requiredDate("the date
 export async function assignSubstituteAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await assignSubstitute(ctx, parseFormData(coverSchema, formData));
       return successResult("Cover arranged.");
     },
@@ -67,7 +67,7 @@ export async function assignSubstituteAction(_p: Result, formData: FormData): Pr
 export async function clearSubstituteAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { classSessionId } = parseFormData(z.object({ classSessionId: id }), formData);
       await clearSubstitute(ctx, classSessionId);
       return successResult("Cover removed.");

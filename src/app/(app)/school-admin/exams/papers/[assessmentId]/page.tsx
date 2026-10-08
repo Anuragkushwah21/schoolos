@@ -9,7 +9,7 @@ import { orNotFound } from "@/server/page-helpers";
 export const metadata: Metadata = { title: "Marks" };
 
 export default async function AdminMarksPage(props: PageProps<"/school-admin/exams/papers/[assessmentId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { assessmentId } = await props.params;
   const sheet = await orNotFound(getMarksSheet(ctx, assessmentId));
 

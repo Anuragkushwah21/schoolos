@@ -13,12 +13,12 @@ way, and [`API.md`](API.md) the REST endpoints. This file is the history.
 
 ## Current status
 
-_Last updated: 5 Oct 2026 (Staff profile: everything at a glance; drivers' routes and stops managed from the profile)_
+_Last updated: 8 Oct 2026 (Results, fees, parent self-service and records — production pass)_
 
 | | |
 | --- | --- |
-| Database migrations | 37 in `prisma/migrations`. **Check Neon with `npx prisma migrate status`.** On 4 Oct the live DB was missing `20261008090000`–`20261011090000`; **`20261012090000_routes_website_admissions` and `20261013090000_staff_roles_substitutes_trips` are NOT applied to Neon** — `npx prisma migrate deploy` applies whatever is pending, in order |
-| Tests | 79 files, 832 tests passing; typecheck and lint clean; production build passing |
+| Database migrations | 54 in `prisma/migrations`. Checked on Neon 8 Oct (`prisma migrate status`, read-only): everything through `20261027090000_campuses` is applied; **NOT applied: `20261028090000_plan_requests` and `20261029090000_results_fees`** — run `npx prisma migrate deploy`. Until then the live site errors on fee screens, exams, plan requests and campus pages. |
+| Tests | 103 files, 1024 tests passing; typecheck and lint clean; production build passing |
 | Email | Code sends through Gmail SMTP when configured. **The Gmail App Password in `.env` was rejected by Gmail** — create a new App Password and put it in `SMTP_PASSWORD` |
 | Uncommitted work | Everything in the 2 Oct and 3 Oct entries below (last commit `d611d70`) |
 
@@ -41,6 +41,1481 @@ _Last updated: 5 Oct 2026 (Staff profile: everything at a glance; drivers' route
 - **Green Valley Academy** — 9 of 13 sections have no class teacher.
 
 **Known limits:** leave pages' body text is English only (menus are Hindi/English); timetable and homework are not split by stream (only concerns and support are); Class 6–8 leave uses the same rules as other classes but has no separate test.
+
+---
+
+## 8 Oct 2026 — Results, fees, parent self-service and centralized records (production pass)
+
+**Asked:** the "Production-Ready Academic Results, Fee Management, Parent Self-Service & Centralized Records" spec: audit first, then fill the gaps — no gateway, SMS or WhatsApp, and no fake features.
+
+**Audit (before coding):**
+- **Already in place, and kept:**
+  - exams, marks entry with teacher-assignment checks, "publish only when every mark is in", report cards with attendance;
+  - promotion with preview and undo, which keeps history;
+  - fee heads, charges, concessions, payments in integer paise, soft-void receipts, family payments, carry-forward;
+  - the parent dashboard (child switcher, attendance, results, homework, notices, events, meetings, fees);
+  - students never see fees;
+  - the parent→child link is checked on every parent read;
+  - global search is tenant-scoped;
+  - no privacy leak was found.
+- **Gaps — results:**
+  - a hard-coded CBSE grading scale and 33% pass mark;
+  - no weighted final result;
+  - no exempt status;
+  - no review/verify step — publishing force-submitted draft marks;
+  - unpublishing took no reason;
+  - mark edits were audited as counts only;
+  - report cards had no remarks, showed today's class teacher, and blocked the Principal;
+  - families lost past sessions' results after rollover;
+  - a latent path where draft marks could be returned for future-dated tests.
+- **Gaps — fees:**
+  - no instalments and no late fees;
+  - no duplicate-submit protection and no overpayment guard;
+  - the "overdue" flag looked at the earliest charge even after it was paid;
+  - the void reason was always fixed ("Entered by mistake") and its audit entry had no amount;
+  - a charge could be removed after payments;
+  - no class-wise, session-wise, overdue or ledger reports;
+  - the parent's per-child page showed gross charges against a net total;
+  - a dead `showFeesToStudents` setting; the receipt print route admitted the STUDENT role (it then refused).
+- **Gaps — records:**
+  - no child profile for parents;
+  - no fees or results on the student detail page;
+  - the staff list was not paginated;
+  - the students CSV ignored the list's filters;
+  - opening a teacher as the Principal errored on the salary call.
+
+**Changed — results:**
+- **School grading rules:** Settings → Grading (`School.gradeBands`, `passPercent`).
+  - Validated: 2–15 bands, highest first, the last band starting at 0, unique names.
+  - Applied everywhere through `server/exams/grading.ts`. No stored marks are rewritten.
+  - The report card's grading key comes from the school's rules.
+- **Integer-safe percentages:** rounded half up to one decimal (`lib/grades.ts`).
+- **Exempt** (`AssessmentResult.exempt`):
+  - a Marks / Absent / Exempt picker on the marks sheet, also in the API;
+  - an exempt paper is left out of the totals and of pass/fail; an absent one counts as zero;
+  - counts as "entered" for completeness.
+- **Lifecycle:** draft → submitted (per paper) → **verified** (`Exam.verifiedAt` / `verifiedById`, School Admin or Principal) → published (`publishedById` recorded).
+  - Publish refuses any exam that is incomplete, has unsubmitted papers, or is unverified. It no longer force-submits.
+  - Reopening a paper or unpublishing clears the verification.
+  - Unpublish now needs a reason (also in the API).
+- **Correction after publish:** `correctPublishedResult` (School Admin or Principal, reason required) changes one mark without withdrawing the exam. Audit `RESULT_CORRECTED` records the old and new value.
+- **`MARKS_UPDATED`** now records per-student before/after changes in its metadata.
+- **Weighted final result:** `ResultScheme`, one per session: exam names with weights that must total 100.
+  - Each subject's final percentage is Σ(weight × that exam's subject %) over the components present. Absent = 0%; exempt components are left out.
+  - The overall percentage uses the same weighting over each exam's overall %.
+  - Pass = every subject at or above the pass %.
+  - Pages: `/school-admin/exams/final` (configure, plus a per-class table). Families get a card on their results pages, shown only once every component exam is published.
+- **Report card:**
+  - the class teacher as at the exam date;
+  - up to 3 teacher remarks;
+  - "EX" for exempt;
+  - the school's grading key and pass %;
+  - the Principal may open it (print page and API).
+- **Families keep past sessions:** published results and report cards from earlier sessions stay listed, with the session name.
+- **Student draft-mark leak closed:** upcoming tests never carry marks.
+
+**Changed — fees:**
+- **Instalments** (`FeeCharge.installmentNo`; the unique key now includes it):
+  - charge a class or a student "in N instalments, every M months";
+  - amounts are split in whole paise that add up exactly;
+  - charging again rewrites the instalments;
+  - `chargeSection` runs in one transaction.
+- **FIFO allocation** (`lib/fee-allocation.ts`): payments settle the earliest instalment first. Each instalment shows Paid / Part paid / Due / Overdue. The account's overdue flag and next due date are now correct.
+- **Payments:**
+  - an idempotency key per form (`FeePayment` / `FamilyPayment.idempotencyKey`, unique per school), so a double submit returns the first payment;
+  - an overpayment guard inside a serializable transaction (one retry on a conflict) — "Add the fee to their account first" when nothing is owed;
+  - the same guard for family payments, plus idempotency.
+- **Voids:**
+  - a reason is required (new "Void…" form);
+  - the audit entry carries the receipt, amount and reason, and is not written if nothing changed;
+  - a family share must be voided through the family receipt;
+  - `FamilyPayment.voidedById` is recorded.
+- **`removeCharge`** is refused once money has been applied to that charge (void or give a concession instead); it removes its late fee with it.
+- **Late fees** (`School.lateFeeMinor`, `lateFeeGraceDays`; `server/finance/late-fees.ts`):
+  - an "Apply late fees" button, never automatic;
+  - one late fee per overdue instalment, enforced by the unique `(schoolId, lateFeeForId)` key, so re-applying adds nothing;
+  - charged on a system "Late fee" head.
+- **Reports** (`server/finance/fee-reports.ts`, `/school-admin/finance/reports`, `/staff/fees/reports`), each with CSV:
+  - by class (assigned, concessions, net due, collected, pending, overdue);
+  - by session;
+  - overdue instalments with 0–30 / 31–60 / 61–90 / 90+ ageing;
+  - a per-student ledger with running balance (`/school-admin/finance/ledger/[id]`, `/staff/fees/ledger/[id]`).
+  - Every report reads each row once, so nothing is double-counted.
+- **Parent fees page:** original price, concession and net amount per instalment, a status badge, a mobile-friendly layout, and a read-only **statement** page (`/parent/children/[id]/fees/ledger`).
+- **Students never see fees:**
+  - the receipt print route now refuses students at the guard;
+  - `listStudentReceipts` drops STUDENT;
+  - `showFeesToStudents` is retired (the column is kept, but nothing reads or writes it);
+  - stale comments corrected.
+
+**Changed — records:**
+- **Parent → child Profile tab:** details, class, class teacher, subject teachers and guardians on file — read-only, linked children only.
+- **Student detail:** published results across sessions with report-card links. For the School Admin only, the fee position with Collect and Ledger links (the Principal sees no individual fees).
+- **Staff list:** server-side pagination (`listStaffPage`, 30 per page).
+- **Students CSV** honours the class, section, status and search filters.
+- **Teacher detail no longer errors for the Principal:** salary is loaded only for the School Admin.
+
+**Migration:** `20261029090000_results_fees` — additive.
+- New columns: `School.gradeBands/passPercent/lateFeeMinor/lateFeeGraceDays`, `Exam.publishedById/verifiedAt/verifiedById`, `AssessmentResult.exempt`, `FeeCharge.installmentNo/lateFeeForId`, `FeePayment.idempotencyKey`, `FamilyPayment.idempotencyKey/voidedById`.
+- New table: `ResultScheme`.
+- The FeeCharge unique key is swapped to include `installmentNo`. Existing rows become instalment 1, so the old uniqueness implies the new.
+- Applied to the local test DB only. **NOT applied to Neon**, together with `20261028090000_plan_requests`.
+
+**Behaviour changes to note:**
+- Publishing now needs every paper **submitted** and the exam **verified**. Exams already published are unaffected.
+- A payment larger than the outstanding amount is refused. Advance payments before a fee is charged are no longer accepted.
+- Tests that relied on the old behaviour were updated (new helpers `tests/helpers/fees.ts` and `exams.ts`).
+
+**Tested:**
+- `tests/unit/results-fees-math.test.ts` (11 tests): percentages, custom bands and their validation, pass marks, exempt/absent outcomes, weighting, FIFO allocation, instalment split, month stepping, ageing.
+- `tests/integration/fee-ledger.test.ts` (11 tests):
+  - instalments that sum exactly;
+  - FIFO statuses and a correct overdue flag;
+  - a double submit is recorded once; overpayment is refused;
+  - a void needs a reason and is audited with the amount;
+  - a paid charge cannot be removed;
+  - teachers, parents and students cannot record payments;
+  - late fees are applied once and re-applying adds none;
+  - class totals equal the sum of student accounts;
+  - the ledger balance equals the pending amount;
+  - parent-only ledger and profile;
+  - students, teachers and other schools are refused.
+- `tests/integration/results-lifecycle.test.ts` (6 tests):
+  - a custom scale and pass %;
+  - an exempt paper leaves the total;
+  - unpublished results stay hidden;
+  - submit → verify → publish, with teachers refused;
+  - correction audit with old and new values, and families see the change;
+  - final-result validation and weighted values, with families seeing it only when complete;
+  - past-session results kept after rollover;
+  - cross-school refused.
+- Updated: exams, fee-receipts, accountant-accounts, school-tracker, staff-permissions-leave, staff-management and calendar-reports tests.
+- Full suite: 103 files and 1024 tests pass. tsc and eslint are clean, and the build passes.
+- Hindi: 0 missing.
+- Screenshots: fee reports, ledger, exam verify, and parent fees on a phone.
+
+**Open / not done:**
+- Run `npx prisma migrate deploy` on Neon (2 migrations).
+- Practical and theory as two papers of the same subject in one exam is still not possible (one paper per subject per exam).
+- Promotion does not use results for eligibility — it stays the admin's decision, with history and undo.
+- No online payments, SMS or WhatsApp, as asked.
+
+---
+
+## 8 Oct 2026 — Campus requests on every plan, Upgrade Plan, first campus at registration
+
+**Asked:**
+- the first campus is created automatically at registration;
+- a New Campus Request is available on every plan, even at the campus limit;
+- a My Schools page with plan and entitlement summary;
+- an Upgrade Plan option for all owners, without fake payment;
+- Super Admin review;
+- security and tests.
+
+**Architecture (unchanged decision):** campus = the existing `School`. There is no separate Campus model, because the School already is the tenant and every operational row hangs off `schoolId`. The first campus is the registered school itself: same id, same name, same approval lifecycle. `Organization` groups an owner's campuses.
+
+**Changed:**
+
+1. **First campus at registration.** The school, its first School Admin and its Organization are now created in **one transaction**, so a failed or retried registration leaves nothing half-made. A repeated registration with the same email is refused before writing. Approval reuses the organization (it no longer creates a second). `ensureOrganization` stays as the idempotent fallback for older/seeded schools, and the migration backfill covers existing schools.
+
+2. **Campus requests on every plan.** Submission is no longer blocked by the campus limit or by modules/roles/limits outside the plan.
+   - Those are saved on the request as `entitlementNotes` (e.g. "Campus limit: the plan includes 1; this would be campus 2", "Modules not in the current plan: Library").
+   - The requester sees "You can still send a request — opening another campus needs a plan upgrade or extra campus entitlement".
+   - **Activation is still refused past the campus limit**, and asking grants nothing.
+   - Duplicate open requests are still refused.
+
+3. **My Schools for every School Admin** (sidebar entry always shown; also on Settings). It shows:
+   - current school;
+   - current plan (with module/role counts);
+   - campus entitlement (`used / limit`);
+   - the entitlement message;
+   - buttons **Upgrade Plan**, **My Campus Requests** and **Add New Campus Request**.
+
+   The request form lists all modules and roles, marking the ones outside the plan "needs upgrade/approval". Client checks: required fields, email type, 6-digit PIN pattern, numeric limits; the server validates everything again.
+
+4. **Upgrade Plan** (`/school-admin/plan`, also a Settings card).
+   - It shows the current plan and campus entitlement, every active plan (price, campus limit, modules, roles, limits) with "Your plan" / "Upgrade" badges, "Request <plan>", and the request history.
+   - **No online payment exists, so choosing a plan creates a `PlanChangeRequest` (PENDING).** Plan, modules, roles and campus entitlement do **not** change.
+   - One open request per school; it can be withdrawn.
+   - **Super Admin → Plan requests** (`/super-admin/plan-requests`, with a badge): Approve (moves the subscription through the existing `setSubscription`, so modules/roles follow unless adjusted for the school; claimed first, so a double approval changes it once) or Reject (reason required).
+   - Audited: `PLAN_CHANGE_REQUESTED/APPROVED/REJECTED/CANCELLED`.
+
+5. **Super Admin campus request review** now shows "Beyond the plan when requested" (entitlement notes) on the detail page, and "Needs entitlement" in the list. Approve / modify / reject and provision-once are as before.
+
+**Migration:** `20261028090000_plan_requests` adds the `PlanChangeStatus` enum, the `PlanChangeRequest` table and `CampusRequest.entitlementNotes`. Applied to the local test DB only. **NOT applied to Neon.**
+
+**Tested:**
+- New `plan-upgrade.test.ts` (5 tests):
+  - registration creates exactly one organization with the school as first campus; a repeated registration creates nothing; approval keeps the same organization;
+  - every admin sidebar has My Schools;
+  - the plan overview;
+  - choosing a plan changes nothing (subscription, modules, campus limit) until approval, then changes once; duplicate/other-school/non-super-admin are refused;
+  - rejection needs a reason; the same plan is refused; withdrawal works.
+- `campuses.test.ts` was updated for the new rule:
+  - a single-school owner can submit; the note is recorded; approval past the limit is refused;
+  - beyond-plan modules/roles/limits are noted, not refused;
+  - at the limit the request is accepted but activation is refused.
+- Full suite: 100 files and 996 tests pass. tsc and eslint are clean, and the build passes.
+- Hindi: 0 missing.
+- Screenshots: My Schools (single school, Starter) and Upgrade Plan with a pending request.
+
+**Not built / open:**
+- Online payment or billing is not integrated. Upgrades are confirmed by the Super Admin and payment is arranged outside SchoolOS.
+- A "Custom" plan is per school (Super Admin roles/limits/modules overrides plus the organization campus-limit override); there is no fourth plan tier.
+- `npx prisma migrate deploy` on Neon (three pending migrations).
+
+---
+
+## 8 Oct 2026 — Campus requests: management UI, request history, safe migration
+
+**Asked:** extend multi-campus with mandatory items:
+- a working School Admin entry point and a complete request form;
+- My Campus Requests (list + detail + history; no editing after review; no duplicates);
+- the Super Admin review UI;
+- a safe, idempotent migration for existing schools;
+- provisioning exactly once;
+- end-to-end verification.
+
+**Changed:**
+
+*Entry point*
+- Settings has a new card, **My Schools / Campus Management** (always visible).
+- `/school-admin/campuses` no longer redirects when multi-campus is off. It shows the school and the plan's limit ("Your current plan supports 1 campus…"), with no request button that cannot work.
+- When requesting is allowed it shows **Request New School/Campus** and **My Campus Requests**.
+- The request page shows the reason instead of redirecting.
+
+*Request form*
+- School details, contact and expected size (students / teachers / staff).
+- Only the modules and roles the plan includes are shown.
+- Requested limits: people counts and the switchable roles in the plan.
+- A **Message / business justification** field.
+- The same form edits a pending request.
+
+*My Campus Requests*
+- `/school-admin/campuses/requests` is a table: request ID, school, sent date, status, rejection reason, modules/roles/limits (approved ones once decided).
+- `/school-admin/campuses/requests/[id]` shows requested vs approved side by side, the SchoolOS note, the rejection reason, a "now live" link, and the **History** from the audit log.
+- `/…/[id]/edit` works **only while PENDING**. Once the request is under review or decided it is read-only, and the server refuses a change with "send a new request for any change".
+- Duplicates are refused: a second open request with the same school name (case-insensitive), or a name that is already one of the organization's schools.
+
+*Super Admin*
+- The request detail now shows History and requested-vs-approved after the decision. Existing pages are unchanged otherwise.
+
+*Provisioning once*
+- Approval closes the request inside the same transaction only if it is still open with no school (`updateMany … createdSchoolId: null`). A racing second approval rolls its school back.
+- `createdSchoolId` stays unique.
+- The new campus has no users, students, staff, fees or attendance. Only the owner can switch into it.
+
+*Migration*
+- `20261027090000_campuses` backfill made explicitly idempotent:
+  - only schools without an organization are touched;
+  - `ON CONFLICT DO NOTHING` on the derived id `org_<schoolId>`;
+  - the owner is assigned only if that login does not already own an organization;
+  - the link is set only when the organization exists.
+- School ids, slugs, names (no "Campus 1") and all operational rows are untouched.
+- Still NOT on Neon. The file changed only in the not-yet-deployed migration; `prisma migrate status` on the test DB reports it up to date.
+
+*Other*
+- New audit action `CAMPUS_REQUEST_UPDATED`.
+- The Settings → Principal hint no longer says "read-only".
+
+**Migration:** no new migration. `20261027090000_campuses` was edited (backfill only) and is **NOT applied to Neon**.
+
+**Tested:**
+- New `campus-backfill.test.ts` (3 tests): runs the migration's backfill SQL on pre-organization schools.
+  - Each school gets exactly one organization, owned by its first admin, with id, name and counts unchanged.
+  - Running it twice more changes nothing.
+  - Admin, teacher, parent and student logins still sign in to the same school.
+- New `campus-request-flow.test.ts` (7 tests), end to end:
+  - open → submit;
+  - duplicates refused;
+  - another school can't see or edit it;
+  - edit while pending, then frozen after review;
+  - modify & approve → requester sees status, approved config, note and history;
+  - provisioned once and empty, with a second approval refused;
+  - rejection reason visible and not editable;
+  - existing data untouched, only the owner reaches the new campus.
+- Full suite: 99 files and 991 tests pass. tsc and eslint are clean, and the build passes.
+- Hindi: 0 missing.
+- Screenshots: My Campus Requests, a request detail with history, and a single-school My Schools page.
+
+**Open:**
+- `npx prisma migrate deploy` on Neon (both pending migrations).
+- There is no "amendment" request type for changes after approval. A changed setup goes through the Super Admin's school page or a new request.
+- A requester cannot withdraw a request; it would need a new status in the schema.
+
+---
+
+## 8 Oct 2026 — Multi-campus: owners, campus requests, plan roles & limits
+
+**Asked:** the "Multi-campus/multi-school SaaS model" spec.
+- One owner can run one school or several campuses. Each campus is an independent school with its own data.
+- A campus switcher and an owner-only "All Campuses" summary.
+- New campuses come only through a request that the Super Admin approves, modifies or rejects.
+- Plans control modules, roles, role/user limits and the campus limit.
+- Everything is enforced on the server, and single-school users see no change.
+
+**Design (built on the existing architecture):**
+- **Campus = the existing `School`.** No second school entity was added. All operational data was already scoped by `schoolId` (`ctx.db`), so campus isolation is the existing tenant isolation.
+- **New `Organization`** (an owner and their campuses).
+  - The owner is a School Admin with `Organization.ownerId`; they never get platform power.
+  - The migration backfill gives each existing school exactly one organization, owned by its earliest School Admin. No operational rows or IDs change.
+  - New registrations create the organization automatically; registration does not ask about campuses.
+- **Campus switching:** a `Session.activeSchoolId` column.
+  - `validateSessionToken` honours it only for a SCHOOL_ADMIN who owns the organization, and only while that campus is ACTIVE. A tampered or foreign id falls back to the home school.
+  - The client's campus id is never trusted. Every page and action then runs with that campus's `ctx.db`.
+- **Plan** gains `campusLimit` (default 1, so multi-campus is **off** until the Super Admin raises it), `availableRoles` and `roleLimits`.
+- **School** gains `enabledRoles`, `rolesCustomized` and `roleLimits`; it follows its plan unless adjusted, like modules.
+- The Super Admin can override one organization's campus limit (`Organization.campusLimitOverride`).
+- Roles are the fixed system roles: Principal plus the staff designations. School Admin, Teacher, Parent and Student are always on. No custom roles were added.
+
+**Enforcement (server):**
+- `server/platform/entitlements.ts`:
+  - `assertRoleAvailable` (Principal creation and re-activation, staff create/designation change, staff wizard);
+  - `assertWithinLimit` (students and teachers as before, plus STAFF, PRINCIPAL and per-designation limits), with a clear message such as "Your Pro plan allows up to 1 principal (1 in use)".
+- `server/campuses/requests.ts`:
+  - requests are checked against the campus limit (counting pending requests), and plan modules, roles and limits;
+  - messages include "Your current plan supports 1 campus…" and "Library is not included in your current plan.";
+  - approval also refuses past the campus limit.
+- `server/platform/campuses.ts`: `switchCampus`, `allCampusesSummary` (owner-only; per-campus counts, attendance today, fee collected/pending via each campus's own finance snapshot, leave waiting — no detailed records), and `setCampusLimitOverride`.
+- When there is no live plan, a request may ask for what the first campus already has. This matches the earlier rule that a missing subscription never blocks a school.
+
+**Workflow:**
+- Owner or School Admin → My Schools → **Request New School/Campus** (details, modules, roles and expected limits; only what the plan includes can be ticked) → status PENDING.
+- Super Admin → **Campus requests** (badge count) → Mark under review / Approve / **Modify & approve** / Reject (a reason is required).
+- Approval creates the school as ACTIVE in the same organization:
+  - on the organization's plan, with the approved modules, roles and limits;
+  - with the default academic setup only (classes, streams, subjects, current session) — no fake people.
+- The requested and approved configurations are both stored. Status becomes APPROVED or MODIFIED.
+- Audited: CAMPUS_REQUEST_CREATED / UNDER_REVIEW / APPROVED / MODIFIED / REJECTED, CAMPUS_ACTIVATED, ORGANIZATION_CAMPUS_LIMIT_CHANGED, SCHOOL_ROLES_CHANGED, SCHOOL_LIMITS_CHANGED, and PLAN_UPDATED (now includes roles, limits and campus limit).
+
+**Pages:**
+- `/school-admin/campuses` — My Schools: All Campuses summary, campus cards with "Open", and request statuses. Only when multi-campus is on; otherwise it redirects to the dashboard, and the nav entry is hidden.
+- `/school-admin/campuses/request`.
+- The sidebar campus switcher appears only for an owner with 2 or more live campuses.
+- `/super-admin/campus-requests` and its `[requestId]` page.
+- Plans & Features: roles, role limits and campus limit per plan.
+- The school page gained "Roles & limits" and "Owner & campuses" (campus limit override).
+- The staff wizard offers only the designations the campus has.
+
+**Migration:** `20261027090000_campuses` (new tables, columns and the backfill SQL). Applied to the local test DB only. **NOT applied to Neon.**
+
+**Tested:**
+- New `campuses.test.ts` (12 tests):
+  - single school: no multi-campus, and a request is refused;
+  - plan module, role and limit checks;
+  - pending request; only the Super Admin decides; another owner is refused;
+  - reject needs a reason;
+  - modify & approve keeps the request and creates a provisioned campus with no students;
+  - the owner switches campus and sees only that campus's data;
+  - a foreign or made-up campus is refused; a tampered `activeSchoolId` falls back home;
+  - All Campuses is owner-only and summary-only;
+  - a non-owner admin and a Principal cannot switch;
+  - a disabled role or module is refused;
+  - a Principal limit stops the second one;
+  - the campus limit cannot be bypassed;
+  - a campus-A Principal never sees campus-B students.
+- Full suite: 97 files and 981 tests pass. tsc and eslint are clean, and the build passes.
+- Hindi phrases: 0 missing.
+- Screenshots: owner My Schools with the switcher; a single-school admin, unchanged (no switcher or entry); the Super Admin request review; the request form on a phone.
+
+**Open / decisions to confirm:**
+- Run `npx prisma migrate deploy` on Neon (both pending migrations).
+- After the backfill every plan has campus limit 1, so multi-campus is off everywhere until the Super Admin raises a plan's (or an organization's) limit.
+- The owner works in a second campus as its School Admin. There is no separate login for that campus's own admin; the Super Admin can add one from the school page.
+- "All Campuses" is a summary page, not a mixed operational context.
+- Hostel and Visitors are not optional modules (Hostel doesn't exist; Visitors is core).
+- Core roles cannot be switched off.
+- Role limits are checked when someone is created or re-activated, not when the Super Admin lowers a limit below current use.
+
+---
+
+## 8 Oct 2026 — Principal as a working school leader; Responsibilities
+
+**Asked:** the "Principal Dashboard, Workspace & Responsibility Workflow" spec. The Principal is not a read-only reporting role. They add and edit students and teachers, run academics, attendance, homework, exams and communication, review leave, and assign responsibilities. Finance is an overview only, and they never get platform access. The School Admin gets a Principal workspace and keeps doing everything when there is no Principal.
+
+**This reverses the earlier "read-only Principal" design** (the roles entry on 7–8 Oct). The read-only `/principal/attendance|teachers|exams|reports|notices|events|meetings|holidays` pages were removed. The Principal now works in the same `/school-admin/...` pages, under their own sidebar.
+
+**Changed:**
+
+*Permissions (`src/lib/permissions.ts`)*
+- PRINCIPAL can view, create, edit, approve, publish and export across students, staff, attendance and exams.
+- PRINCIPAL has every action on academics, homework, communication and responsibilities.
+- Finance is VIEW only. Reports are VIEW and EXPORT.
+- The Principal has no DELETE on students or staff, and no settings or users area.
+- The new area `responsibilities` is shared by the School Admin and the Principal.
+- `PRINCIPAL_GRANTS` covers the staff-grant checks the Principal passes: fee overview, student directory, enquiries and admissions, and meetings.
+
+*Server checks*
+- About 180 admin-only checks became `assertCan(ctx, area, action)`, and the matching pages and actions accept `PRINCIPAL`. Everything else still refuses the Principal, as before:
+  - fees collection and configuration, payroll and expenses;
+  - staff grants and profiles, settings, website, library, inventory, transport and visitors;
+  - audit;
+  - the Principal login itself;
+  - deleting students and teachers;
+  - school settings: attendance timing, the leave back-date rule, the needs-attention rule and the admission portal now need `settings`. Those forms are hidden for the Principal, and the rule is shown as text instead.
+- **Security fix found during this work:** `assertCan` now passes only school leaders (School Admin or Principal) with **school-wide** scope. Before this, a teacher's ASSIGNED or a parent's CHILDREN permission satisfied those checks. 15 existing tests caught it, for example a teacher reading the admin homework overview, or a parent reading lesson files. All 15 pass again.
+- The rule that results publish only once every mark is in also applies to the Principal.
+
+*Responsibilities (new)*
+- New `Responsibility` model, statuses PENDING, IN_PROGRESS, COMPLETED, OVERDUE and CANCELLED, priority LOW, NORMAL and HIGH.
+- Predefined types live in `src/lib/responsibilities.ts`.
+- `src/server/responsibilities/service.ts` handles create, edit, reassign, cancel, confirm and send back. The assignee's start, progress and complete work only on their own records.
+- Overdue is computed from the due date.
+- Assignees can only be this school's teachers, staff or Principal, checked on the server, and never yourself.
+- A Principal cannot manage a responsibility given to them; the School Admin reviews those.
+- Every step is audited (`RESPONSIBILITY_*`, module "Responsibilities").
+- A responsibility grants no access.
+- Pages:
+  - `/school-admin/responsibilities` for the School Admin and the Principal: tabs All, Given to me, Given by me, Pending, Overdue, Completed and Cancelled, plus an assign form, edit/reassign, cancel, confirm and send back;
+  - `/teacher/responsibilities` and `/staff/responsibilities` ("My responsibilities") for assignees;
+  - a dashboard card for teachers and staff when something is open.
+
+*School Admin → Principal workspace (new)*
+- `/school-admin/principal` shows the Principal's details and login state, the responsibilities they hold (active, pending, completed, overdue) and the ones they delegated, and their recent actions from the audit log.
+- With no Principal it shows "No Principal Assigned — School Admin currently manages Principal responsibilities", with Add a Principal and Responsibilities buttons.
+- The admin sidebar gained Responsibilities and Principal.
+
+*Principal dashboard (rewritten)*
+- Ten quick actions: Add Student, Add Teacher, Create Notice, Organize PTM, Create Event, Schedule Exam, Assign Responsibility, Review Leave, Review Results, View Reports.
+- A. School overview: students, teachers and staff, attendance today, teacher attendance, classes and sections, and the fee overview.
+- B. Academics: progress, lessons taught (recorded classes, standing in for syllabus progress), weak students, class and subject performance.
+- C. Teachers: in today, on leave, class-teacher and subject-teacher coverage, workload.
+- D. Exams: upcoming, in progress, marks pending, ready to publish.
+- E. Attendance: 7-day trend, classes under 75%, students absent 3+ days this week.
+- F. Responsibilities summary.
+- G. School updates (notices, events, meetings, leave).
+- The Principal sidebar: Dashboard, Students, Teachers & Staff, Academics, Attendance, Homework & Learning, Exams & Results, Communication, Calendar, Leave, Responsibilities, Reports, Profile.
+- Principal alerts now link to the `/school-admin` pages.
+
+**Migration:** `20261026090000_responsibilities`. Applied to the local test DB only. **NOT applied to Neon.**
+
+**Tested:**
+- `principal-role.test.ts`, rewritten (9 tests):
+  - the Principal adds a student and a teacher (audited as PRINCIPAL), creates a notice, a PTM and an event, cancels the PTM, and schedules an exam;
+  - publishing is blocked while marks are missing, for both the Principal and the admin;
+  - deleting people, fees, payroll, staff grants, settings and the Principal login are refused;
+  - the empty workspace without a Principal, and tenant isolation.
+- New `responsibilities.test.ts` (8 tests):
+  - the full flow, overdue, reassign and cancel;
+  - a teacher cannot assign or touch others' records;
+  - assignees limited to this school's staff;
+  - admin oversight, and no self-review by the Principal;
+  - works without a Principal;
+  - cross-school records not found.
+- `i18n-nav.test.ts` updated for the new admin entries.
+- Full suite: 96 files and 969 tests pass. tsc and eslint are clean, and the production build passes.
+- Hindi phrases merged: 0 missing.
+- Screenshots checked: the Principal dashboard, Responsibilities (Principal), the admin Principal workspace with and without a Principal, and a teacher's My responsibilities on a phone.
+
+**Open:**
+- Run `npx prisma migrate deploy` on Neon.
+- There is no syllabus model, so "Lessons taught" (recorded vs missed classes over 30 days) stands in for syllabus completion.
+- Responsibilities are shown on dashboards but there are no notifications or emails for them yet.
+
+---
+
+## 8 Oct 2026 — Fix: Principal login said "wrong email or password"
+
+**Asked:** the Principal account would not sign in ("email/password wrong") — fix it.
+
+**Found:**
+- The live Neon database already has all 50 migrations, including `20261025090000_principal_role`. `prisma migrate status` reports "up to date", so the earlier "pending on Neon" notes no longer apply.
+- But there was **no PRINCIPAL user at all**: the demo seed (which adds them) had not been re-run since the role was added.
+
+**Changed (live Neon, additive only):**
+- Created two Principal logins. Nothing existing was modified or deleted; the demo seed was **not** re-run, because it recreates the demo schools.
+  - `principal.demo-sunrise@schoolos.dev` — Sunrise Public School
+  - `principal.demo-greenvalley@schoolos.dev` — Green Valley Academy
+- Password: the demo password, bcrypt cost 12. `activatedAt` is set and `mustChangePassword` is true, so the first sign-in asks for a new password.
+- No account was created for Sankeswar (a real school). Its School Admin adds one at Settings → Principal (needs working SMTP for the activation email).
+
+**Tested:**
+- bcrypt compare of the demo password against both stored hashes: OK.
+- A real sign-in on the running dev server (localhost:3000, against Neon) as the Sunrise Principal landed on `/account?changePassword=required`, as designed. This left one session row for that account.
+
+**Migrations:** none new.
+
+---
+
+## 8 Oct 2026 — Roles and responsibilities: the Principal, and one permission table
+
+**Asked:** align roles, responsibilities, dashboards, navigation, data scope and backend authorization with the role spec — reusing the architecture, with no parallel systems. Add a PRINCIPAL role with a development seed account (SchoolOS@2026, hashed, changed on first sign-in).
+
+**Inspected — already in place and kept:**
+- **Tenant isolation:** `ctx.db` is always one school, and `schoolId` comes from the session.
+- **Data scope:**
+  - teacher: `accessibleSectionIds` and `requireTeacherSelf`;
+  - parent: `listMyChildren` / `requireChild`;
+  - student: `findStudentSelf`.
+- **Staff permissions:** module × action grants, plus School Admin workspaces.
+- **Super Admin and optional modules:** from earlier today.
+- **Nursery–5 and 6–12 login rules:** session → class → section → optional stream → subject → teacher.
+- **Result publication:** blocked until every paper's marks are in (`publishExams` → `publishBlocker`).
+- **Students and fees:** students never see fees. There is no student fee page or nav. The dormant `School.showFeesToStudents` column is not used by any screen.
+
+**Changed:**
+- **Central permission table** (`lib/permissions.ts`): role → area → actions (VIEW / CREATE / EDIT / DELETE / APPROVE / PUBLISH / EXPORT) → scope (PLATFORM / SCHOOL / ASSIGNED / CHILDREN / SELF / GRANTED).
+  - Checked with `assertCan` (`server/auth/permissions.ts`).
+  - Shared read services moved from a hard-coded `SCHOOL_ADMIN` to `assertCan`:
+    - `academicSnapshot`, `financeSnapshot` and `staffToday`;
+    - `listExams` and `testCounts`;
+    - `schoolReport` and all 9 report builders in `reports/exports.ts`;
+    - `supportSummary` and `peopleSummary`.
+  - Staff stay on their grants. The Principal holds only `fees.view` among staff grants, for the fee overview.
+- **New PRINCIPAL role** (`UserRole.PRINCIPAL`): academic leadership and oversight of one school, read-only.
+  - **Area `/principal`:**
+    - **Dashboard:** total students, attendance today, teacher attendance, upcoming exams, academic progress, pending results, students needing attention, fee overview (when the school has Fees), class performance, "Worth a look" alerts, school updates.
+    - **Attendance:** by class today, teachers, 30-day trend.
+    - **Classes:** attendance over 30 days and test average over 60, with low figures flagged.
+    - **Teachers:** subjects, class-teacher roles, today's attendance.
+    - **Exams & Results:** stage and marks entered.
+    - **Reports:** the shared screen. No fee, expense or salary downloads; the export route enforces it.
+    - **Notices / Events / Meetings (PTMs included) / Calendar:** school-wide visibility.
+    - **Profile:** `/account`.
+  - **Cannot:** admit students, collect or charge fees, run payroll, decide leave, open student records, or manage users and settings. Admin and platform URLs redirect to the Principal's dashboard.
+  - **Alerts:** `getPrincipalAlerts` (absences, missed classes, marks pending, results ready, plus notices, holidays and meetings) in the notification center.
+  - **Wiring:** role home, label and profile, tenant roles, proxy prefix, nav and mobile bar, and the account, notification, notice-read and photo endpoints.
+  - **School Admin → Settings → Principal** (`/school-admin/settings/principal`): create a Principal login (activation email; they choose the password, never shown), close or reopen it. Audited with `PRINCIPAL_CREATED`.
+- **Forced password change:** new `User.mustChangePassword`.
+  - Page guards send such a user to `/account?changePassword=required` (with a banner); actions and exports refuse.
+  - Changing the password clears the flag.
+- **Dev seed:** `scripts/seed-demo.ts` adds a Principal per demo school (`principal.<slug>@schoolos.dev`). It uses the existing hashed demo password (SchoolOS@2026) with `mustChangePassword: true`.
+  - Nothing in the app shows or returns it.
+  - The seed script itself still prints the shared demo password, as it always has for every demo account.
+  - It was **not run** here, because it writes to `.env`.
+- **Super Admin, as the spec names things:**
+  - "Plans & Features" and "Platform Settings" labels.
+  - The dashboard adds Platform alerts (pending approvals, unverified emails, suspensions, new enquiries), school growth over 6 months, and module adoption.
+- **Hindi:** for everything new.
+
+**Migration:** `20261025090000_principal_role`, which adds the enum value and `User.mustChangePassword` (default false). Test DB only. **NOT applied to Neon.**
+
+**Tested:**
+- New `tests/integration/principal-role.test.ts` (6 tests) covers:
+  - the permission table (Principal view-only; Student has no finance; Super Admin has no school areas);
+  - the Principal reads classes, teachers, attendance, exams, reports, the fee overview and alerts;
+  - the Principal is refused admissions, fee collection, fee heads, payroll, leave decisions, the student list and Principal management;
+  - School B's Principal sees nothing of School A;
+  - the School Admin creates a Principal login (activation, audit, duplicate refused, teacher refused);
+  - a default password change clears `mustChangePassword`.
+- Full suite: 95 files, 958 tests passing.
+- tsc, eslint and the build are clean.
+- **In the browser:**
+  - every `/principal` page returns 200;
+  - a fee download returns 404;
+  - admin and platform URLs redirect;
+  - the forced-change banner shows;
+  - screenshots of the dashboard, Attendance and Reports.
+
+**Not done (honest):**
+- Hostel module — it does not exist in the product.
+- Configurable approvals for the Principal (for example leave) — the spec says "where applicable"; nothing is configured.
+- A Principal search box.
+- Principal access through the REST API beyond its own profile, alerts and notices.
+
+---
+
+## 8 Oct 2026 — Super Admin: dashboard, approvals, features & plans
+
+**Asked:** a production-ready Super Admin area that manages schools and the platform — never a school's daily work. Reuse what exists; keep platform and school roles separate; enforce on the backend.
+
+**Already there (reused, not rebuilt):**
+- School statuses: PENDING, UNDER_REVIEW, ACTIVE, SUSPENDED, REJECTED, INACTIVE.
+- The approve / reject / suspend / reactivate transitions, all audited.
+- On approval: school provisioning and creation of the first admin. Suspension signs everyone out.
+- Plans: one per tier, STARTER / STANDARD / PRO, with names, prices and limits editable. Subscriptions.
+- The platform audit log, scoped to platform actions.
+- The school detail page, with admins and email verification.
+- Website enquiries and offers.
+
+**New: optional modules, per plan and per school** (`lib/school-modules.ts`, `server/platform/modules.ts`):
+- **Core modules** are always on, with no switch: Students, Teachers & staff, Academic structure, Attendance, Homework & learning, Exams & results, Parents, Communication, Basic reports, School settings.
+- **Optional modules** are only the ones that exist in the product: **Fees & finance, Expenses, Payroll, Library, Transport, Inventory**. Hostel and Advanced reports do not exist yet, so they cannot be switched on. Unknown keys are always dropped.
+- **Schema:**
+  - `Plan.optionalModules`.
+  - `School.optionalModules`, which defaults to all modules so no existing or fixture school loses anything.
+  - `School.modulesCustomized`.
+- **Plans keep their editable names.** Tiers start with: Starter = Fees; Standard = Fees, Expenses, Payroll, Library; Pro = all six. "Custom" is a set of modules adjusted for one school.
+- **How a school gets its modules:**
+  - **Approval:** from the chosen plan, or a set adjusted at approval.
+  - **Plan change:** a school that follows its plan takes the new plan's modules.
+  - **Editing a plan's modules:** reaches the schools that follow it, not those adjusted by hand.
+- **Enforcement (backend first):**
+  - Staff grants in a module the school lacks are dropped (`staffGrants`), so nav, pages and services all see the same thing.
+  - `assertAdminOrStaffPermission` refuses for the **School Admin too**.
+  - 29 admin-only module services gained an explicit `assertModuleEnabled`.
+  - Module pages have a `ModuleGate` layout ("… is not part of your school's plan"); that includes receipts.
+  - CSV exports from a missing module are refused.
+  - Sidebars and tab rows hide those modules for every role.
+  - Dashboards, alerts, Needs action, the setup checklist, staff and teacher profiles, the student page and the parent child page all skip missing modules instead of failing.
+
+**Super Admin UI:**
+- **Sidebar:** Dashboard, Schools, Approvals (badge with the pending count), Features & Plans, Platform Reports, Audit Logs, Settings. The existing Enquiries and Offers sit under "Website". There are no school-operation entries.
+- **Dashboard:**
+  - Four KPIs: Total, Active, Pending approval, Suspended.
+  - A secondary strip: Students, Teachers, Parents, Active academic sessions.
+  - **Recent school registrations** (name, location, date, admin, status), with Review / Approve / Reject or View, and "View all schools".
+  - Platform activity.
+  - The charts moved to Reports. The per-school "school list" tracker and its fee totals were removed from the dashboard (`features/platform/school-tracker.tsx` deleted; `schoolTracker` stays in analytics for its tests).
+- **Schools:** tabs All / Pending approval / Active / Suspended / Rejected, plus search.
+- **Approvals** (new): every pending school with its code, location, registration date, contact, school admin, requested plan, board and email verification, and Review / Approve / Reject. Approve and Reject open the school's review (`#approve` / `#reject`). The page states plainly that student and class numbers are not collected at registration.
+- **School detail:**
+  - Approval is now **plan → features → approve**: a plan picker, the core list, the plan's optional modules, and "Adjust for this school".
+  - New **Feature access** card: "Follow the {plan} plan", or tick modules for this school, then Save changes.
+  - New **Academic overview**: current session, classes, sections, principal.
+  - Registration details now show the school code (slug / UDISE), address, phone and email.
+- **Features & Plans:** the core list, "optional modules in use" bars (adoption), and each plan's price, limits and optional modules.
+- **Platform Reports** (new): totals, new this month, pending, suspended; students, teachers and parents across schools; growth over 12 months; status; module adoption; plan mix; largest schools.
+- **Audit Logs:**
+  - New **Previous → new** column, filled from `{from, to}` or `{previous, next}`.
+  - "By" shows the name and role.
+  - New actions: `SCHOOL_PLAN_CHANGED`, `SCHOOL_MODULES_CHANGED` (enabled and disabled lists). `PLAN_UPDATED` now records module changes and how many schools followed. `SCHOOL_APPROVED` records the plan and modules.
+- **Settings** (new): platform-level only, linking to things that exist — profile, password and language; API tokens; plans and feature configuration; security and audit; homepage offers; enquiries; the public homepage. No fake switches for things that don't exist (such as notification settings).
+- **Hindi:** for everything new.
+
+**Migration:** `20261024090000_school_modules`. It adds the columns, gives each plan its tier's modules, and sets **all modules on every existing school** (marked as set by hand), so live schools keep everything. Applied to the local test DB only. **NOT applied to Neon.**
+
+**Tested:**
+- New `tests/integration/school-modules.test.ts` (6 tests) covers:
+  - approval with a plan sets that plan's modules, with the audit;
+  - modules adjusted at approval are kept, and unknown keys are dropped;
+  - Manage features changes one school only, audits enabled/disabled and previous → new, and switches back to "follow plan"; a School Admin is refused;
+  - a plan's modules reach followers and not adjusted schools; a plan change moves a follower;
+  - with Fees and Payroll off: the admin's fee and salary services refuse, the accountant's fee grants vanish, and Needs action and admin and parent alerts still load with no fee alerts;
+  - the other school keeps everything.
+- Full suite: 94 files, 952 tests passing.
+- tsc, eslint and the build are clean.
+- Screenshots: Super Admin dashboard, Approvals, a pending school's review, Features & Plans and Reports; a School Admin with only Library (sidebar, dashboard, the "not part of your plan" page). A temporary fixture was used and removed.
+
+**Open:**
+- 12 migrations are now pending on Neon (`20261014…` to `20261024…`).
+- Not built:
+  - a stored platform-settings model (no real setting needed one yet);
+  - Hostel and Advanced reports modules;
+  - registration asking for student and class numbers.
+
+---
+
+## 7 Oct 2026 — Salaries the accountant pays now show for the admin
+
+**Asked:**
+- When the accountant paid Alok the driver's salary, it did not show on the admin dashboard.
+- Show how much was paid this month, how much is left, and who paid it, all in the audit log too.
+- Fix anything wrong found along the way.
+
+**What was wrong:**
+1. The admin dashboard's Money section showed only fees and expenses. Salaries were not there at all.
+2. Payroll showed "Paid {date}" but not **who** recorded the payment, and "Still to pay" was a head-count, not an amount.
+3. The `PAYROLL_PAID` audit entry held totals only ("1 teacher and 1 staff paid, ₹X"), on purpose. So the audit log never said who was paid what.
+
+**Changed:**
+- **Admin dashboard — new "Salaries — {month}" section,** after Money:
+  - Paid this month (₹ and number of people), Still to pay (₹ and number of people), Salary bill.
+  - "Paid this month": each person with role, amount, date and **by whom** (for example "Paid 7 Oct 2026 by Ravi Gupta (Accountant)").
+  - "Not paid yet": each person with role and amount due.
+  - It reads `getPayroll`, so it is the same data as Payroll.
+- **Payroll (admin and staff):**
+  - Each paid row says "by Ravi Gupta (Accountant)" or "by … (School Admin)". Built with the new `recorderLabel` / `RECORDER_SELECT`.
+  - "Still to pay" is now an amount: the new `totals.remainingMinor`, the sum due for everyone not yet paid. The number of people is the hint.
+- **Audit:**
+  - `PAYROLL_PAID` now names each person with role and amount, plus the month, date, method and reference: "Salary for October 2026 paid on 7 Oct 2026 (Bank transfer, ref UTR123): Alok Kumar (Driver) ₹15,000 — ₹15,000 in total." The actor is whoever paid (Accountant or Admin). `metadata.payees` lists each person.
+  - `SALARY_PAID` (a single payment) now includes the month, date and method.
+  - **Reverses an earlier choice:** payroll audit entries used to hold totals only, on purpose. Salary structure changes still never show the figure.
+- **Hindi:** for the new text.
+
+**Migrations:** none.
+
+**Tested:**
+- New `tests/integration/salary-visibility.test.ts` (4 tests) covers:
+  - the accountant pays Alok: the admin's payroll shows `paidBy "Ravi Gupta (Accountant)"`, the paid total and the remaining amount;
+  - the audit names Alok (Driver) ₹15,000 with the method and reference, and the actor is the accountant;
+  - an admin single payment shows as "(School Admin)" and is audited with the month;
+  - another school sees nothing.
+- `staff-payroll.test.ts` was updated for the named audit.
+- Full suite: 93 files, 946 tests passing.
+- tsc, eslint and the build are clean.
+- `homework-resources.test.ts` failed once under full-suite load and passed alone and on a full re-run — a flaky test, not related.
+- Screenshots of the dashboard's Salaries section and the audit log, using a temporary fixture that was removed afterwards.
+
+---
+
+## 7 Oct 2026 — The same child is never added twice without the admin deciding
+
+**Asked:**
+- Build both gaps from the previous check.
+- When a student being added matches one already at the school, there must always be a warning, and the admin must be able to choose to add or reject at that moment.
+
+**Changed:**
+
+- **One matching rule** (`lib/student-duplicates.ts` and `server/people/duplicates.ts`):
+  - A possible duplicate is a student with the **same full name**. Case, extra spaces and punctuation are ignored.
+  - Same name plus the **same date of birth** or the **same parent mobile** is marked "Very likely the same child".
+  - Same name with a different date of birth still warns, and says so.
+  - Only this school's students are read.
+
+- **Add student, and admission from an application or an enquiry:**
+  - `createStudent` checks before anything is saved. The form then shows a **warning panel** with each match: name (opens their profile), admission number, class, status, date of birth, parents, and why it matched.
+  - The admin chooses:
+    - green **"Yes, different child — add as a new student"** resubmits with `confirmDuplicate`;
+    - red **"No, same child — don't add"** goes back to the Students list, the application or the enquiry.
+  - Adding anyway is written to the audit log: "Added after the possible-duplicate warning, confirmed as a different child: … (ADM-…)", with `metadata.confirmedDuplicateOf`.
+  - The application and enquiry conversions used to have their own name-only check with a "This is a different child" tick box. They now go through the same check and panel; the conversion pages show a "Heads up" note in advance.
+  - The API path `acceptApplication` (POST `/api/v1/admissions/:id/accept`) is refused with the matches unless `confirmDuplicate: true` is sent.
+
+- **Spreadsheet import** (`importStudents`):
+  - Each row is compared with the school's students and with earlier rows of the same file (the same child typed twice).
+  - The preview lists **possible duplicates** in a separate box, one tick box per row. Unticked rows are **left out**; ticked rows are added. The Import button counts them.
+  - The report and the audit entry say how many were added after confirmation and how many were left out.
+
+- **Old and new students:**
+  - Students admitted since the current session began show a green **New** badge in the Students list (phone and desktop).
+  - New filter **"Admitted"**: "New this session" or "Admitted in {year}" (years from the data). The pager keeps all filters.
+
+- **Hindi:** for all new text.
+
+**Migrations:** none.
+
+**Tested:**
+- New `tests/integration/student-duplicates.test.ts` (8 tests) covers:
+  - name and birthday give "very likely", and nothing is saved;
+  - a different birthday still warns; case and spaces are ignored;
+  - the same parent mobile gives "very likely";
+  - Add anyway, with the audit entry;
+  - a different name adds without warning;
+  - another school never matches;
+  - import preview with a duplicate on file and in the file, a ticked twin added, an unticked row left out, and the audit;
+  - the New flag, the New filter and the year filter.
+- `admissions.test.ts` adds: the API accept is refused with matches until confirmed.
+- `people.test.ts` was adjusted: its roll-number test now confirms the duplicate.
+- Full suite: 92 files, 942 tests passing.
+- tsc, eslint and the build are clean.
+- **In the browser:** filled the Add student form for an existing child, saw the panel, clicked "Yes, different child", and the child was added as ADM-2026-00002 with the audit note. The Students list was screenshotted showing New badges. A temporary fixture school was used and removed afterwards.
+
+---
+
+## 7 Oct 2026 — Check: can old and new students get mixed up?
+
+**Asked:** whether old and new students can get mixed up, and whether each student has a unique identity that makes them easy to find.
+
+**Checked (no code changed):**
+- **Unique ID:** every student has an admission number, unique within the school (`@@unique([schoolId, admissionNumber])`).
+  - New admissions get `ADM-{year}-{00001}` from a per-year counter. A number is never reused, and promotion or a new session never changes it.
+  - Imported students may keep their old school number. A number already taken is refused.
+- **Old vs current:** current students have status ACTIVE or ON_LEAVE. Left students have TRANSFERRED, GRADUATED, WITHDRAWN or INACTIVE, and the list shows only current students by default. Each year's class placement is a separate enrollment, so history is not overwritten.
+- **Finding a student:** the Students list and the header search work by name, admission number, parent name or parent mobile/email.
+- **Gaps found:**
+  1. No "new admissions" filter or badge (by admission year or session).
+  2. No warning when the same child is added twice (same name + date of birth, or same name + parent mobile). Parents are de-duplicated, students are not; bulk import checks admission numbers only.
+
+These were offered to the user; not built yet.
+
+**Migrations:** none.
+
+---
+
+## 7 Oct 2026 — Visitor date and time filled in automatically
+
+**Asked:** when a visitor arrives today, the date should be filled in automatically. Tomorrow's or an earlier date must not be enterable, and the time must be today's too.
+
+**Changed:**
+- **Log a visitor:**
+  - The "Entry time" date-time box is gone. In its place is a read-only **"Date & time — Today, now — filled in automatically"**.
+  - The server stamps the entry with the moment it is saved. A date or time sent by the browser is ignored, because the field no longer exists in `visitorEntrySchema`.
+  - Turned-away visitors are stamped the same way.
+- **Mark out:** always stamped "now". `visitorExitSchema` and `markVisitorExit` no longer take a time.
+- **Correcting a visit:**
+  - The Entry/Exit time boxes are removed. Details and status can still be corrected, and the stamped times never change.
+  - Setting "Left" on someone still inside marks them out now.
+  - A note on the form says so.
+- **Removed as no longer used:** the datetime parsing in `lib/validation/visitors.ts`, the `checkTimes` and future-slack checks in `server/operations/visitors.ts`, and `toSchoolDateTimeInput` in `lib/dates.ts`.
+- The "Day" picker on the visitor list stays. It only chooses which day's log to view.
+- **Hindi:** 3 new phrases.
+
+**Migrations:** none.
+
+**Tested:**
+- `receptionist-security.test.ts` was rewritten for this case:
+  - an entry sent with "2026-01-01 09:00" is stamped now;
+  - exit is stamped now, and never before the entry;
+  - a correction that sends other times changes neither time;
+  - the audit lists only the real changes.
+- Full suite: 91 files, 933 tests passing.
+- tsc, eslint and the build are clean.
+- The visitor form was screenshotted at 390px, using a temporary fixture that was removed afterwards.
+
+---
+
+## 7 Oct 2026 — Admin gets clear Approve and Reject buttons on student leave
+
+**Asked:** after the class teacher approves a student's leave, the admin (principal) must still have both buttons, Approve and Reject, because the admin's approval is still pending.
+
+**Checked:**
+- The admin already had both buttons on requests the class teacher had approved (`mayDecide` is true for every status except Cancelled).
+- But Reject was a small plain outline button that was easy to miss.
+
+**Changed:** in `LeaveDecisionForm`, the decision now sits in its own box with a heading that says whose decision it is:
+- "Class teacher approved — your final decision" (after the teacher's approval);
+- "Your decision (final)" (before the teacher has reviewed it);
+- "Change the final decision" (already decided);
+- "Your review" (the class teacher).
+
+The buttons are full size, with icons: a green **✓ Approve (final)** and a red **✕ Reject**. The class teacher sees "Approve & send to school" and Reject. Hindi was added.
+
+**Migrations:** none.
+
+**Tested:**
+- `student-leave-two-step.test.ts` now has 6 tests. New checks:
+  - after the teacher approves, the admin's row has `mayDecide: true` and the teacher's has false;
+  - the admin can reject a teacher-approved request, the family sees the rejection with the admin's comment, and the teacher's approval stays on record.
+- Full suite: 91 files, 933 tests passing.
+- tsc, eslint and the build are clean.
+- The admin screen was screenshotted, using a temporary fixture that was removed afterwards.
+
+**Note:** this needs migration `20261023090000` on the database. On a database without it (Neon today), the leave pages will error.
+
+---
+
+## 7 Oct 2026 — Leave back in the admin sidebar; two-step student leave
+
+**Asked:**
+- Why was the Leave section removed from the admin sidebar? Put it back.
+- Staff and teacher leave must reach the admin.
+- Student leave from a parent or student must go to the class teacher and the admin. After the teacher approves, the admin's approval is required.
+
+**What was already true:** staff and teacher leave (`LeaveRequest`) is decided only by the School Admin. On 7 Oct the sidebar entry was folded under Attendance, so it was hard to find. That part of the earlier sidebar change is reversed here.
+
+**Changed:**
+- **Sidebar:**
+  - **Leave** is its own entry again under Daily work, after Attendance. Tabs: Staff leave & cover, then Student leave.
+  - It shows a red **badge** with the requests waiting for the admin: staff/teacher leave pending, plus student leave approved by the teacher. New helpers: `adminNav()` and `NavItem.badge`.
+- **Two-step student leave.** New status `TEACHER_APPROVED`, plus the class teacher's review fields `teacherReviewedById`, `teacherReviewedAt`, `teacherApproved` and `teacherComment`. How it works:
+  - **Request:** a parent or student applies. Status is `PENDING`, shown as "With class teacher".
+  - **Teacher approves:** status becomes `TEACHER_APPROVED`, shown as "Waiting for school approval". The family gets an alert: "approved by the class teacher… waiting for the school's final approval".
+  - **Teacher rejects:** status becomes `REJECTED`. This is final unless the admin overturns it; the teacher's decision is kept.
+  - **School Admin:** gives the **final approval** (`APPROVED`) or rejects. The admin may also decide before the teacher (for example when there is no class teacher, or it is urgent), and may overturn any decision.
+  - **Only `APPROVED` is leave:** the register, calendar and "On leave" status show nothing before it.
+  - **Cancelling:** the family can cancel while the request waits, or before an approved leave starts.
+  - **Audit:** the new action `STUDENT_LEAVE_TEACHER_APPROVED`. Admin summaries say whether the admin acted before or after the teacher.
+- **Every leave card** now shows both steps with ✓ / ✕ / … markers: 1. Class teacher — who, when, comment. 2. School approval — waiting, done, or not needed.
+- **Buttons:** the teacher sees "Approve & send to school"; the admin sees "Give final approval".
+- **Admin Student leave page:**
+  - Stat cards: Waiting for your approval, With class teachers, Approved, Rejected/cancelled.
+  - Tabs: Waiting for you / With class teacher / Approved / Rejected.
+- **Teacher page:** tabs To review / Sent to school / Approved / Rejected / All.
+- **Admin alerts and Needs action:**
+  - "N student leave requests approved by the class teacher, waiting for your final approval".
+  - The staff leave line now says "staff leave".
+- **Wording:** the parent and student pages and the form explain the two steps.
+- **Hindi:** all new text.
+
+**Migration:** `20261023090000_student_leave_two_step`, which adds the enum value, the four columns and a foreign key. Applied to the local test DB. **NOT applied to Neon.**
+
+**Tested:**
+- New `tests/integration/student-leave-two-step.test.ts` (5 tests) covers:
+  - teacher leave reaches the admin, shows in Needs action and gets a sidebar badge;
+  - teacher approval → admin alert, Needs action and family alert, but not on the register;
+  - admin final approval → on the register, with the audit trail;
+  - teacher rejection overturned by the admin, with the teacher's decision kept;
+  - an admin decision before the teacher;
+  - the family cancelling while waiting;
+  - school isolation.
+- `library-photos-leave.test.ts` was updated for the two steps. The nav test was updated for the Leave entry.
+- Full suite: 91 files, 932 tests passing.
+- tsc, eslint and the build are clean.
+- Screenshots of the admin Student leave page (1440px) and the parent Leave page (390px) were checked with a temporary fixture school, removed afterwards.
+
+**Open:** Neon now has 11 pending migrations (`20261014…` to `20261023…`).
+
+---
+
+## 7 Oct 2026 — Simpler dashboards for parents and non-technical users
+
+**Asked:**
+- Check every dashboard so that parents and people with little technical knowledge can use them as easily as a phone.
+- Make them simple and modern.
+- List what is missing.
+
+**Checked:** each role's dashboard (Parent, Student, Teacher, Staff/Accountant, Admin) was screenshotted at phone width (390px) and on desktop. Main problems found:
+- Every dashboard opened with four large "school life" cards (Events, Leave, Notices, Meetings), usually showing **0**, which filled the phone screen.
+- The parent page used technical words ("Written up", "Taken from today's records, not a separate list", "Drawn from what … recorded").
+- Fees were not on the parent's home page.
+- On phones the language switch was only a globe icon.
+- The app could not be installed on a phone's home screen.
+
+**Changed:**
+- **School updates (every dashboard):** the four big cards became one short card with four rows: Notices, Events, Meetings, Leave.
+  - Each row shows a count badge and the next item, or a one-line "nothing new".
+  - The whole row can be tapped.
+- **Parent dashboard,** rebuilt in the order a parent asks:
+  1. **My children cards:** today's attendance in words ("Present today", "Absent today", "Today's attendance not marked yet"), attendance this year, and **Fees to pay** (or "Nothing due").
+  2. **Needs your attention:** at most 5 tappable lines plus "See all", or a green "Nothing needs you today. All good!".
+  3. **What do you want to see?** Eight big labelled buttons: Attendance, Homework, Results, Fees, Notices, Ask for leave, Talk to teacher, Meetings.
+  4. The child's day, with plain labels: Classes today / Classes taught / Classes missed. The "help at home" card shows only when there is something in it.
+  5. School updates.
+- **Alert lists (parent, student, teacher, staff):** each line is tappable as a whole, instead of having a small "Open" button.
+- **Student:** "For you" moved above the lists; School updates moved to the bottom.
+- **Teacher:** removed the duplicated "no classes today" line.
+- **Staff:** removed the "your workspace: …" jargon from the greeting.
+- **Admin:** the side column uses the new School updates card.
+- **Language button:** now shows "English" / "हिन्दी" on phones too.
+- **Install on phone (PWA):**
+  - New `app/manifest.ts`, home-screen icons in `public/` (192, 512, maskable, apple-touch) and a theme colour.
+  - "Add to Home screen" now opens the app full-screen.
+- **i18n:**
+  - Hindi added for all new text.
+  - Sample names in the student-import CSV template ("Aarav", "Sharma", "Rakesh") had been picked up as phrases, so names were being "translated". The extractor now honours an `i18n-ignore-file` marker, and those entries were removed.
+
+**Migrations:** none.
+
+**Tested:**
+- Screenshots of the parent dashboard in English and Hindi, the student and staff dashboards at 390px, and the admin dashboard at 1440px, all against the local test DB with a temporary fixture school, removed afterwards.
+- Full suite: 90 files, 927 tests passing.
+- tsc, eslint and the build are clean.
+
+**Missing — reported to the user, for their decision:**
+- Mobile-number login with OTP (login is email + password only).
+- SMS / WhatsApp messages to parents.
+- Push notifications on the phone.
+- Online fee payment.
+- A "Call school / class teacher" button for parents.
+- Password reset without email.
+
+---
+
+## 7 Oct 2026 — Unused code removed; admin sidebar and dashboard redesigned
+
+**Asked:**
+- Delete what is unnecessary or unused in the project, and list what was deleted.
+- Make the admin dashboard more modern and easier to work from.
+- Put the daily places in the sidebar: Students, Attendance, Parents, Teachers, Non-teaching staff, Finance/Accountant, Library, Communication, Security & Gate, Front Desk, Reports, Calendar, Timetable, Settings, Profile.
+
+**Deleted** (found with `knip`, each checked by hand; nothing referenced them):
+
+- **Files:**
+  - `src/features/finance/overview.tsx` and `src/server/finance/overview.ts`, an old finance overview no page used, plus their test `tests/integration/finance-overview.test.ts`. `tenant-audit.test.ts` now checks the dashboard's `financeSnapshot` instead.
+  - `src/features/auth/sign-out-button.tsx`.
+  - `src/components/charts/attendance-colors.ts`.
+  - Unused shadcn UI pieces: `components/ui/{badge,breadcrumb,pagination,select,separator,sidebar,tabs,tooltip}.tsx` and `hooks/use-mobile.ts`.
+  - The Next.js template images: `public/{file,globe,next,vercel,window}.svg`.
+  - `.DS_Store`.
+- **Admin workspace hub pages:** `src/app/(app)/school-admin/areas/[area]` and `src/lib/admin-areas.ts`. The sidebar now links straight to each place.
+- **Functions never called:**
+  - `Meter`, `Sparkline` (charts), `useIntlLocale`, `TONE_BAR`.
+  - `AcceptApplicationForm` and `acceptApplicationAction`. The server's `acceptApplication` stays: the API uses it.
+  - `FeeDeskTodayPanel`, `idleResult`, `isStaffGrant`, `STREAM_RULE_HINT`, `linkExistingParentSchema`, `admissionsFunnel`, `accountState`, `assertFound`, `tokensMatch`, `deleteExpiredCodes`, `leaveLabel` (staff leave), `isTest`.
+  - Their now-unused imports.
+- **Kept on purpose:**
+  - `scripts/*`: run by hand.
+  - `prisma7.config.ts`: the Prisma CLI reads it.
+  - `uploads/`: real files.
+  - Migrations and docs.
+
+**Changed:**
+
+- **Admin sidebar.** One click to each daily place, in four labelled groups:
+  - Dashboard.
+  - **Daily work:** Students, Attendance, Parents, Teachers, Non-teaching staff.
+  - **School office:** Finance & Accounts, Library, Communication, Gate & Security, Front Desk, Transport.
+  - **Plan & review:** Reports, Calendar, Timetable, Classes & Exams.
+  - **Account:** Settings, Profile.
+  - Transport and Classes & Exams were added so no page lost its way in.
+  - Each entry owns its related pages (for example Attendance also covers leave, and Teachers covers substitutes).
+  - New tab rows:
+    - Front Desk: Walk-in enquiries / Online applications / Admission drives.
+    - Non-teaching staff: Staff / Role workspaces.
+    - Students: Students / Needs attention / Concerns.
+  - Sidebar items are denser, with icon chips and group headings (`NavItem.group`).
+  - Phone bottom bar: Dashboard, Students, Attendance, Finance.
+- **Admin dashboard:**
+  - The welcome bar has "Today's attendance" and "Collect fee" buttons.
+  - Below it: today's figures, then **Daily tasks** as one row of 8 buttons (Collect fee, Add student, Add enquiry, Send notice, Create test, New meeting, Add staff, Add expense).
+  - **Two columns on wide screens:**
+    - Main: Academics, Money, Students, Staff workspaces.
+    - Right: **Needs action**, Staff today, Happening soon.
+  - On phones, Needs action comes first.
+  - Reusable options added: `QuickActions compact`, `NeedsAttention stacked`, `SchoolLifeCards narrow`.
+- **Hindi:** new nav, tab and dashboard labels.
+
+**Migrations:** none.
+
+**Tested:**
+- The nav test was rewritten for the new sidebar. It checks the order and the groups, and that exactly one entry is highlighted for 33 admin pages.
+- Full suite: 90 files, 927 tests passing.
+- tsc, eslint and the production build are clean.
+- Screenshots of the dashboard were taken at 1440px and 390px against the local test DB using a temporary fixture school, which was removed afterwards.
+
+**Open:** the 10 migrations from 6–7 Oct are still not on Neon.
+
+---
+
+## 7 Oct 2026 — Check: recording a cash fee
+
+**Asked:** whether the accountant or admin can record cash fees received from a parent in Collect fees.
+
+**Checked:**
+- Yes, this already exists.
+  - Staff use `/staff/fees`, which needs the "Collect fees" grant (in the Accountant's default).
+  - The admin uses Finance → Record a payment.
+- Steps:
+  1. Search for and select the student.
+  2. Fill in the "Record a payment" card. Method defaults to **Cash**; the date can't be in the future; the receipt number is suggested.
+  3. Record payment.
+- After recording, the green banner has View / Print receipt.
+- The parent then gets the `fee-paid` dashboard alert.
+
+**Changed:** nothing. **Migrations:** none.
+
+---
+
+## 7 Oct 2026 — Parents told when fees are received
+
+**Asked:**
+- Explain how a cash fee is recorded and how the accountant enters it, so a receipt can be given.
+- A message should also reach the parent's dashboard: "you paid this much on this date".
+
+**Already in place, explained to the user:**
+- At Collect fees (`/staff/fees`, or the admin's Record a payment), the fee desk records the payment: find the student, enter the amount, choose Cash/UPI/…, pick the date, keep or change the receipt number, Save.
+- The receipt is then ready to print or download.
+- Parents could already see every receipt on the child's Fees page.
+
+**Changed:**
+- **New parent alert kind `fee-paid`**, built from `FeePayment` rows like every other alert (nothing new is stored).
+  - For 14 days after a payment is recorded, the parent's dashboard and notification center show "₹X fees received for <child>".
+  - The alert gives the payment date, the method, the receipt number and what is still to pay. It links to the child's Fees page, where the receipt can be downloaded.
+  - A receipt voided later shows "Receipt N cancelled", with the reason (warning tone).
+  - Family payments are covered too, since they are per-child `FeePayment` rows.
+- `readStudentFees` payments now include `createdAt`.
+- **Hindi:** 1 phrase and 5 templates.
+
+**Migrations:** none.
+
+**Tested:**
+- `accountant-fee-charges.test.ts` now has 9 tests. They cover:
+  - the parent sees the amount, date, method and receipt after the accountant collects;
+  - a voided receipt reaches the parent with its reason;
+  - another school's parent sees nothing.
+- Full suite: 91 files, 945 tests passing.
+- tsc, eslint and the build are clean.
+
+**Open:**
+- No SMS or WhatsApp. Email is not sent for payments either; it is a dashboard alert only.
+- The 10 migrations from 6–7 Oct are still not on Neon.
+
+---
+
+## 7 Oct 2026 — Accountant adds fees and charges classes
+
+**Asked:**
+- When a family comes to pay a fee that was never charged, the accountant must be able to add it, so it shows up for collection.
+- The class/section charging the admin does must be possible for a hired accountant too.
+- The admin keeps all of it.
+
+**Changed:**
+- **Two new staff responsibilities**, both in the Accountant's default:
+  - `fees.manage` — "Fee structure & charges": fee heads, charge a class or section or one student, remove a wrong charge, void a wrong receipt, carry forward old dues.
+  - `fees.concessions` — "Give fee concessions".
+  - Librarian, Security and Peon can never hold them.
+- **Untouched accountants are upgraded automatically.** An accountant still on the previous default, never customised, picks these up through the existing `upgradeUntouchedGrants`. An accountant the admin limited by hand stays limited.
+- **Server guards** moved from School Admin only to `assertAdminOrStaffPermission`, so the admin always passes:
+  - `fees.manage`: `createFeeHead`, `setFeeHeadActive`, `chargeStudent`, `chargeSection`, `removeCharge`, `voidPayment`, `voidFamilyPayment`, carry forward.
+  - `fees.concessions`: grant and withdraw.
+  - The matching server actions now accept `NON_TEACHING_STAFF`.
+  - `recordPayment`'s audit entry now carries the receipt number and amount.
+- **Fee desk (`/staff/fees` and the admin's Record a payment).** The selected student now has a fees card with **"Add a fee for this student"**: pick a fee head, amount and due date. The new charge shows as pending and can be collected straight away. Wrong charges can be removed from the same card. This is the new `features/finance/student-charges.tsx`.
+- **New page `/staff/fees/structure`.** The same screen as the admin's Fee collection page: fee heads, Charge a class, and who owes what.
+  - Both pages now use the shared `features/finance/fee-structure-screen.tsx`.
+  - Links to it from the Collect fees header, the staff Finance page and the Accounts desk on the staff dashboard.
+- **Staff payment history** has a Void button for staff with `fees.manage`.
+- **`StudentFeeAccount`** now gates concessions (`canConcession`) and carry forward (`canCarryForward`) separately.
+- **Hindi:** 10 new phrases.
+
+**Migrations:** none. Grants are strings on `StaffMember.grants`.
+
+**Tested:**
+- New `tests/integration/accountant-fee-charges.test.ts` (8 tests) covers:
+  - fee head plus class charge;
+  - a walk-in single-student charge that shows as pending and is collected;
+  - remove charge, void receipt, concession;
+  - an old-default accountant upgraded;
+  - a hand-limited accountant refused;
+  - the admin keeps all of it;
+  - school isolation.
+- Full suite: 91 files, 944 tests passing.
+- tsc, eslint and the production build (against the test DB) are clean.
+
+**Open:** the 10 migrations from 6–7 Oct are still not on Neon (see Current status).
+
+---
+
+## 7 Oct 2026 — The accountant runs the school's accounts (and the admin still can)
+
+**Asked (Hindi):** when the admin hires a role, that role's responsibilities must go to the new person. The accountant's dashboard showed mostly "collect fees", but an accountant manages all of the school's accounts: add expenses, pay salaries, buy new gadgets, and so on. Until someone is hired the admin does it, and after hiring the admin can still do it — the admin's access is never removed.
+
+**Reverses:** the 6 Oct decision that payroll is not an accountant default (made for that day's payroll request). The user's rule now is that the accountant's default responsibilities are the whole of the accounts.
+
+**Done:**
+- **Accountant default responsibilities:** fees (view, collect, reports), expenses (view, **add**, **remove**), payroll (**view**, **pay salaries**). Salary structures (what someone earns) stay with the School Admin. The admin keeps all of it regardless, as before.
+- **Gadgets/purchases:** "Buy equipment / gadget" opens the expense form with the **Equipment & gadgets** category chosen (a computer, projector, lab item…).
+- **Accounts desk** on the accountant's dashboard replaces the fee-only panel:
+  - Figures: collected today, pending fees, spent this month, salaries still to pay this month.
+  - Actions: Collect fee, Add expense, Buy equipment / gadget, Pay salaries, Accounts & reports.
+  - Each part shows only with that responsibility, and the server checks again.
+- **Existing accountants:**
+  - A built-in role still on an old default moves to the new one.
+  - **A staff member whose access was never customised** moves too, on their next sign-in or when the admin opens Staff. This is audited as "given the role's updated default responsibilities", with no person as actor.
+  - **Anyone the admin set by hand is never widened.** A new `StaffMember.grantsCustomized` flag is set whenever the admin ticks permissions themselves, and cleared on "restore role defaults" / "apply to everyone in the role". The migration backfills it from the audit log for staff whose permissions an admin had already changed.
+
+**Migrations (NOT on Neon):** `20261022090000_staff_grants_customized` (new column + backfill).
+- **Effect on live data once applied:** the test login `accountant@schoolos.test` was created with defaults and never customised, so it will get the full accounts responsibilities on next sign-in.
+- Accountants an admin had already edited keep exactly what they have.
+
+**Tested:** new `tests/integration/accountant-accounts.test.ts` (5 tests). It covers:
+- the accountant collecting, recording a gadget purchase, removing a wrong expense and paying salaries, but not setting salaries;
+- the admin doing all of it too;
+- an old-default accountant upgraded and audited, while a hand-limited one stays limited;
+- school isolation.
+
+Earlier tests were updated for the new default (staff-payroll, staff-role-dashboards, staff-management). Full suite is 90 files / 936 tests passing. `tsc`, `eslint`, phrase coverage and the production build (local test DB) pass. Not clicked through in a browser.
+
+---
+
+## 6 Oct 2026 — Admin workspaces, simpler navigation, and attendance that never submits itself
+
+**Asked:** organise SchoolOS around one principle: the School Admin can run the whole school alone, and hiring staff delegates work without taking any of it away. Group the admin's screens into operational workspaces with a much shorter sidebar. Give each staff role its workspace and default responsibilities, which the admin can customise. Make sensitive corrections auditable with old → new values and a reason. **Critically:** student attendance must never be submitted automatically, only by the teacher's explicit Submit. Reuse what exists; do not add an ERP.
+
+**Audit findings:**
+- **Attendance auto-submitted** (violated the new rule). A school on the default AUTO setting had every draft register submitted when its period ended, by `finalizeDueRegisters`. It ran on **every page load** (the notification bell), when a register was opened or saved, from the cover/dashboard reads, and from a cron endpoint.
+- Drafts themselves never reached parents or reports (only `StudentAttendance`, written on submit, is read anywhere), so dashboards were fine once auto-submission stopped.
+- Admin authority was already intact: every staff check is "School Admin, or staff with the grant", so hiring never removed anything from the admin.
+- The admin sidebar had 18 module entries.
+
+**Done:**
+- **Attendance — explicit Submit only:**
+  - Removed `finalizeDueRegisters`, all of its call sites, and the cron route `/api/cron/attendance`.
+  - Saving a draft never sets an automatic submission time.
+  - The "submits automatically" setting is gone; Settings → Attendance now says attendance is final only on Submit Attendance.
+  - Migration `20261021090000_attendance_explicit_submit`: schools set to MANUAL, the default is MANUAL, and waiting drafts lose any automatic time. Already-submitted registers are untouched.
+  - **Register UI:** summary tiles (Present / Absent / Late / Half day / Leave / Not marked), **Save Draft**, **Submit Attendance**, and afterwards "✓ Attendance submitted by <name> · <time>". Old automatic submissions are labelled "automatically (before 6 Oct 2026)".
+  - The teacher dashboard no longer says "submits itself at …".
+- **Attendance corrections** are audited in words: "Rahul Sharma: Absent → Present … Reason: Parent confirmed attendance", with a per-student old → new table. The actor and role come from the audit log (e.g. School Admin).
+- **Admin navigation:** 13 workspaces replace 18 module entries — Dashboard, Academic, Students & Parents, Front Desk (enquiries, applications, admission drives), Finance, People & Staff, Library, Transport, Gate & Security, Communication (notices, events, meetings, calendar, complaints), Operations (student and staff leave, cover), Reports (attendance reports, downloads, audit), Settings (incl. Website).
+  - Multi-page workspaces open a hub of cards (`/school-admin/areas/[area]`, `lib/admin-areas.ts`) linking the existing pages.
+  - Every page highlights exactly one workspace.
+  - Nothing was deleted or duplicated.
+  - The phone bottom bar uses the workspaces.
+- **Role → workspace:** `STAFF_ROLE_WORKSPACE` maps Accountant → Finance, Receptionist/Office → Front Desk, Librarian → Library, Driver/Attendant → Transport (own route), Security → Gate & Security, Lab assistant → Lab & Inventory, Coordinator → Academic, Support staff → Support duties (no broad access), Other → As assigned.
+  - Shown on the staff dashboard ("your workspace: …"), the wizard and the staff profile.
+  - The wizard says "responsibilities"; the existing grants still enforce on the server, and the role default stays separate from per-person changes.
+
+**Not done / remaining gaps:**
+- Support-staff task lists, and Half Day for *staff* attendance.
+- The admin can read homework but not create it (homework is set by the teaching teacher).
+- Teacher and parent/student navigation were already workspace-shaped and are unchanged.
+- **Can be removed:** the unused `CRON_SECRET` env var. The `attendanceSubmission` column stays only for history.
+
+**Migrations (NOT on Neon):** `20261021090000_attendance_explicit_submit`. This one also updates data — schools become MANUAL and drafts lose their automatic times — so apply it before the code goes live.
+
+**Tested:** new `tests/integration/admin-workspaces.test.ts` (8 tests). It covers:
+- the admin reaching every workspace with no staff, and after hiring (even with the accountant stripped of all grants);
+- Accountant/Receptionist/Security/Librarian workspaces and server enforcement; a custom responsibility added without changing the role;
+- opening and saving a draft submits nothing and parents/students see nothing; Submit makes it visible;
+- the admin's correction audited with name, old → new and reason; isolation.
+
+`attendance-workflow` was rewritten from "auto-submits at period end" to "never submits by itself; only Submit". The nav tests were rewritten for the workspaces. Full suite is 89 files / 931 tests passing. `tsc`, `eslint`, phrase coverage and the production build (local test DB) pass. Not clicked through in a browser.
+
+---
+
+## 6 Oct 2026 — Staff management: creation wizard, permissions, documents, workspaces, audit
+
+**Asked:** a complete staff management system: a multi-step creation wizard, role → default permissions → per-person overrides, documents, account activation, staff profile tabs, admin role workspaces without impersonation, and a proper audit log showing the real actor. The School Admin/MD stays the unrestricted authority of their own school, and tenants stay isolated. Inspect first, reuse what exists, and do not duplicate.
+
+**Reused, not rebuilt:**
+- `StaffMember`, which keeps employment and profile data separate from the `User` login; the separate `Teacher` model.
+- Role profiles (`StaffRoleProfile.defaultGrants`) and the grant catalogue with server checks (`assertAdminOrStaffPermission`).
+- Status/lifecycle (Active, Inactive, On leave, Suspended…, never deleted) and login enable/disable (`setLoginAccess`).
+- Activation links: hashed, 7-day expiry, single use, no password ever emailed.
+- `ProfilePhoto`, the private file store, and `AuditLog` plus the school audit page.
+- The School Admin already passes every staff permission check by role, so no staff setting can reduce the admin.
+
+**Added:**
+- **Schema** (`20261020090000_staff_profiles_documents_audit`):
+  - Staff: date of birth, gender, address, experience, employment type, emergency contact.
+  - New `StaffDocument` (type, label, file, size, verification status, notes, uploaded by and when; archived, never deleted).
+  - `AuditLog.actorRole` and `AuditLog.module`.
+- **Audit foundation:**
+  - `recordAudit` stores the actor's role at that moment ("School Admin", "Accountant"…) and the module, worked out from the action name. Every existing call site benefits without changes.
+  - Fee payments now also carry the payment id and receipt in metadata.
+  - Account activation now lands in the school's own log, which it did not before.
+- **Wizard** (`/school-admin/staff/new`), 4 steps: personal & employment → role & permissions (role defaults ticked and editable; grants a role can never hold are shown disabled) → documents (optional) → review.
+  - One submission. The staff record, role, grants, login (pending activation), salary and documents are written in **one transaction**. Files are checked first and stored before it, and removed again if it fails.
+  - The activation email and photo follow after the commit.
+  - Employee ID is automatic (STF-0001…) if left blank.
+  - Teachers keep their own form, which the wizard links to. Academic Coordinator is offered under Teaching.
+- **Permissions:**
+  - The Role & access tab shows a summary: role defaults / custom added / custom removed / effective, with names.
+  - **Restore role defaults** (with confirmation).
+  - **Change role** with "Keep my custom changes" (new defaults + added − removed) or reset. Grants the new role can never hold are dropped and named.
+  - Audit: `STAFF_PERMISSION_ADDED` / `STAFF_PERMISSION_REMOVED` / `STAFF_PERMISSIONS_RESET` / `STAFF_ROLE_CHANGED`.
+  - The quick edit form no longer changes the role silently.
+- **Documents tab:**
+  - Upload PDF/JPG/PNG up to 10 MB, checked by content.
+  - Set verification, and remove (archive; "Show removed").
+  - Files are served only to the School Admin of the same school (`/api/v1/staff-documents/[id]/file`, private, no-store, sandboxed).
+- **Profile edits:** all the new fields are editable. Each save records `STAFF_UPDATED` with every changed field as old → new. Fields not sent stay unchanged, so CSV imports and older API clients do not wipe them.
+- **Audit:**
+  - New staff **Audit log** tab: everything / changes to their record / done by them.
+  - School audit page filters: person, role, module, action, date range, text.
+  - Entries are human-readable, with an old → new table and raw details folded away.
+  - Append-only: no edit or delete anywhere.
+- **Workspaces** — not impersonation; the admin stays School Admin and is recorded as such:
+  - Admin dashboard has a "Staff workspaces" section: Teaching (Teacher, Academic Coordinator) and Non-teaching (Accountant, Librarian, Receptionist, Transport/Driver, Support Staff, Other).
+  - `/school-admin/staff/workspaces/[key]` lists the admin's own modules for that role and the people in it, with "Add …".
+  - A school with only an MD and teachers can collect fees, issue books and so on from there without any staff accounts.
+
+**Not built / limits:**
+- No separate Role/Permission tables. The existing role profiles plus the grant catalogue do this; the catalogue covers the modules staff actually use (fees, payroll, expenses, library, inventory, transport, admissions, meetings, visitors, student directory). There are no staff grants for marks/exams, teacher management or school setup, because staff never reach those.
+- Teaching staff are not created through the wizard (the teacher form is used).
+- Documents are visible to the School Admin only, not to the staff member themselves.
+- The UI was not checked in a browser (layout, dark mode, phone width).
+
+**Migrations:** `20261020090000_staff_profiles_documents_audit` — NOT on Neon (local test DB only). No new environment variables: email uses the existing SMTP settings.
+
+**Tested:** new `tests/integration/staff-management.test.ts` (14 tests). It covers:
+- the admin collecting fees with no accountant, recorded as School Admin;
+- the wizard creating everything, and a bad file leaving nothing behind;
+- refused grants; only the admin may create staff;
+- single-use activation, an expired link refused, and a disabled login refused;
+- direct service calls refused without a grant while the admin is unaffected;
+- the accountant's fee recorded as Accountant;
+- role change keep/reset and restore defaults;
+- the field-level old → new audit;
+- private documents and archiving;
+- audit filters, history after deactivation, and School B isolation.
+
+Full suite is 88 files / 923 tests passing. `tsc`, `eslint`, phrase coverage and the production build (local test DB) pass.
+
+---
+
+## 6 Oct 2026 — Receptionist front desk, and visitor management for Security
+
+**Asked:**
+
+1. Audit the enquiry/follow-up system for the Receptionist. Allow only admin-granted actions: create, view and search enquiries; follow-ups and their status; application status; limited student/parent lookup; meetings if permitted. Never fees, payroll, marks, teacher management or school setup automatically. The backend must match the screens.
+2. Check Security / visitor functionality. If missing, build a minimal visitor module: name, mobile, purpose, person to meet, entry/exit time, vehicle, status. Security sees only security information; the admin controls permissions. Audit entry/exit edits. No gate automation.
+
+**Audit result (receptionist):**
+
+- Already in place from the earlier 6 Oct work: enquiries (view, search, create, follow-up, status), applications (view, move along), and the basic student directory (+ guardian contact as its own grant). All are separate grants the admin ticks or unticks, and the services check them.
+- There is no grant at all for marks/results, teacher management or school setup, so staff can never reach those.
+- **Fees and payroll** are not receptionist defaults.
+- **Gap fixed:** staff could not schedule meetings at all.
+
+**Done:**
+
+- **New grant "Schedule meetings"** (`meetings.schedule`, module "Meetings / PTM"). It is not a default for any role.
+  - With it, staff see the school's meetings and schedule new ones at `/staff/meetings/manage`, using the same screens as the admin (moved into `features/communication/screens/`).
+  - They change or cancel **only the meetings they scheduled**.
+  - Deleting a meeting and extra classes from support records stay School Admin only.
+  - The meeting service checks all of this.
+- **Visitor management** (new `Visitor` model):
+  - Fields: name, mobile, purpose, person to meet, vehicle (upper-cased), entry and exit time, status (Inside / Left / Turned away), notes.
+  - Log in (blank time = now), mark out, correct a visit, and search by name, mobile, person or vehicle. A day view also lists anyone still inside from earlier.
+  - Pages: `/staff/visitors`, `/school-admin/visitors` (a tab beside Transport). The staff dashboard has a "Gate" panel with visitors inside now and today.
+  - New grants `visitors.view` / `visitors.manage` (module "Visitors & gate"). Security defaults to both, and an untouched empty Security role profile upgrades.
+  - Rules: entry and exit cannot be in the future, and exit cannot be before entry.
+  - Audit: `VISITOR_ENTERED`, `VISITOR_EXITED`, and `VISITOR_UPDATED` with each changed field old → new. Visits are never deleted.
+  - Nothing in it reads students' studies, fees or marks.
+- **Security can never hold** guardian contact, enquiries, applications, meeting scheduling or any finance grant.
+
+**Migrations:** `20261019090000_visitors` — NOT applied to Neon (local test DB only).
+
+**Tested:** new `tests/integration/receptionist-security.test.ts` (10 tests). It covers:
+- the receptionist front desk by default, with no fees, payroll, meetings or visitors;
+- meetings with the grant: own only, no delete;
+- the Security profile upgrade, visitor in/out/search, future and before-entry refusals, the audited correction, turned away;
+- Security's exclusions, view-only without manage, and school isolation.
+
+Two older tests were updated: Security defaults, and the admin nav (Visitors folded under Transport). Full suite is 87 files / 909 tests passing. `tsc`, `eslint`, phrase coverage and the production build (local test DB) pass. Not clicked through in a browser.
+
+---
+
+## 6 Oct 2026 — Streams in timetable & homework, staff payroll, parent transport status, Half Day, Communication Center
+
+**Asked (five requests in one message):**
+
+1. Timetable and homework must respect streams (Class → Section → optional Stream → Subject → Teacher). Streams are never forced. Teachers, students and parents see only their own scope. Keep existing data, add conflict validation.
+2. Payroll for non-teaching staff on the existing salary models, without breaking teacher payroll. Accountant gets payroll only when granted. Everything audited.
+3. Parent-facing transport status (today's route, stop, pickup/drop with time) from the existing trip marks. Parents see only their own child. Drivers see only their own route. Audited.
+4. Half Day attendance: admin can switch it off; counted in summaries and reports; no future dates; corrections audited.
+5. A Communication Center over notices, events, meetings and notifications. Adds announcements and emergency alerts, audiences down to class, section or stream, keeps read/unread. No SMS/WhatsApp.
+
+**Done:**
+
+1. **Streams.**
+   - `TimetableSlot.streamId` and `Homework.streamId` are new; null means the whole section, so all old rows are unchanged.
+   - A stream can be chosen only for a section split into streams (`SectionStream`).
+   - **Conflicts:**
+     - Science and Commerce periods may run at the same time.
+     - A whole-section period clashes with every stream's.
+     - The same stream, the same teacher or the same room cannot be double-booked.
+     - Checked under a section row lock. The section unique index now includes the stream.
+   - Timetabling a stream period gives the teacher a stream assignment.
+   - **Homework:**
+     - A whole-section teacher may set work for the section or any of its streams.
+     - A stream teacher may set work only for their own stream.
+     - Homework set from a lesson takes the period's stream.
+   - Students, parents, alerts and the student/parent APIs show whole-section items plus their own stream's only.
+   - Timetables show the stream name.
+2. **Staff payroll.**
+   - `TeacherSalary` and `SalaryPayment` now name a teacher **or** a staff member. A database check enforces exactly one.
+   - A staff profile has a new **Salary** tab: structure history, set or raise, payments.
+   - Salaries and the monthly payroll list teachers and staff together, with each person's role and approved unpaid leave for both.
+   - Mixed batch pay; nobody can be paid twice.
+   - The payroll CSV has a "Staff type" column.
+   - **Accountant default no longer includes `payroll.view`.** An untouched built-in profile upgrades; staff own grants are unchanged. Payroll needs "View payroll & salaries"; paying needs "Record salary payments"; the structure stays School Admin only.
+   - Audit: `STAFF_SALARY_SET`, `SALARY_PAID`, `SALARY_PAYMENT_REMOVED`, and `PAYROLL_PAID` (totals only).
+   - **Not built:** salary slip (none existed).
+3. **Parent transport.**
+   - New `childTransportToday` checks the guardian link itself. It shows route, stop, planned times, pickup/drop (Pending / Completed time / Not present / Issue) and today's crew (substitute named while covering).
+   - Never other riders' data.
+   - Shown on the parent's child page, plus `GET /api/v1/me/children/[id]/transport`.
+   - `markTrip` writes a `TRANSPORT_TRIP_MARKED` audit entry, noting the old status on a correction. The School Admin can mark or correct any route; drivers only their own (or one they cover).
+   - The old `childTransport` was replaced.
+4. **Half Day.**
+   - `AttendanceStatus.HALF_DAY` and `School.attendanceHalfDay` (default on) are new. The setting is a checkbox under Settings → Attendance, refused on the server when off.
+   - One helper, `lib/attendance.ts`, counts a half day as 0.5 everywhere: shares, report cards, dashboards, charts, CSV.
+   - Half Day is shown in the register, student/parent summaries, the section report and its export.
+   - "Excused" is now labelled **Leave**.
+   - The existing future-date block and correction audit apply.
+   - **Not done:** Half Day for staff attendance.
+5. **Communication Center** (`/school-admin/communication`, which replaces "Notices" in the admin sidebar):
+   - Cards for Notices, Announcements, Events, Meetings/PTM and Notifications, plus an Emergency alerts panel with read counts.
+   - `Notice.kind` (Notice / Announcement / Emergency) and scope **STREAM** are new.
+   - Stream messages reach that stream's students and parents and the teachers of sections with that stream. Staff messages stay whole-school.
+   - Emergency alerts go to the top of each recipient's notices and appear as **critical notifications** in the existing bell, with the existing read state.
+   - Existing NoticeRead is unchanged. No SMS/WhatsApp.
+
+**Migrations (all NOT on Neon):** `20261015090000_stream_timetable_homework`, `20261016090000_staff_payroll` (adds a payee check constraint), `20261017090000_attendance_half_day`, `20261018090000_communication_center`, `20261018100000_notice_stream_target` (updates the notice target check). Applied to the local test DB only.
+
+**Tested:** new test files, all passing:
+- `stream-timetable-homework` (9)
+- `staff-payroll` (9)
+- `parent-transport` (6)
+- `attendance-half-day` (6)
+- `communication-center` (6)
+
+Updated tests: the transport test (new service), staff-role-dashboards (accountant payroll now granted, not default), the nav test (admin Communication entry), and tenant-audit (nullable teacher on payments). Full suite is 86 files / 899 tests passing. `tsc`, `eslint`, phrase coverage and the production build (local test DB) pass. None of it was clicked through in a browser.
+
+---
+
+## 6 Oct 2026 — Admission drives: teacher-run admissions with admin approval
+
+**Asked:** extend the existing admissions (do not replace the online or walk-in workflow) so the School Admin can run an **admission drive** for a session: name, start/end, status (Scheduled, Active, Paused, Closed, Cancelled), and the classes or sections it covers. Each class/section gets a teacher with its own dates, capacity and permissions (view, create, edit, upload documents, submit). Final approval stays with the School Admin. Requirements:
+
+- Teacher access ends when their end date passes.
+- The admin can change the teacher, dates, capacity or permissions; pause, resume or extend; and reassign pending applications.
+- Never delete history.
+- Capacity is enforced on the server, and schools are isolated.
+- Reuse the existing models, add audit logs, and run tests, typecheck and build.
+
+**Done:**
+
+- **Model** (reuses `AdmissionApplication`, sessions, classes, sections, teachers and students — no second application or student concept):
+  - New `AdmissionDrive`: session, name, dates, status.
+  - New `AdmissionAssignment`: class, optional section, teacher, the teacher's own dates, capacity, permissions, `pausedAt`, `removedAt`.
+  - New `AdmissionDocument`: PDF, soft-removed.
+  - `AdmissionApplication` gains `driveId`, `assignmentId`, `createdById`.
+  - New status values `DRAFT` and `CORRECTION_REQUESTED`, and source `DRIVE`.
+  - All three new tables are tenant-scoped (`TENANT_MODELS`).
+- **Rules** (`src/lib/admission-drives.ts`, `src/server/admissions/drives.ts`):
+  - A teacher can create, edit, upload or submit only when **all** of these hold: they have that permission; the drive is running (Scheduled/Active and inside its dates); the assignment is not paused or removed; and today is inside the **assignment's own** dates.
+  - Write access therefore ends by itself when the end date passes. Viewing stays.
+  - A teacher sees only their own assignments' applications.
+  - Assignment dates must sit inside the drive's dates.
+- **Workflow:**
+  - Teacher: create (draft) → documents → submit → *Pending admin review*.
+  - School Admin: Approve → the usual "Convert to student" opens, prefilled with the assignment's section. Or Reject (reason required), or Send back for correction (note required) → the teacher fixes it and resubmits.
+  - Office staff with "Move applications along" **cannot** decide a drive application.
+- **Capacity:**
+  - Counted under a row lock. Every application except rejected ones takes a place.
+  - Parallel clicks cannot overfill it.
+  - Capacity cannot be set below the places already used.
+- **Admin controls** on the drive page:
+  - Assign a class/section to a teacher.
+  - Change teacher, dates, capacity or permissions. A new teacher takes over the assignment and its applications; the old teacher's access ends.
+  - Pause/resume, extend, remove (kept with `removedAt`).
+  - Reassign pending applications to another assignment of the same class (target capacity checked; each one gets a history note).
+  - Nothing is ever deleted.
+- **Audit:** drive created/updated, assignment created/updated (with what changed, including the teacher)/paused/resumed/removed, applications reassigned, application created/edited/submitted/correction requested/rejected/approved, document added/removed.
+- **Screens:**
+  - Admin: new "Admission drives" tab under Admissions (`/school-admin/admissions/drives`, `/drives/[id]`). The application page shows the drive, teacher and documents, and an Approve / Correction / Reject card.
+  - Teacher: "Admissions" appears in the sidebar only for a teacher with an assignment. Pages are `/teacher/admissions`, `/new`, `/[id]`, covering edit, documents and submit.
+  - PDF documents are served at `/api/v1/admission-documents/[id]/file` (admin, office staff with applications view, or the assigned teacher).
+  - Hindi added for all new text.
+- Older office applications no longer include drive applications (`origin=office` now means walk-in, phone or office).
+
+**Not done / choices:** approval cannot be delegated to a teacher. The request said approval stays with the School Admin "by default", and no per-assignment approve permission was added. Documents are PDF only (the existing document store). Paging a drive's application list beyond 500 is not needed yet.
+
+**Migrations:** `20261014090000_admission_drives` (adds enum values, three tables, three nullable columns; no data changed). Applied to the local test database only — **NOT applied to Neon**. Run `npx prisma migrate deploy` against Neon after reviewing.
+
+**Tested:** new `tests/integration/admission-drives.test.ts` (17 tests). Covers:
+- admin-only setup; the full draft → submit → correction → resubmit → approve → admit flow;
+- office staff refused; documents visible to the right people only;
+- capacity, including 3 parallel creates for 1 place and the "not below used" rule;
+- expiry by end date and by start date, extend, pause/resume, drive pause, per-permission refusals;
+- change of teacher, reassign within capacity, remove without loss, audit entries, and school isolation.
+
+Full suite: 81 files / 863 tests passing. `tsc`, `eslint`, phrase coverage and production build (local test DB) all pass. Not clicked through in a browser.
+
+---
+
+## 6 Oct 2026 — Role-specific staff dashboards: finance desk and front desk
+
+**Asked:** the five test logins (accountant, receptionist, lab assistant, security, support) saw only a generic dashboard. Give each role its own dashboard and navigation through the **existing** grant system (no second permission system). The School Admin stays the final authority, per staff member. The server must enforce everything. Do not build a screen for a module that does not exist; report it instead. Do not modify existing users/data.
+
+**Done:**
+
+- **New grants** in the existing catalogue (`src/lib/staff-access.ts`), shown on the admin's permission checkboxes like every other grant. A new module, "Enquiries & admissions", has `enquiries.view`, `enquiries.manage`, `enquiries.fees`, `admissions.view` and `admissions.manage`. Under Fees there is `fees.reports`. Security and Support staff can never hold any finance grant, and a librarian can never hold `fees.reports`.
+- **Role defaults** (only the starting point; the admin can still tick or untick anything per person). Accountant: fees view/collect, finance reports, expenses view/add, payroll view. Receptionist: enquiries view/manage, applications view/manage, student directory + contacts (no fee discussion by default). Lab assistant: inventory view/manage. Security / Support: none.
+- **Role profiles.** A built-in role profile still on the old default (never edited by the admin) moves to the new default the next time the admin opens the staff pages. An edited one is left alone. **No staff member's own permissions are changed.**
+- **Accountant:** new **Finance** dashboard at `/staff/finance`. It shows today's collection, this session's collected and pending fees, this month's spending, the salary bill, the largest outstanding fees, recent receipts (print/PDF) and CSV reports via `/staff/finance/export`. **Payment history** is at `/staff/fees/payments`. Each part shows only with its permission, and the services check again.
+- **Receptionist:** **Enquiries** at `/staff/enquiries` (list, new, detail, edit, follow-ups, status, link parent, withdraw child) and **Applications** at `/staff/admissions` (list, detail, status, follow-ups). These are the same screens as the admin's, moved into shared components in `src/features/admissions/screens/` and scoped. Admitting a student, applying concessions, archiving and form settings stay School Admin only. Without `enquiries.fees`, a new enquiry is saved without fee figures, whatever the form sends. The staff dashboard has a "Front desk" panel with open enquiries, follow-ups due today and online applications in progress.
+- **Server guards** changed from admin-only to admin-or-grant on: enquiry and application services; `listPayments`, `listSalaries`; the fee/payment/expense/salary export tables. Expense and salary exports need the report grant **and** that area's own grant.
+- Sidebar: Finance, Enquiries and Applications entries, shown only with their grants. Hindi added for all new text.
+
+**Not built (modules that do not exist; no placeholder screens were made):** a lab module (lab assistants get only Inventory), visitor / gate entry-exit for Security, and a task list for Support staff. Those three roles see the common staff pages: notices, meetings, calendar, leave, own attendance.
+
+**Test logins on Neon were not changed** (as asked). Their own permissions are still the old defaults: accountant fees view/collect, receptionist student directory, lab assistant inventory view. So the receptionist will not see Enquiries until the admin gives it. To do that: School Admin → Staff → Roles → the role → Save with "also give the staff in this role these permissions", or tick the permissions on each person's profile.
+
+**Migrations:** none.
+
+**Tested:** new `tests/integration/staff-role-dashboards.test.ts` (14 tests). Covers receptionist enquiries and applications, fee stripping, no conversion, grants on/off, accountant finance, security and support never getting finance, profile upgrade only when untouched, and school isolation. Two older tests were updated because they pinned the old accountant default. Full suite is 80 files / 846 tests passing. `tsc`, `eslint` and the production build (against the local test DB) all pass. Phrase coverage passes.
+
+---
+
+## 5 Oct 2026 — Non-teaching staff test logins in Green Valley Academy (live)
+
+**Asked:** create test logins for every non-teaching staff role in the existing Green Valley Academy, without changing any existing data; skip roles that already exist; password `SchoolOS@2026`.
+
+**Done:** new `scripts/create-staff-test-accounts.ts` (dry run by default; `--apply` writes; `--school "<name>"`). It checks the required migration is applied, finds exactly one school by name, skips a role that already has a current staff member with an active login (or an email already in use), and otherwise creates an active, already-activated `NON_TEACHING_STAFF` user plus staff record with the school's built-in role profile and its default permissions. Nothing existing is updated or deleted. Tested on a local scratch database first (dry run, apply, re-run skips everything, password verifies).
+
+Run against the live database (Neon):
+
+| Name | Role | Email | Password | Status |
+| --- | --- | --- | --- | --- |
+| lavkush kush | Librarian | lavkush@gmail.com | (unchanged) | Already existed — skipped |
+| alok kush | Driver | alok@gmail.com | (unchanged) | Already existed — skipped |
+| Test Accountant | Accountant | accountant@schoolos.test | SchoolOS@2026 | Created |
+| Test Receptionist | Receptionist | receptionist@schoolos.test | SchoolOS@2026 | Created |
+| Test Lab Assistant | Lab assistant | labassistant@schoolos.test | SchoolOS@2026 | Created |
+| Test Security | Security | security@schoolos.test | SchoolOS@2026 | Created |
+| Test Support Staff | Support staff | support@schoolos.test | SchoolOS@2026 | Created |
+
+Later the same day, at the user's request, the existing Librarian login `lavkush@gmail.com` had its password set to `SchoolOS@2026` (password only; nothing else on the account changed).
+
+Each new record has employee ID `TEST-…`, job title "<Role> (test account)" and a note saying it is a test login; set them Inactive from Staff when no longer needed.
+
+**Migrations:** none (data only).
 
 ---
 

@@ -21,7 +21,7 @@ export const metadata: Metadata = { title: "Leave" };
 const STATUSES = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] as const;
 
 export default async function AdminLeavePage(props: PageProps<"/school-admin/leave">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const status = enumParam(search.status, [...STATUSES, "ALL"] as const) ?? "PENDING";
   const employee = param(search.employee);

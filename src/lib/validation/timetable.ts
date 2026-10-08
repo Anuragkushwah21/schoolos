@@ -12,6 +12,8 @@ const periodFields = {
   endMinute: requiredTime("an end time"),
   /** A room from School Setup → Rooms; blank for no room. */
   roomId: optionalId,
+  /** One stream of a section split into streams; blank for the whole section. */
+  streamId: optionalId,
 };
 
 function withTimeRules<T extends z.ZodType<{ startMinute: number; endMinute: number }>>(schema: T) {

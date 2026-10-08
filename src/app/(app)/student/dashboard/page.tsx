@@ -145,8 +145,6 @@ export default async function StudentDashboardPage() {
         </Card>
       ) : null}
 
-      <SchoolLifeCards ctx={ctx} base="/student" />
-
       <Card className="mb-6">
         <CardHeader>
           <CardTitle>{t("dashboard.forYou")}</CardTitle>
@@ -163,7 +161,7 @@ export default async function StudentDashboardPage() {
               <CardTitle>{t("dashboard.student.todaysClasses")}</CardTitle>
               <CardDescription>
                 {day.tally.scheduled
-                  ? `${day.tally.completed + day.tally.substitute} of ${pluralize(day.tally.scheduled, "class", "classes")} written up so far.`
+                  ? `${day.tally.completed + day.tally.substitute} of ${pluralize(day.tally.scheduled, "class", "classes")} taught so far.`
                   : "Nothing on the timetable today."}
               </CardDescription>
             </CardHeader>
@@ -314,6 +312,10 @@ export default async function StudentDashboardPage() {
           </Card>
 
         </div>
+      </div>
+
+      <div className="mt-6">
+        <SchoolLifeCards ctx={ctx} base="/student" />
       </div>
     </>
   );

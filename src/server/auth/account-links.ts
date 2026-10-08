@@ -38,12 +38,6 @@ const hashToken = (token: string) => createHash("sha256").update(token).digest("
 
 export type AccountState = "NO_ACCOUNT" | "PENDING_ACTIVATION" | "ACTIVE" | "DISABLED";
 
-export function accountState(user: { isActive: boolean; activatedAt: Date | null } | null): AccountState {
-  if (!user) return "NO_ACCOUNT";
-  if (!user.isActive) return "DISABLED";
-  return user.activatedAt ? "ACTIVE" : "PENDING_ACTIVATION";
-}
-
 /**
  * Create a login waiting for activation. Call inside the caller's
  * transaction; send the email with `sendActivation` after it commits.
@@ -185,7 +179,7 @@ export async function inspectLink(token: string, purpose: AccountTokenPurpose) {
   if (!token || token.length > 200) return null;
   const row = await prisma.accountToken.findUnique({
     where: { tokenHash: hashToken(token) },
-    select: { id: true, purpose: true, usedAt: true, revokedAt: true, expiresAt: true, user: { select: { id: true, email: true, firstName: true, isActive: true, activatedAt: true } } },
+    select: { id: true, purpose: true, usedAt: true, revokedAt: true, expiresAt: true, user: { select: { id: true, email: true, firstName: true, isActive: true, activatedAt: true, schoolId: true } } },
   });
   if (!row || row.purpose !== purpose || row.usedAt || row.revokedAt || row.expiresAt <= new Date() || !row.user.isActive) return null;
   if (purpose === "ACTIVATION" && row.user.activatedAt) return null;
@@ -227,6 +221,8 @@ export async function redeemAccountLink(token: string, purpose: AccountTokenPurp
     entityType: "User",
     entityId: row.user.id,
     actorId: row.user.id,
+    // In their school's own audit log too.
+    schoolId: row.user.schoolId,
     summary: purpose === "ACTIVATION" ? `${row.user.email} activated their account.` : `${row.user.email} reset their password by email.`,
   });
   return row.user.id;

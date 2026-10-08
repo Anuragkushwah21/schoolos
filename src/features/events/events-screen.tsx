@@ -15,6 +15,7 @@ import { formatDate, formatMinutes } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import type { TenantContext } from "@/server/auth/current-user";
 import { type EventRow, listEvents } from "@/server/communication/events";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Events — something happening at school — for every role: Upcoming (today
@@ -83,7 +84,7 @@ function EventCard({ event, basePath, admin }: { event: EventRow; basePath: stri
 }
 
 export async function EventsScreen({ ctx, basePath, view }: { ctx: TenantContext; basePath: string; view?: string }) {
-  const admin = ctx.user.role === "SCHOOL_ADMIN";
+  const admin = isSchoolLeader(ctx.user.role);
   const { upcoming, completed, completedCount } = await listEvents(ctx);
   const showCompleted = view === "completed";
   const rows = showCompleted ? completed : upcoming;

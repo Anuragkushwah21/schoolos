@@ -215,12 +215,15 @@ export function EnquiryForm({
   assignees = [],
   today,
   defaults,
+  allowFees = true,
 }: {
   classes: ClassOption[];
   streams: SelectOption[];
   assignees?: SelectOption[];
   today: string;
   defaults?: EnquiryDefaults;
+  /** Off for staff without "Discuss fees & discounts": no fee step (the server drops fee figures anyway). */
+  allowFees?: boolean;
 }) {
   const editing = Boolean(defaults);
   const [parent, setParent] = useState({ parentName: defaults?.parentName ?? "", phone: defaults?.phone ?? "" });
@@ -380,7 +383,7 @@ export function EnquiryForm({
     <ActionForm action={editing ? updateEnquiryAction : createEnquiryAction} className="max-w-4xl">
       {defaults ? <input type="hidden" name="enquiryId" value={defaults.enquiryId} /> : null}
       <FormSteps
-        steps={editing ? [parentStep, childrenStep, reviewStep] : [parentStep, childrenStep, feeStep, followUpStep, reviewStep]}
+        steps={editing ? [parentStep, childrenStep, reviewStep] : allowFees ? [parentStep, childrenStep, feeStep, followUpStep, reviewStep] : [parentStep, childrenStep, followUpStep, reviewStep]}
         submit={
           <SubmitButton pendingLabel="Saving…" size="lg">
             {editing ? "Save changes" : "Save enquiry"}

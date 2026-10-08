@@ -4,10 +4,13 @@ import type { Gender } from "@/generated/prisma/enums";
 import { formatDate } from "@/lib/dates";
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { classFeeSummary, overdueInstallments, sessionFeeSummary, studentLedger } from "@/server/finance/fee-reports";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import { tabulate } from "@/server/exams/service";
 import { listFeePositions } from "@/server/finance/fees";
+import { attendedDays } from "@/lib/attendance";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * School Admin reports that are tables rather than charts: the lists an office
@@ -25,12 +28,23 @@ async function currentSessionId(ctx: TenantContext): Promise<string | null> {
 const GENDER_LABEL: Record<Gender, string> = { MALE: "Boy", FEMALE: "Girl", OTHER: "Other" };
 
 /** Every student placed this session, with class, section and primary guardian. */
-export async function studentListReport(ctx: TenantContext): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+/** The student list as CSV — the whole session, or the same filters the Students page shows (class, section, status, search). */
+export async function studentListReport(ctx: TenantContext, filters: { sectionId?: string | null; classId?: string | null; status?: string | null; q?: string | null } = {}): Promise<ReportTable> {
+  assertCan(ctx, "reports", "VIEW");
   const sessionId = await currentSessionId(ctx);
+  const q = filters.q?.trim();
+  const statusWhere = filters.status === "CURRENT" ? { status: { in: ["ACTIVE", "ON_LEAVE"] as Array<"ACTIVE" | "ON_LEAVE"> } } : filters.status && filters.status !== "ALL" ? { status: filters.status as "ACTIVE" } : {};
   const enrollments = sessionId
     ? await ctx.db.studentEnrollment.findMany({
-        where: { academicSessionId: sessionId },
+        where: {
+          academicSessionId: sessionId,
+          ...(filters.sectionId ? { sectionId: filters.sectionId } : {}),
+          ...(filters.classId ? { classId: filters.classId } : {}),
+          student: {
+            ...statusWhere,
+            ...(q ? { OR: [{ firstName: { contains: q, mode: "insensitive" } }, { lastName: { contains: q, mode: "insensitive" } }, { admissionNumber: { contains: q, mode: "insensitive" } }] } : {}),
+          },
+        },
         orderBy: [{ class: { level: "asc" } }, { section: { name: "asc" } }, { rollNumber: "asc" }],
         select: {
           rollNumber: true,
@@ -80,7 +94,7 @@ export async function studentListReport(ctx: TenantContext): Promise<ReportTable
 
 /** Teachers with their contact details, status and what they are assigned. */
 export async function teacherListReport(ctx: TenantContext): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const sessionId = await currentSessionId(ctx);
   const teachers = await ctx.db.teacher.findMany({
     orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
@@ -120,7 +134,7 @@ function humanGender(gender: Gender): string {
 
 /** Students per class this session, split into boys and girls. */
 export async function classStrengthReport(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const sessionId = await currentSessionId(ctx);
   if (!sessionId) return { rows: [], totals: { boys: 0, girls: 0, other: 0, total: 0 } };
 
@@ -166,7 +180,7 @@ export async function classStrengthTable(ctx: TenantContext): Promise<ReportTabl
 /** Each teacher's attendance between two dates, by status. */
 /** Teachers and non-teaching staff, with their register totals for the range. */
 export async function staffAttendanceReport(ctx: TenantContext, from: Date, to: Date) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const [teachers, grouped, staff, staffGrouped] = await Promise.all([
     ctx.db.teacher.findMany({
       where: { status: { in: ["ACTIVE", "ON_LEAVE"] } },
@@ -210,7 +224,7 @@ export async function staffAttendanceReport(ctx: TenantContext, from: Date, to: 
     name: fullName(person),
     job,
     counts: c,
-    share: c.total ? (c.PRESENT + c.LATE) / c.total : null,
+    share: c.total ? attendedDays(c) / c.total : null,
   });
 
   return [
@@ -241,7 +255,7 @@ export async function staffAttendanceTable(ctx: TenantContext, from: Date, to: D
 
 /** Every student's fee position this session; `pendingOnly` keeps those who still owe. */
 export async function feePositionsTable(ctx: TenantContext, options: { pendingOnly?: boolean } = {}): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.reports");
   const rows: Array<Awaited<ReturnType<typeof listFeePositions>>["rows"][number]> = [];
   for (let page = 1; ; page += 1) {
     const result = await listFeePositions(ctx, { page });
@@ -280,7 +294,7 @@ export async function feePositionsTable(ctx: TenantContext, options: { pendingOn
  * the marks themselves with the same grading rules as the report card.
  */
 export async function examPerformanceReport(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const sessionId = await currentSessionId(ctx);
   if (!sessionId) return { exams: [], subjects: [] };
 
@@ -355,7 +369,7 @@ export async function examPerformanceTable(ctx: TenantContext): Promise<ReportTa
  * missed, periods covered for others, and approved leave days.
  */
 export async function teacherWorkloadReport(ctx: TenantContext, from: Date, to: Date) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const sessionId = await currentSessionId(ctx);
   const [teachers, slots, assignments, sessions, covers, leave] = await Promise.all([
     ctx.db.teacher.findMany({
@@ -416,7 +430,7 @@ const words = (value: string) => value.charAt(0) + value.slice(1).toLowerCase().
 
 /** Fee receipts in a range. Void receipts are listed, marked, and count for nothing. */
 export async function feePaymentsTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.reports");
   const rows = await ctx.db.feePayment.findMany({
     where: { paidOn: { gte: from, lte: to } },
     orderBy: [{ paidOn: "asc" }, { receiptNo: "asc" }],
@@ -447,7 +461,9 @@ export async function feePaymentsTable(ctx: TenantContext, from: Date, to: Date)
 }
 
 export async function expensesTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  // Reports, and the expenses themselves.
+  await assertAdminOrStaffPermission(ctx, "fees.reports");
+  await assertAdminOrStaffPermission(ctx, "expenses.view");
   const rows = await ctx.db.expense.findMany({
     where: { spentOn: { gte: from, lte: to } },
     orderBy: { spentOn: "asc" },
@@ -460,22 +476,44 @@ export async function expensesTable(ctx: TenantContext, from: Date, to: Date): P
 }
 
 export async function salaryPaymentsTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  // Reports, and the payroll itself.
+  await assertAdminOrStaffPermission(ctx, "fees.reports");
+  await assertAdminOrStaffPermission(ctx, "payroll.view");
   const rows = await ctx.db.salaryPayment.findMany({
     where: { paidOn: { gte: from, lte: to } },
     orderBy: [{ paidOn: "asc" }],
-    select: { paidOn: true, forMonth: true, amountMinor: true, method: true, reference: true, teacher: { select: { firstName: true, lastName: true, employeeId: true } } },
+    select: {
+      paidOn: true,
+      forMonth: true,
+      amountMinor: true,
+      method: true,
+      reference: true,
+      teacher: { select: { firstName: true, lastName: true, employeeId: true } },
+      staffMember: { select: { firstName: true, lastName: true, employeeId: true, role: true } },
+    },
   });
   const month = new Intl.DateTimeFormat("en-IN", { month: "short", year: "numeric", timeZone: "UTC" });
   return {
-    head: ["Paid on", "For month", "Teacher", "Employee ID", "Method", "Reference", "Amount (₹)"],
-    rows: rows.map((row) => [formatDate(row.paidOn), month.format(row.forMonth), fullName(row.teacher), row.teacher.employeeId, words(row.method), row.reference ?? "", rupeesCell(row.amountMinor)]),
+    head: ["Paid on", "For month", "Name", "Employee ID", "Staff type", "Method", "Reference", "Amount (₹)"],
+    rows: rows.map((row) => {
+      const person = row.teacher ?? row.staffMember;
+      return [
+        formatDate(row.paidOn),
+        month.format(row.forMonth),
+        person ? fullName(person) : "",
+        person?.employeeId ?? "",
+        row.teacher ? "Teacher" : row.staffMember ? words(row.staffMember.role) : "",
+        words(row.method),
+        row.reference ?? "",
+        rupeesCell(row.amountMinor),
+      ];
+    }),
   };
 }
 
 /** Classes taken by a substitute, and classes missed, in a range — from the class records. */
 export async function substituteClassesTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const rows = await ctx.db.classSession.findMany({
     // A stand-in who marked the class remote or cancelled still took it over.
     where: { date: { gte: from, lte: to }, OR: [{ status: { in: ["SUBSTITUTE", "MISSED"] } }, { status: { in: ["REMOTE", "CANCELLED"] }, actualTeacherId: { not: null } }] },
@@ -511,7 +549,7 @@ export async function substituteClassesTable(ctx: TenantContext, from: Date, to:
 
 /** Homework set in a range, by section and subject. */
 export async function homeworkTable(ctx: TenantContext, from: Date, to: Date): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const rows = await ctx.db.homework.findMany({
     where: { assignedOn: { gte: from, lte: to } },
     orderBy: [{ assignedOn: "asc" }],
@@ -533,7 +571,7 @@ export async function homeworkTable(ctx: TenantContext, from: Date, to: Date): P
 
 /** Support records this session — staff-only detail, never shown to families. */
 export async function supportTable(ctx: TenantContext): Promise<ReportTable> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const sessionId = await currentSessionId(ctx);
   const rows = sessionId
     ? await ctx.db.studentSupport.findMany({
@@ -568,5 +606,47 @@ export async function supportTable(ctx: TenantContext): Promise<ReportTable> {
       words(row.status),
       row.resolvedAt ? formatDate(row.resolvedAt) : "",
     ]),
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Fee reports (class-wise, session-wise, overdue instalments, student ledger)
+// -----------------------------------------------------------------------------
+
+const csvRupees = (minor: number) => (minor / 100).toFixed(minor % 100 ? 2 : 0);
+
+export async function feeClassSummaryTable(ctx: TenantContext): Promise<ReportTable> {
+  await assertAdminOrStaffPermission(ctx, "fees.reports");
+  const { rows, total } = await classFeeSummary(ctx);
+  return {
+    head: ["Class / section", "Students", "Assigned (₹)", "Concessions (₹)", "Net due (₹)", "Collected (₹)", "Pending (₹)", "Overdue (₹)"],
+    rows: [...rows, { ...total, section: "Total" }].map((row) => [row.section, String(row.students), csvRupees(row.assignedMinor), csvRupees(row.concessionMinor), csvRupees(row.chargedMinor), csvRupees(row.paidMinor), csvRupees(row.pendingMinor), csvRupees(row.overdueMinor)]),
+  };
+}
+
+export async function feeSessionSummaryTable(ctx: TenantContext): Promise<ReportTable> {
+  await assertAdminOrStaffPermission(ctx, "fees.reports");
+  const rows = await sessionFeeSummary(ctx);
+  return {
+    head: ["Session", "Students", "Assigned (₹)", "Concessions (₹)", "Net due (₹)", "Collected (₹)", "Pending (₹)", "Overdue (₹)"],
+    rows: rows.map((row) => [row.name, String(row.students), csvRupees(row.assignedMinor), csvRupees(row.concessionMinor), csvRupees(row.chargedMinor), csvRupees(row.paidMinor), csvRupees(row.pendingMinor), csvRupees(row.overdueMinor)]),
+  };
+}
+
+export async function feeOverdueTable(ctx: TenantContext): Promise<ReportTable> {
+  await assertAdminOrStaffPermission(ctx, "fees.reports");
+  const { rows } = await overdueInstallments(ctx);
+  return {
+    head: ["Admission no.", "Student", "Class / section", "Fee head", "Instalment", "Due on", "Days overdue", "Ageing", "Unpaid (₹)"],
+    rows: rows.map((row) => [row.admissionNumber, row.name, row.section, row.head, row.installments > 1 ? `${row.installmentNo} of ${row.installments}` : "", formatDate(row.dueOn), String(row.days), row.bucket, csvRupees(row.remainingMinor)]),
+  };
+}
+
+export async function feeLedgerTable(ctx: TenantContext, studentId: string): Promise<ReportTable> {
+  await assertAdminOrStaffPermission(ctx, "fees.reports");
+  const ledger = await studentLedger(ctx, studentId);
+  return {
+    head: ["Date", "Entry", "Receipt", "Debit (₹)", "Credit (₹)", "Balance (₹)"],
+    rows: ledger.entries.map((row) => [formatDate(row.date), row.description, row.receiptNo ?? "", row.debitMinor ? csvRupees(row.debitMinor) : "", row.creditMinor ? csvRupees(row.creditMinor) : "", csvRupees(row.balanceMinor)]),
   };
 }

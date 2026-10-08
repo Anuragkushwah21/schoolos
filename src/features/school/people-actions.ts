@@ -49,7 +49,7 @@ import { emailMoveMessage } from "@/server/people/accounts";
 type Result = ActionResult<undefined>;
 type CredentialsResult = ActionResult<undefined>;
 
-const admin = () => requireTenantForAction("SCHOOL_ADMIN");
+const admin = () => requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
 const REVALIDATE = "/school-admin";
 
 // -----------------------------------------------------------------------------

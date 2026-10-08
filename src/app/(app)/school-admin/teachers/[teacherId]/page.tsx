@@ -28,18 +28,21 @@ import { orNotFound } from "@/server/page-helpers";
 import { getTeacherSalary } from "@/server/finance/salary";
 import { getTeacherProfile } from "@/server/people/teachers";
 import { activationEmailStatuses } from "@/server/auth/account-links";
+import { hasModule } from "@/server/platform/modules";
 
 export const metadata: Metadata = { title: "Teacher" };
 
 export default async function TeacherPage(props: PageProps<"/school-admin/teachers/[teacherId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { teacherId } = await props.params;
 
   const { teacher, session, periodsPerWeek } = await orNotFound(getTeacherProfile(ctx, teacherId));
   const [subjects, sections, salary, seats] = await Promise.all([
     listSubjects(ctx, { activeOnly: true }),
     session ? classSectionOptions(ctx, session.id) : Promise.resolve([]),
-    getTeacherSalary(ctx, teacherId),
+    // Salary only for a school whose plan has payroll, and only for the School
+    // Admin: the Principal does not see salaries.
+    ctx.user.role === "SCHOOL_ADMIN" ? hasModule(ctx, "PAYROLL").then((on) => (on ? getTeacherSalary(ctx, teacherId) : null)) : Promise.resolve(null),
     session ? admissionSeatOptions(ctx, session.id) : Promise.resolve({} as AdmissionSeatOptions),
   ]);
   // The streams each section shares its seats with, for "whole section or one stream".
@@ -179,6 +182,7 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
 
         <div className="flex flex-col gap-6">
           <LifecyclePanel ctx={ctx} person="TEACHER" personId={teacher.id} />
+          {salary ? (
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
               <div>
@@ -260,6 +264,7 @@ export default async function TeacherPage(props: PageProps<"/school-admin/teache
               />
             </CardContent>
           </Card>
+          ) : null}
 
           <Card>
           <CardHeader>

@@ -19,27 +19,51 @@ import { humanize } from "@/lib/format";
 import { noticeStatus } from "@/lib/time-status";
 import { requireTenant } from "@/server/auth/current-user";
 import { listNoticesForAdmin } from "@/server/communication/notices";
+import { StatusBadge } from "@/components/shared/status-badge";
+import { ViewTabs } from "@/components/shared/view-tabs";
+import { param } from "@/lib/search-params";
+import type { Route } from "next";
+
+function scopeLabel(notice: { scope: string; class: { name: string } | null; section: { name: string; class: { name: string } } | null; stream: { name: string } | null }): string {
+  if (notice.scope === "CLASS") return notice.class?.name ?? "One class";
+  if (notice.scope === "SECTION") return notice.section ? `${notice.section.class.name} ${notice.section.name}` : "One section";
+  if (notice.scope === "STREAM") return notice.stream ? `${notice.stream.name} stream` : "One stream";
+  return "Particular students";
+}
 
 export const metadata: Metadata = { title: "Notices" };
 
-export default async function AdminNoticesPage() {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
-  const notices = await listNoticesForAdmin(ctx);
+const KIND_LABEL = { NOTICE: "Notices", ANNOUNCEMENT: "Announcements", EMERGENCY: "Emergency alerts" } as const;
+type Kind = keyof typeof KIND_LABEL;
+
+export default async function AdminNoticesPage(props: PageProps<"/school-admin/notices">) {
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
+  const asked = param((await props.searchParams).kind);
+  const kind = asked && asked in KIND_LABEL ? (asked as Kind) : undefined;
+  const notices = await listNoticesForAdmin(ctx, undefined, kind);
   const now = new Date();
 
   return (
     <>
       <PageHeader icon={MegaphoneIcon} tone="amber"
-        title="Notices"
-        description="Announcements for staff, students and parents — and optionally the public website."
+        back={{ href: "/school-admin/communication" as Route, label: "Communication" }}
+        title={kind ? KIND_LABEL[kind] : "Notices, announcements & alerts"}
+        description="For staff, students and parents — by role, class, section or stream — and optionally the public website."
         actions={
           <Button asChild>
-            <Link href="/school-admin/notices/new">
+            <Link href={(kind ? `/school-admin/notices/new?kind=${kind}` : "/school-admin/notices/new") as Route}>
               <PlusIcon aria-hidden />
-              Create notice
+              {kind === "EMERGENCY" ? "Send emergency alert" : kind === "ANNOUNCEMENT" ? "New announcement" : "Create notice"}
             </Link>
           </Button>
         }
+      />
+      <ViewTabs
+        label="Message type"
+        tabs={[
+          { href: "/school-admin/notices" as Route, label: "All", active: !kind },
+          ...(Object.keys(KIND_LABEL) as Kind[]).map((value) => ({ href: `/school-admin/notices?kind=${value}` as Route, label: KIND_LABEL[value], active: kind === value })),
+        ]}
       />
       {notices.length ? (
         <div className="rounded-xl border">
@@ -59,6 +83,7 @@ export default async function AdminNoticesPage() {
                   <TableRow key={notice.id}>
                     <TableCell className="max-w-md whitespace-normal">
                       <Link href={`/school-admin/notices/${notice.id}`} className="inline-flex items-center gap-1.5 font-medium hover:underline">
+                        {notice.kind === "EMERGENCY" ? <StatusBadge status="EMERGENCY" tone="negative" label="Emergency" /> : notice.kind === "ANNOUNCEMENT" ? <StatusBadge status="ANNOUNCEMENT" tone="info" label="Announcement" /> : null}
                         {notice.title}
                         {notice.isPublic ? <GlobeIcon className="text-muted-foreground size-3.5" aria-label="On the public website" /> : null}
                       </Link>
@@ -66,7 +91,10 @@ export default async function AdminNoticesPage() {
                         {notice.author ? `${notice.author.firstName} ${notice.author.lastName}` : "—"}
                       </p>
                     </TableCell>
-                    <TableCell>{notice.audience === "ALL" ? "Everyone" : humanize(notice.audience)}</TableCell>
+                    <TableCell>
+                      {notice.audience === "ALL" ? "Everyone" : notice.audience === "NON_TEACHING_STAFF" ? "Staff" : humanize(notice.audience)}
+                      {notice.scope !== "SCHOOL" ? <span className="text-muted-foreground block text-xs">{scopeLabel(notice)}</span> : null}
+                    </TableCell>
                     <TableCell>
                       <TimeStatusBadge status={timeStatus} />
                     </TableCell>

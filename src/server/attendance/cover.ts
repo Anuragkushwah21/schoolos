@@ -1,17 +1,18 @@
 import "server-only";
 
-import type { RegisterSubmission, RegisterTiming } from "@/generated/prisma/enums";
+import type { RegisterTiming } from "@/generated/prisma/enums";
 import { addDays, formatDate, today } from "@/lib/dates";
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName, humanize } from "@/lib/format";
 import { CURRENT_EMPLOYEE } from "@/lib/validation/lifecycle";
 import { sectionLabel } from "@/server/academics/structure";
-import { attendanceWindow, finalizeDueRegisters, registerPhase } from "@/server/attendance/register";
+import { attendanceWindow, registerPhase } from "@/server/attendance/register";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireStaffSelf } from "@/server/auth/staff-access";
 import { requireTeacherSelf } from "@/server/auth/teacher-access";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * When someone is away, their daily work goes to someone else for the day.
@@ -58,8 +59,7 @@ async function teachersAway(ctx: TenantContext, date: Date): Promise<Map<string,
  * are away, who covers the register, and whether it has been taken.
  */
 export async function registerCoverBoard(ctx: TenantContext, date: Date) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
-  await finalizeDueRegisters(ctx);
+  assertCan(ctx, "attendance", "EDIT");
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
   if (!session) return { sections: [], teachers: [] };
 
@@ -121,7 +121,7 @@ export async function assignRegisterCover(
   ctx: TenantContext,
   input: { sectionId: string; date: Date; teacherId: string; reason: string | null },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "EDIT");
   assertCoverDate(input.date);
   const [section, teacher] = await Promise.all([
     ctx.db.section.findFirst({
@@ -152,7 +152,7 @@ export async function assignRegisterCover(
 }
 
 export async function removeRegisterCover(ctx: TenantContext, coverId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "DELETE");
   const cover = await ctx.db.registerCover.findFirst({ where: { id: coverId }, select: { id: true, sectionId: true, date: true } });
   if (!cover) throw new NotFoundError("That cover was not found.");
   await ctx.db.registerCover.deleteMany({ where: { id: cover.id } });
@@ -171,7 +171,7 @@ export async function removeRegisterCover(ctx: TenantContext, coverId: string): 
  * registers, the covers, the class-teacher history and the staff register.
  */
 export async function registerHistory(ctx: TenantContext, input: { from: Date; to: Date; sectionId?: string }) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "VIEW");
   const where = { date: { gte: input.from, lte: input.to }, ...(input.sectionId ? { sectionId: input.sectionId } : {}) };
   const sectionSelect = { name: true, class: { select: { name: true, level: true } }, stream: { select: { name: true } } } as const;
   const [registers, covers, legacy, leads, absences, leave] = await Promise.all([
@@ -279,11 +279,10 @@ export async function registerHistory(ctx: TenantContext, input: { from: Date; t
 export async function myRegistersToday(ctx: TenantContext) {
   assertRole(ctx.user, "TEACHER");
   const teacher = await requireTeacherSelf(ctx);
-  await finalizeDueRegisters(ctx);
   const date = today();
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
   if (!session) return [];
-  const school = await ctx.db.school.findFirst({ select: { attendanceTiming: true, attendanceSubmission: true } });
+  const school = await ctx.db.school.findFirst({ select: { attendanceTiming: true } });
 
   const [own, covers] = await Promise.all([
     ctx.db.section.findMany({
@@ -306,7 +305,7 @@ export async function myRegistersToday(ctx: TenantContext) {
   return Promise.all(
     targets.map(async ({ section, coveringFor, reason }) => {
       const [register, latest, window] = await Promise.all([
-        ctx.db.attendanceRegister.findFirst({ where: { sectionId: section.id, date }, select: { status: true, submittedAt: true, correctionDeadline: true, finalizeAt: true, autoSubmitted: true } }),
+        ctx.db.attendanceRegister.findFirst({ where: { sectionId: section.id, date }, select: { status: true, submittedAt: true, correctionDeadline: true, autoSubmitted: true } }),
         ctx.db.studentAttendance.findFirst({ where: { sectionId: section.id, date }, orderBy: { markedAt: "desc" }, select: { markedAt: true } }),
         attendanceWindow(ctx.db, { sectionId: section.id, academicSessionId: session.id, date, timing: school?.attendanceTiming ?? "FIRST_PERIOD" }),
       ]);
@@ -318,10 +317,8 @@ export async function myRegistersToday(ctx: TenantContext) {
         reason,
         phase,
         deadline,
-        finalizeAt: register?.status === "DRAFT" ? register.finalizeAt : null,
         opensAt: window.opensAt,
         autoSubmitted: register?.autoSubmitted ?? false,
-        submission: school?.attendanceSubmission ?? "AUTO",
       };
     }),
   );
@@ -332,7 +329,7 @@ export async function myRegistersToday(ctx: TenantContext) {
 // -----------------------------------------------------------------------------
 
 export async function workCoverBoard(ctx: TenantContext, date: Date) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "EDIT");
   const [staff, onLeave, covers, marked] = await Promise.all([
     ctx.db.staffMember.findMany({
       where: { status: { in: [...CURRENT_EMPLOYEE] } },
@@ -375,7 +372,7 @@ export async function assignWorkCover(
   ctx: TenantContext,
   input: { date: Date; absentStaffMemberId: string; coverStaffMemberId: string; duties: string },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "EDIT");
   assertCoverDate(input.date);
   if (input.absentStaffMemberId === input.coverStaffMemberId) throw new AppError("VALIDATION", "Choose a different colleague to cover the work.");
   const [absent, cover] = await Promise.all([
@@ -411,7 +408,7 @@ export async function assignWorkCover(
 }
 
 export async function removeWorkCover(ctx: TenantContext, coverId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "DELETE");
   const cover = await ctx.db.workCover.findFirst({ where: { id: coverId }, select: { id: true, absentStaffMemberId: true, date: true } });
   if (!cover) throw new NotFoundError("That cover was not found.");
   await ctx.db.workCover.deleteMany({ where: { id: cover.id } });
@@ -426,7 +423,7 @@ export async function removeWorkCover(ctx: TenantContext, coverId: string): Prom
 }
 
 export async function workCoverHistory(ctx: TenantContext, input: { from: Date; to: Date }) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "VIEW");
   const rows = await ctx.db.workCover.findMany({
     where: { date: { gte: input.from, lte: input.to } },
     orderBy: [{ date: "desc" }, { createdAt: "asc" }],
@@ -465,20 +462,23 @@ export async function myWorkCoversToday(ctx: TenantContext) {
 // -----------------------------------------------------------------------------
 
 export async function attendanceSettings(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
-  const school = await ctx.db.school.findFirst({ select: { attendanceTiming: true, attendanceSubmission: true } });
-  return { timing: school?.attendanceTiming ?? "FIRST_PERIOD", submission: school?.attendanceSubmission ?? "AUTO" };
+  assertCan(ctx, "attendance", "EDIT");
+  const school = await ctx.db.school.findFirst({ select: { attendanceTiming: true, attendanceHalfDay: true } });
+  return { timing: school?.attendanceTiming ?? "FIRST_PERIOD", halfDay: school?.attendanceHalfDay ?? true };
 }
 
-export async function saveAttendanceSettings(ctx: TenantContext, input: { timing: RegisterTiming; submission: RegisterSubmission }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
-  await ctx.db.school.updateMany({ data: { attendanceTiming: input.timing, attendanceSubmission: input.submission } });
+/** Timing and Half Day. Submission is always the teacher's own (no automatic submission since 6 Oct 2026). */
+export async function saveAttendanceSettings(ctx: TenantContext, input: { timing: RegisterTiming; halfDay?: boolean }): Promise<void> {
+  assertCan(ctx, "settings", "EDIT");
+  await ctx.db.school.updateMany({
+    data: { attendanceTiming: input.timing, attendanceSubmission: "MANUAL", ...(input.halfDay !== undefined ? { attendanceHalfDay: input.halfDay } : {}) },
+  });
   await recordAudit({
     action: "ATTENDANCE_SETTINGS_UPDATED",
     entityType: "School",
     entityId: ctx.schoolId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Attendance set to ${humanize(input.timing).toLowerCase()}, ${input.submission === "AUTO" ? "submitted automatically" : "submitted by the teacher"}.`,
+    summary: `Attendance set to ${humanize(input.timing).toLowerCase()}, submitted by the teacher${input.halfDay === undefined ? "" : input.halfDay ? ", Half Day allowed" : ", Half Day off"}.`,
   });
 }

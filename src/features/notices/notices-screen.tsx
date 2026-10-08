@@ -25,17 +25,21 @@ const AUDIENCE_LABEL: Record<string, string> = {
   PARENTS: "Parents",
   NON_TEACHING_STAFF: "Staff",
 };
-const SCOPE_LABEL: Record<string, string> = { SCHOOL: "", CLASS: " · one class", SECTION: " · one section", STUDENTS: " · named students" };
+const SCOPE_LABEL: Record<string, string> = { SCHOOL: "", CLASS: " · one class", SECTION: " · one section", STUDENTS: " · named students", STREAM: " · one stream" };
 
 type NoticeRow = Awaited<ReturnType<typeof myNotices>>["live"][number];
 
 function NoticeCard({ notice, expired = false }: { notice: NoticeRow; expired?: boolean }) {
   const unread = !notice.isRead && !expired;
   return (
-    <Card className={cn("py-0", unread && "ring-primary/40 ring-2", expired && "opacity-80")}>
+    <Card className={cn("py-0", unread && "ring-primary/40 ring-2", notice.kind === "EMERGENCY" && !expired && "border-danger/60 ring-danger/50", expired && "opacity-80")}>
       <CardContent className="flex flex-col gap-2 p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <h3 className="text-base font-semibold">{notice.title}</h3>
+          <h3 className="flex flex-wrap items-center gap-2 text-base font-semibold">
+            {notice.kind === "EMERGENCY" ? <StatusBadge status="EMERGENCY" tone="negative" label="Emergency" /> : null}
+            {notice.kind === "ANNOUNCEMENT" ? <StatusBadge status="ANNOUNCEMENT" tone="info" label="Announcement" /> : null}
+            {notice.title}
+          </h3>
           {expired ? (
             <StatusBadge status="EXPIRED" />
           ) : unread ? (

@@ -19,7 +19,8 @@ import { enumParam, param } from "@/lib/search-params";
 import { STAFF_ROLES, STAFF_STATUSES } from "@/lib/validation/operations";
 import { requireTenant } from "@/server/auth/current-user";
 import { photoUrlsFor } from "@/server/people/photos";
-import { listStaff, staffOverview } from "@/server/operations/staff";
+import { listStaffPage, staffOverview } from "@/server/operations/staff";
+import { Pager } from "@/components/shared/pager";
 import { leavingDates } from "@/server/people/lifecycle";
 import { listRoleProfiles } from "@/server/staff/roles";
 import { RoleProfileForm } from "@/features/staff/access-forms";
@@ -45,7 +46,8 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
     role: enumParam(search.role, STAFF_ROLES),
     status: enumParam(search.status, STAFF_STATUSES) ?? (statusParam === "ALL" ? undefined : ("CURRENT" as const)),
   };
-  const [rows, overview, roles] = await Promise.all([listStaff(ctx, filters), staffOverview(ctx), listRoleProfiles(ctx)]);
+  const pageNumber = Number(param(search.page) ?? "1") || 1;
+  const [{ rows, total, page, pageCount }, overview, roles] = await Promise.all([listStaffPage(ctx, filters, pageNumber), staffOverview(ctx), listRoleProfiles(ctx)]);
   const roleOptions = roles.map((role) => ({ value: role.id, label: role.name }));
   const [leftOn, photos] = await Promise.all([leavingDates(ctx, "STAFF", rows), photoUrlsFor(ctx, "STAFF", rows.map((row) => row.id))]);
   const { counts } = overview;
@@ -59,15 +61,19 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
           <>
             <MoreActions
               items={[
+                { href: "#add-staff", label: "Quick add (one form)" },
                 { href: "#import-staff", label: "Import from a spreadsheet" },
                 { href: "/school-admin/reports/export?kind=staff", label: "Download list (CSV)", download: true },
               ]}
             />
+            <Button asChild variant="outline">
+              <Link href={"/school-admin/staff/workspaces" as Route}>Workspaces</Link>
+            </Button>
             <Button asChild>
-              <a href="#add-staff">
+              <Link href={"/school-admin/staff/new" as Route}>
                 <PlusIcon aria-hidden />
                 Add staff
-              </a>
+              </Link>
             </Button>
           </>
         }
@@ -239,6 +245,7 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
           </Card>
         </div>
       </div>
+      <Pager page={page} pageCount={pageCount} total={total} basePath="/school-admin/staff" params={{ q: filters.q, role: filters.role, status: statusParam }} />
     </>
   );
 }

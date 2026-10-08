@@ -53,7 +53,7 @@ export async function raiseTeacherConcernAction(_p: Raised, formData: FormData):
 export async function replyConcernAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("PARENT", "TEACHER", "SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("PARENT", "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
       await replyToConcern(ctx, parseFormData(concernReplySchema, formData));
       return successResult((await getT())("concerns.replied"));
     },
@@ -65,7 +65,7 @@ export async function replyConcernAction(_p: Result, formData: FormData): Promis
 export async function requestConcernUpdateAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await requestConcernUpdate(ctx, parseFormData(concernUpdateRequestSchema, formData));
       return successResult((await getT())("concerns.updateRequested"));
     },
@@ -77,7 +77,7 @@ export async function requestConcernUpdateAction(_p: Result, formData: FormData)
 export async function assignConcernAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await assignConcern(ctx, parseFormData(concernAssignSchema, formData));
       return successResult((await getT())("concerns.assigned"));
     },

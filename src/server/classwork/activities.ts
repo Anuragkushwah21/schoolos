@@ -52,6 +52,8 @@ const SLOT_SELECT = {
   room: true,
   teacherId: true,
   academicSessionId: true,
+  streamId: true,
+  stream: { select: { name: true } },
   subject: { select: { id: true, name: true } },
   section: {
     select: {
@@ -231,6 +233,8 @@ export async function recordActivity(
         sectionId: slot.section.id,
         subjectId: slot.subject.id,
         teacherId: teacher.id,
+        // A stream's period sets that stream's homework.
+        streamId: slot.streamId,
         classSessionId: record.id,
         title: input.homeworkTitle,
         description: input.homeworkDescription ?? null,

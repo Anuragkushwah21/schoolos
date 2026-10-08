@@ -23,10 +23,12 @@ function TargetFields({
   defaults,
   classes,
   sections,
+  streams,
 }: {
-  defaults?: { scope: string; classId: string | null; sectionId: string | null; admissionNumbers: string };
+  defaults?: { scope: string; classId: string | null; sectionId: string | null; streamId?: string | null; admissionNumbers: string };
   classes: Option[];
   sections: Option[];
+  streams: Option[];
 }) {
   const [scope, setScope] = useState(defaults?.scope ?? "SCHOOL");
   return (
@@ -40,6 +42,7 @@ function TargetFields({
           { value: "SCHOOL", label: "The whole school" },
           { value: "CLASS", label: "One class" },
           { value: "SECTION", label: "One section" },
+          ...(streams.length ? [{ value: "STREAM", label: "One stream (all its classes)" }] : []),
           { value: "STUDENTS", label: "Particular students (and their parents)" },
         ]}
         hint="Combined with the audience: e.g. Parents + One section reaches that section's parents only."
@@ -50,6 +53,9 @@ function TargetFields({
       ) : null}
       {scope === "SECTION" ? (
         <SelectField name="sectionId" label="Section" options={sections} defaultValue={defaults?.sectionId ?? undefined} placeholder="Choose a section" required />
+      ) : null}
+      {scope === "STREAM" ? (
+        <SelectField name="streamId" label="Stream" options={streams} defaultValue={defaults?.streamId ?? undefined} placeholder="Choose a stream" required />
       ) : null}
       {scope === "STUDENTS" ? (
         <TextareaField
@@ -70,6 +76,8 @@ export function NoticeForm({
   minExpiry,
   classes = [],
   sections = [],
+  streams = [],
+  kind = "NOTICE",
 }: {
   notice?: {
     id: string;
@@ -83,16 +91,33 @@ export function NoticeForm({
     scope: string;
     classId: string | null;
     sectionId: string | null;
+    streamId?: string | null;
+    kind?: string;
     admissionNumbers: string;
   };
   classes?: Option[];
   sections?: Option[];
+  streams?: Option[];
+  /** For a new message: what the Communication Center's button asked for. */
+  kind?: string;
   /** Earliest "Hide after" the picker offers: today, or an existing earlier expiry. */
   minExpiry?: string;
 }) {
   return (
     <ActionForm action={saveNoticeAction} className="max-w-3xl">
       {notice ? <input type="hidden" name="noticeId" value={notice.id} /> : null}
+      <SelectField
+        name="kind"
+        label="Type"
+        defaultValue={notice?.kind ?? kind}
+        options={[
+          { value: "NOTICE", label: "Notice" },
+          { value: "ANNOUNCEMENT", label: "Announcement" },
+          { value: "EMERGENCY", label: "Emergency alert" },
+        ]}
+        hint="An emergency alert is also raised as an urgent notification for everyone it reaches."
+        required
+      />
       <TextField name="title" label="Title" defaultValue={notice?.title} required />
       <TextareaField name="body" label="Notice" defaultValue={notice?.body} rows={8} hint={FORMAT_HINT} required />
       <FieldRow>
@@ -105,7 +130,7 @@ export function NoticeForm({
             { value: "TEACHERS", label: "Teachers" },
             { value: "STUDENTS", label: "Students" },
             { value: "PARENTS", label: "Parents" },
-            { value: "NON_TEACHING_STAFF", label: "Non-teaching staff" },
+            { value: "NON_TEACHING_STAFF", label: "Staff (non-teaching)" },
           ]}
           required
         />
@@ -121,7 +146,7 @@ export function NoticeForm({
           required
         />
       </FieldRow>
-      <TargetFields defaults={notice} classes={classes} sections={sections} />
+      <TargetFields defaults={notice} classes={classes} sections={sections} streams={streams} />
       <FieldRow>
         <TextField name="publishAt" label="Publish on" type="date" defaultValue={notice?.publishAt} hint="Leave blank to publish immediately." />
         <TextField

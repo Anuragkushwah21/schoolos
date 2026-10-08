@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
+import { DUPLICATE_FIELD, decodeMatches } from "@/lib/student-duplicates";
 import { admissionApplicationSchema } from "@/lib/validation/website";
 import { __resetAllRateLimits } from "@/server/auth/rate-limit";
 import { prisma } from "@/server/db/prisma";
@@ -196,5 +197,22 @@ describe("review", () => {
   it("never lists another school's applications", async () => {
     const rows = await listApplications(adminOf(schoolB));
     expect(rows.every((row) => row.studentFirstName !== "Tanvi")).toBe(true);
+  });
+});
+
+describe("the same child applying again", () => {
+  it("accepting an application for a child already at the school is stopped with the matches until confirmed", async () => {
+    const { applicationNumber } = await submitApplication(slugA, application({ studentFirstName: "Kiran", parentPhone: "+91 93333 44444" }), { ipAddress: "1.1.9.1" });
+    const app = await prisma.admissionApplication.findFirstOrThrow({ where: { applicationNumber } });
+    await approve(app.id);
+    const accept = (confirmDuplicate?: boolean) =>
+      acceptApplication(adminOf(schoolA), { applicationId: app.id, sectionId: schoolA.sectionId, rollNumber: null, admissionNumber: null, reviewNotes: null, confirmDuplicate });
+    const refused = await accept().then(
+      () => null,
+      (error: unknown) => error as { fieldErrors?: Record<string, string[]> },
+    );
+    expect(refused?.fieldErrors?.[DUPLICATE_FIELD]?.length).toBeGreaterThanOrEqual(1);
+    expect(decodeMatches(refused?.fieldErrors?.[DUPLICATE_FIELD])[0]).toMatchObject({ likely: true });
+    await expect(accept(true)).resolves.toHaveProperty("studentId");
   });
 });

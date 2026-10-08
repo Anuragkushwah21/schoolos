@@ -54,6 +54,8 @@ export type ChildContext = {
     sectionLabel: string;
     classId: string;
     rollNumber: string | null;
+    /** Their stream (own, or the section's when the whole section is one stream); null when none. Timetable and homework for other streams are not theirs. */
+    streamId: string | null;
   };
 };
 
@@ -97,11 +99,13 @@ export async function findChild(
             select: {
               rollNumber: true,
               classId: true,
+              streamId: true,
               academicSession: { select: { id: true, name: true } },
               section: {
                 select: {
                   id: true,
                   name: true,
+                  streamId: true,
                   class: { select: { name: true } },
                   stream: { select: { name: true } },
                 },
@@ -143,6 +147,7 @@ export async function findChild(
           sectionLabel: sectionLabel(enrollment.section),
           classId: enrollment.classId,
           rollNumber: enrollment.rollNumber,
+          streamId: enrollment.streamId ?? enrollment.section.streamId,
         }
       : null,
   };
@@ -175,10 +180,12 @@ export async function listMyChildren(ctx: TenantContext) {
             where: { academicSession: { isCurrent: true } },
             select: {
               rollNumber: true,
+              streamId: true,
               section: {
                 select: {
                   id: true,
                   name: true,
+                  streamId: true,
                   class: { select: { name: true, level: true } },
                   stream: { select: { name: true } },
                 },
@@ -209,6 +216,8 @@ export async function listMyChildren(ctx: TenantContext) {
         sectionId: enrollment?.section.id ?? null,
         sectionLabel: enrollment ? sectionLabel(enrollment.section) : null,
         rollNumber: enrollment?.rollNumber ?? null,
+        /** Their stream, own or the section's; null when none. */
+        streamId: enrollment ? (enrollment.streamId ?? enrollment.section.streamId) : null,
         level: enrollment?.section.class.level ?? 0,
       };
     }),

@@ -11,7 +11,7 @@ import { orNotFound } from "@/server/page-helpers";
 export const metadata: Metadata = { title: "Complaint" };
 
 export default async function AdminComplaintPage(props: PageProps<"/school-admin/complaints/[complaintId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { complaintId } = await props.params;
   const [complaint, staff] = await Promise.all([orNotFound(getComplaint(ctx, complaintId)), assignableStaff(ctx)]);
   return (

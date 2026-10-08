@@ -35,37 +35,43 @@ import {
 import { savePortalSettings, setPortalPublished } from "@/server/admissions/portal";
 import { performAction } from "@/server/perform-action";
 
-/** Family enquiries and the admission portal — School Admin only, on the server. */
+/** Family enquiries and the admission portal. Front-desk actions also serve staff with the enquiry permissions (checked in the services); conversion, concessions and the portal stay School Admin only. */
 
 type Result = ActionResult<undefined>;
-const admin = () => requireTenantForAction("SCHOOL_ADMIN");
-const revalidate = ["/school-admin"];
+const admin = () => requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
+/** The front desk: the School Admin, or staff whose permissions the service checks (enquiries.*). */
+const desk = () => requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "NON_TEACHING_STAFF");
+const revalidate = ["/school-admin", "/staff"];
+/** An enquiry's page for whoever is working on it. */
+const enquiryHref = (role: string, id: string) => (role === "SCHOOL_ADMIN" || role === "PRINCIPAL" ? `/school-admin/admissions/enquiries/${id}` : `/staff/enquiries/${id}`) as Route;
 
-export async function createEnquiryAction(_p: ActionResult<{ id: string } | undefined>, formData: FormData): Promise<ActionResult<{ id: string } | undefined>> {
+export async function createEnquiryAction(_p: ActionResult<{ id: string; href: Route } | undefined>, formData: FormData): Promise<ActionResult<{ id: string; href: Route } | undefined>> {
   return performAction(
     async () => {
-      const enquiryId = await createEnquiry(await admin(), parseFormData(createEnquirySchema, formData));
-      return successResult("Enquiry saved.", { id: enquiryId });
+      const ctx = await desk();
+      const enquiryId = await createEnquiry(ctx, parseFormData(createEnquirySchema, formData));
+      return successResult("Enquiry saved.", { id: enquiryId, href: enquiryHref(ctx.user.role, enquiryId) });
     },
-    { revalidate, redirectTo: (data) => (data ? (`/school-admin/admissions/enquiries/${data.id}` as Route) : null) },
+    { revalidate, redirectTo: (data) => (data ? data.href : null) },
   );
 }
 
-export async function updateEnquiryAction(_p: ActionResult<{ id: string } | undefined>, formData: FormData): Promise<ActionResult<{ id: string } | undefined>> {
+export async function updateEnquiryAction(_p: ActionResult<{ id: string; href: Route } | undefined>, formData: FormData): Promise<ActionResult<{ id: string; href: Route } | undefined>> {
   return performAction(
     async () => {
       const input = parseFormData(updateEnquirySchema, formData);
-      await updateEnquiry(await admin(), input);
-      return successResult("Enquiry updated.", { id: input.enquiryId });
+      const ctx = await desk();
+      await updateEnquiry(ctx, input);
+      return successResult("Enquiry updated.", { id: input.enquiryId, href: enquiryHref(ctx.user.role, input.enquiryId) });
     },
-    { revalidate, redirectTo: (data) => (data ? (`/school-admin/admissions/enquiries/${data.id}` as Route) : null) },
+    { revalidate, redirectTo: (data) => (data ? data.href : null) },
   );
 }
 
 export async function saveChildFeeAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      await saveChildFee(await admin(), parseFormData(childFeeSchema, formData));
+      await saveChildFee(await desk(), parseFormData(childFeeSchema, formData));
       return successResult("Fee discussion saved. This is not a fee — nothing is charged.");
     },
     { revalidate },
@@ -75,7 +81,7 @@ export async function saveChildFeeAction(_p: Result, formData: FormData): Promis
 export async function saveFamilyFeeAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      await saveFamilyFee(await admin(), parseFormData(familyFeeSchema, formData));
+      await saveFamilyFee(await desk(), parseFormData(familyFeeSchema, formData));
       return successResult("Family discussion saved.");
     },
     { revalidate },
@@ -85,7 +91,7 @@ export async function saveFamilyFeeAction(_p: Result, formData: FormData): Promi
 export async function addEnquiryFollowUpAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      await addEnquiryFollowUp(await admin(), parseFormData(enquiryFollowUpSchema, formData));
+      await addEnquiryFollowUp(await desk(), parseFormData(enquiryFollowUpSchema, formData));
       return successResult("Follow-up saved.");
     },
     { revalidate },
@@ -96,7 +102,7 @@ export async function setEnquiryStatusAction(_p: Result, formData: FormData): Pr
   return performAction(
     async () => {
       const input = parseFormData(enquiryStatusSchema, formData);
-      await setEnquiryStatus(await admin(), input);
+      await setEnquiryStatus(await desk(), input);
       return successResult(input.status === "CLOSED" ? "Enquiry closed. It stays in the records." : "Status updated.");
     },
     { revalidate },
@@ -107,7 +113,7 @@ export async function linkParentAction(_p: Result, formData: FormData): Promise<
   return performAction(
     async () => {
       const input = parseFormData(linkParentSchema, formData);
-      await linkExistingParent(await admin(), input);
+      await linkExistingParent(await desk(), input);
       return successResult(input.parentId ? "Existing parent linked — no second parent will be created." : "Parent unlinked.");
     },
     { revalidate },
@@ -118,7 +124,7 @@ export async function setChildWithdrawnAction(_p: Result, formData: FormData): P
   return performAction(
     async () => {
       const { childId, withdrawn } = parseFormData(childStatusSchema, formData);
-      await setChildWithdrawn(await admin(), childId, withdrawn);
+      await setChildWithdrawn(await desk(), childId, withdrawn);
       return successResult(withdrawn ? "Marked not proceeding." : "Back in the enquiry.");
     },
     { revalidate },

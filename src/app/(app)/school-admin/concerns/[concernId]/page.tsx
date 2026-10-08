@@ -11,7 +11,7 @@ import { concernFilterOptions, getConcern } from "@/server/support/concerns";
 export const metadata: Metadata = { title: "Concern" };
 
 export default async function AdminConcernPage(props: PageProps<"/school-admin/concerns/[concernId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { concernId } = await props.params;
   const [t, concern, options] = await Promise.all([getT(), orNotFound(getConcern(ctx, concernId)), concernFilterOptions(ctx)]);
   return (

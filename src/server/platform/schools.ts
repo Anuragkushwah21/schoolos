@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 import type { SchoolStatus, SubscriptionStatus } from "@/generated/prisma/enums";
 import { ConflictError, NotFoundError } from "@/lib/errors";
 import { recordAudit } from "@/server/audit/log";
@@ -17,6 +17,9 @@ import { isUniqueViolation } from "@/server/db/errors";
 import { prisma } from "@/server/db/prisma";
 import { PLATFORM_AUDIT_WHERE } from "@/server/platform/audit";
 import { sendMail } from "@/server/mail/mailer";
+import { cleanModules } from "@/lib/school-modules";
+import { type Limits, cleanLimits, cleanRoles, describeLimits, roleLabel } from "@/lib/school-roles";
+import { describeModules } from "@/server/platform/plans";
 import { schoolApprovedEmail, schoolRejectedEmail } from "@/server/mail/templates";
 
 /**
@@ -95,7 +98,10 @@ export async function getSchoolForPlatform(actor: SessionUser, schoolId: string)
       reviewedBy: { select: { firstName: true, lastName: true } },
       subscriptions: {
         orderBy: { createdAt: "desc" },
-        include: { plan: { select: { id: true, name: true, tier: true } } },
+        include: { plan: { select: { id: true, name: true, tier: true, availableRoles: true, campusLimit: true } } },
+      },
+      organization: {
+        select: { id: true, name: true, campusLimitOverride: true, owner: { select: { firstName: true, lastName: true, email: true } }, schools: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, status: true } } },
       },
       _count: {
         select: { students: true, teachers: true, parents: true, classes: true },
@@ -104,7 +110,7 @@ export async function getSchoolForPlatform(actor: SessionUser, schoolId: string)
   });
   if (!school) throw new NotFoundError();
 
-  const [admins, recentAudit] = await Promise.all([
+  const [admins, recentAudit, currentSession, sections] = await Promise.all([
     prisma.user.findMany({
       where: { schoolId, role: "SCHOOL_ADMIN" },
       orderBy: { createdAt: "asc" },
@@ -124,9 +130,12 @@ export async function getSchoolForPlatform(actor: SessionUser, schoolId: string)
       take: 10,
       select: { id: true, action: true, summary: true, createdAt: true },
     }),
+    // Academic overview: counts only, never the school's records.
+    prisma.academicSession.findFirst({ where: { schoolId, isCurrent: true }, select: { name: true, startDate: true, endDate: true } }),
+    prisma.section.count({ where: { schoolId, academicSession: { isCurrent: true } } }),
   ]);
 
-  return { school, admins, recentAudit };
+  return { school, admins, recentAudit, academic: { currentSession, sections } };
 }
 
 // -----------------------------------------------------------------------------
@@ -183,9 +192,20 @@ export async function transitionSchool(
   schoolId: string,
   transition: SchoolTransition,
   reason: string | null = null,
+  /**
+   * Approval only: the plan the school starts on, and — when the Super Admin
+   * adjusted them — its optional modules. Without a plan, the one requested at
+   * registration (or already assigned) stays.
+   */
+  approval: { planId?: string | null; modules?: readonly string[] | null } = {},
 ): Promise<TransitionOutcome> {
   assertRole(actor, "SUPER_ADMIN");
   const rule = TRANSITIONS[transition];
+  const plan =
+    transition === "approve" && approval.planId
+      ? await prisma.plan.findUnique({ where: { id: approval.planId }, select: { id: true, name: true, optionalModules: true } })
+      : null;
+  if (transition === "approve" && approval.planId && !plan) throw new NotFoundError("That plan was not found.");
 
   if ((transition === "reject" || transition === "suspend") && !reason) {
     throw new ConflictError("Give a reason — the school will be told why.");
@@ -213,6 +233,9 @@ export async function transitionSchool(
   }
 
   let credentials: Credentials | undefined;
+  type Approved = { plan: string | null; modules: string[]; customized: boolean };
+  // Set inside the transaction on approval.
+  const approval_: { value: Approved | null } = { value: null };
 
   await prisma.$transaction(async (tx) => {
     const { count } = await tx.school.updateMany({
@@ -239,13 +262,42 @@ export async function transitionSchool(
       await provisionSchool(tx, schoolId);
       credentials = await issueFirstAdmin(tx, school);
 
-      // A subscription requested at registration becomes live on approval.
-      await tx.subscription.updateMany({
-        where: { schoolId, status: "TRIALING" },
-        data: { status: "ACTIVE" },
-      });
+      if (plan) {
+        // The plan chosen at approval: the latest subscription takes it, live.
+        const latest = await tx.subscription.findFirst({ where: { schoolId }, orderBy: { createdAt: "desc" }, select: { id: true } });
+        if (latest) await tx.subscription.update({ where: { id: latest.id }, data: { planId: plan.id, status: "ACTIVE" } });
+        else await tx.subscription.create({ data: { schoolId, planId: plan.id, status: "ACTIVE", startsAt: new Date() } });
+      } else {
+        // A subscription requested at registration becomes live on approval.
+        await tx.subscription.updateMany({
+          where: { schoolId, status: "TRIALING" },
+          data: { status: "ACTIVE" },
+        });
+      }
+
+      // The school's optional modules: the plan's, or the adjusted set.
+      const current = await tx.subscription.findFirst({ where: { schoolId }, orderBy: { createdAt: "desc" }, select: { plan: { select: { name: true, optionalModules: true } } } });
+      const planModules = cleanModules(current?.plan.optionalModules ?? []);
+      const modules = approval.modules ? cleanModules(approval.modules) : planModules;
+      const customized = Boolean(approval.modules) && modules.join() !== planModules.join();
+      await tx.school.update({ where: { id: schoolId }, data: { optionalModules: modules, modulesCustomized: customized } });
+      // Roles follow the plan too, unless adjusted for this school.
+      const planRoles = await tx.subscription.findFirst({ where: { schoolId }, orderBy: { createdAt: "desc" }, select: { plan: { select: { availableRoles: true } } } });
+      const own = await tx.school.findUniqueOrThrow({ where: { id: schoolId }, select: { rolesCustomized: true, organizationId: true, name: true } });
+      if (planRoles && !own.rolesCustomized) await tx.school.update({ where: { id: schoolId }, data: { enabledRoles: cleanRoles(planRoles.plan.availableRoles) } });
+      // The approved school is the first campus of its organization; its first admin owns it.
+      const firstAdmin = await tx.user.findFirst({ where: { schoolId, role: "SCHOOL_ADMIN" }, orderBy: { createdAt: "asc" }, select: { id: true } });
+      if (!own.organizationId) {
+        const organization = await tx.organization.create({ data: { name: own.name, ownerId: firstAdmin && !(await tx.organization.count({ where: { ownerId: firstAdmin.id } })) ? firstAdmin.id : null } });
+        await tx.school.update({ where: { id: schoolId }, data: { organizationId: organization.id } });
+      } else if (firstAdmin) {
+        await tx.organization.updateMany({ where: { id: own.organizationId, ownerId: null }, data: { ownerId: firstAdmin.id } });
+      }
+      approval_.value = { plan: current?.plan.name ?? null, modules, customized };
     }
   });
+
+  const approvedWith = approval_.value;
 
   // Suspension must take effect for people who are already signed in.
   if (transition === "suspend") await invalidateAllSessionsForSchool(schoolId);
@@ -256,8 +308,10 @@ export async function transitionSchool(
     entityId: schoolId,
     schoolId,
     actorId: actor.id,
-    summary: `${school.name} ${TRANSITION_VERB[transition]}${reason ? `: ${reason}` : "."}`,
-    metadata: { from: school.status, to: rule.to },
+    summary: `${school.name} ${TRANSITION_VERB[transition]}${reason ? `: ${reason}` : "."}${
+      approvedWith ? ` Plan: ${approvedWith.plan ?? "none"}. Modules: ${describeModules(approvedWith.modules)}${approvedWith.customized ? " (adjusted for this school)" : ""}.` : ""
+    }`,
+    metadata: { from: school.status, to: rule.to, ...(approvedWith ? { plan: approvedWith.plan, optionalModules: approvedWith.modules, modulesCustomized: approvedWith.customized } : {}) },
   });
 
   if (credentials) {
@@ -509,7 +563,7 @@ export async function setSubscription(
   const latest = await prisma.subscription.findFirst({
     where: { schoolId: school.id },
     orderBy: { createdAt: "desc" },
-    select: { id: true },
+    select: { id: true, plan: { select: { id: true, name: true } } },
   });
 
   const data = {
@@ -534,12 +588,132 @@ export async function setSubscription(
     actorId: actor.id,
     summary: `${school.name} subscription set to ${plan.name} (${input.status.toLowerCase()}).`,
   });
+
+  // A new plan: a school that follows its plan takes the new plan's modules.
+  if (latest?.plan.id !== plan.id) {
+    const [fresh, current] = await Promise.all([
+      prisma.plan.findUniqueOrThrow({ where: { id: plan.id }, select: { optionalModules: true } }),
+      prisma.school.findUniqueOrThrow({ where: { id: school.id }, select: { optionalModules: true, modulesCustomized: true } }),
+    ]);
+    const before = cleanModules(current.optionalModules);
+    const after = current.modulesCustomized ? before : cleanModules(fresh.optionalModules);
+    if (!current.modulesCustomized) await prisma.school.update({ where: { id: school.id }, data: { optionalModules: after } });
+    const roleState = await prisma.school.findUniqueOrThrow({ where: { id: school.id }, select: { rolesCustomized: true } });
+    if (!roleState.rolesCustomized) {
+      const planRoles = await prisma.plan.findUniqueOrThrow({ where: { id: plan.id }, select: { availableRoles: true } });
+      await prisma.school.update({ where: { id: school.id }, data: { enabledRoles: cleanRoles(planRoles.availableRoles) } });
+    }
+    await recordAudit({
+      action: "SCHOOL_PLAN_CHANGED",
+      entityType: "School",
+      entityId: school.id,
+      schoolId: school.id,
+      actorId: actor.id,
+      summary: `${school.name} plan changed: ${latest?.plan.name ?? "none"} → ${plan.name}.${
+        current.modulesCustomized ? " Modules kept as adjusted for this school." : ` Modules: ${describeModules(before)} → ${describeModules(after)}.`
+      }`,
+      metadata: { previous: { plan: latest?.plan.name ?? null, optionalModules: before }, next: { plan: plan.name, optionalModules: after } },
+    });
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Feature access
+// -----------------------------------------------------------------------------
+
+/**
+ * Set one school's optional modules. "Follow the plan" takes the current
+ * plan's modules and keeps following it; otherwise the set chosen here is the
+ * school's own, kept through later plan changes. Core modules are not
+ * switchable and unknown keys are dropped, so nothing that does not exist can
+ * be switched on. Only this school changes.
+ */
+export async function setSchoolModules(
+  actor: SessionUser,
+  input: { schoolId: string; followPlan: boolean; modules: readonly string[] },
+): Promise<{ modules: string[] }> {
+  assertRole(actor, "SUPER_ADMIN");
+  const school = await prisma.school.findUnique({
+    where: { id: input.schoolId },
+    select: { id: true, name: true, optionalModules: true, modulesCustomized: true, subscriptions: { orderBy: { createdAt: "desc" }, take: 1, select: { plan: { select: { name: true, optionalModules: true } } } } },
+  });
+  if (!school) throw new NotFoundError();
+  const plan = school.subscriptions[0]?.plan ?? null;
+  if (input.followPlan && !plan) throw new ConflictError("This school has no plan yet. Choose its modules, or give it a plan first.");
+
+  const before = cleanModules(school.optionalModules);
+  const after = input.followPlan ? cleanModules(plan!.optionalModules) : cleanModules(input.modules);
+  const customized = !input.followPlan;
+  if (before.join() === after.join() && school.modulesCustomized === customized) return { modules: after };
+
+  await prisma.school.update({ where: { id: school.id }, data: { optionalModules: after, modulesCustomized: customized } });
+  const enabled = after.filter((key) => !before.includes(key));
+  const disabled = before.filter((key) => !after.includes(key));
+  await recordAudit({
+    action: "SCHOOL_MODULES_CHANGED",
+    entityType: "School",
+    entityId: school.id,
+    schoolId: school.id,
+    actorId: actor.id,
+    summary: `${school.name} modules ${input.followPlan ? `set to follow the ${plan!.name} plan` : "adjusted for this school"}.${enabled.length ? ` Enabled: ${describeModules(enabled)}.` : ""}${disabled.length ? ` Disabled: ${describeModules(disabled)}.` : ""}`,
+    metadata: { previous: { optionalModules: before, customized: school.modulesCustomized }, next: { optionalModules: after, customized }, enabled, disabled },
+  });
+  return { modules: after };
+}
+
+/**
+ * Set one school's roles and limits. "Follow the plan" takes the current
+ * plan's roles; otherwise the ticked set is this school's own. Limits set here
+ * override the plan's for this school only (blank = the plan's). Fixed system
+ * roles only — nothing new can be created here.
+ */
+export async function setSchoolRolesAndLimits(
+  actor: SessionUser,
+  input: { schoolId: string; followPlan: boolean; roles: readonly string[]; limits: Limits },
+): Promise<void> {
+  assertRole(actor, "SUPER_ADMIN");
+  const school = await prisma.school.findUnique({
+    where: { id: input.schoolId },
+    select: { id: true, name: true, enabledRoles: true, rolesCustomized: true, roleLimits: true, subscriptions: { orderBy: { createdAt: "desc" }, take: 1, select: { plan: { select: { name: true, availableRoles: true } } } } },
+  });
+  if (!school) throw new NotFoundError();
+  const plan = school.subscriptions[0]?.plan ?? null;
+  if (input.followPlan && !plan) throw new ConflictError("This school has no plan yet. Choose its roles, or give it a plan first.");
+  const before = cleanRoles(school.enabledRoles);
+  const after = input.followPlan ? cleanRoles(plan!.availableRoles) : cleanRoles(input.roles);
+  const limitsBefore = cleanLimits(school.roleLimits);
+  const limits = cleanLimits(input.limits);
+  await prisma.school.update({ where: { id: school.id }, data: { enabledRoles: after, rolesCustomized: !input.followPlan, roleLimits: Object.keys(limits).length ? limits : Prisma.DbNull } });
+  if (before.join() !== after.join() || school.rolesCustomized === input.followPlan) {
+    const enabled = after.filter((key) => !before.includes(key));
+    const disabled = before.filter((key) => !after.includes(key));
+    await recordAudit({
+      action: "SCHOOL_ROLES_CHANGED",
+      entityType: "School",
+      entityId: school.id,
+      schoolId: school.id,
+      actorId: actor.id,
+      summary: `${school.name} roles ${input.followPlan ? `set to follow the ${plan!.name} plan` : "adjusted for this school"}.${enabled.length ? ` Enabled: ${enabled.map(roleLabel).join(", ")}.` : ""}${disabled.length ? ` Disabled: ${disabled.map(roleLabel).join(", ")}.` : ""}`,
+      metadata: { previous: before, next: after, enabled, disabled },
+    });
+  }
+  if (JSON.stringify(limitsBefore) !== JSON.stringify(limits)) {
+    await recordAudit({
+      action: "SCHOOL_LIMITS_CHANGED",
+      entityType: "School",
+      entityId: school.id,
+      schoolId: school.id,
+      actorId: actor.id,
+      summary: `${school.name} limits: ${describeLimits(limits)} (blank ones follow the plan).`,
+      metadata: { previous: limitsBefore, next: limits },
+    });
+  }
 }
 
 export async function listPlansForSelect() {
   return prisma.plan.findMany({
     orderBy: { priceMinor: "asc" },
-    select: { id: true, name: true, isActive: true },
+    select: { id: true, name: true, isActive: true, tier: true, optionalModules: true },
   });
 }
 
@@ -570,5 +744,32 @@ export async function setSchoolUdise(
     schoolId: school.id,
     actorId: actor.id,
     summary: udiseCode ? `UDISE code for ${school.name} set to ${udiseCode}.` : `UDISE code for ${school.name} cleared.`,
+  });
+}
+
+/** Schools waiting for a decision, oldest first, with what was submitted. */
+export async function listPendingSchools(actor: SessionUser) {
+  assertRole(actor, "SUPER_ADMIN");
+  return prisma.school.findMany({
+    where: { status: { in: ["PENDING", "UNDER_REVIEW"] } },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      udiseCode: true,
+      city: true,
+      state: true,
+      status: true,
+      createdAt: true,
+      contactName: true,
+      contactEmail: true,
+      contactPhone: true,
+      contactEmailVerifiedAt: true,
+      affiliationBoard: true,
+      principalName: true,
+      users: { where: { role: "SCHOOL_ADMIN" }, take: 1, select: { firstName: true, lastName: true } },
+      subscriptions: { orderBy: { createdAt: "desc" }, take: 1, select: { plan: { select: { name: true } } } },
+    },
   });
 }

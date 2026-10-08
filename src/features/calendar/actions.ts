@@ -17,7 +17,7 @@ const EVERYWHERE = ["/school-admin", "/teacher", "/student", "/parent"];
 export async function saveHolidayAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await saveHoliday(ctx, parseFormData(holidaySchema, formData));
       return successResult("Holiday saved.");
     },
@@ -28,7 +28,7 @@ export async function saveHolidayAction(_p: Result, formData: FormData): Promise
 export async function deleteHolidayAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { holidayId } = parseFormData(z.object({ holidayId: id }), formData);
       await deleteHoliday(ctx, holidayId);
       return successResult("Holiday deleted.");
@@ -40,7 +40,7 @@ export async function deleteHolidayAction(_p: Result, formData: FormData): Promi
 export async function saveWeeklyOffsAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await setWeeklyOffDays(ctx, parseFormData(weeklyOffsSchema, formData));
       return successResult("Weekly offs saved.");
     },

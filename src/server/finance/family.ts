@@ -13,6 +13,8 @@ import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import { isUniqueViolation } from "@/server/db/errors";
 import { previousDues } from "@/server/finance/carry-forward";
 import { readStudentFees } from "@/server/finance/fees";
+import { ACTIVE_CONCESSION, netOf } from "@/server/finance/net";
+import { assertModuleEnabled } from "@/server/platform/modules";
 
 /**
  * Family fees: a parent with several children at the school sees each child's
@@ -109,6 +111,7 @@ export async function familyFees(ctx: TenantContext, parentId?: string) {
 /** School Admin: allow (or stop) one payment covering several siblings. */
 export async function setFamilyPaymentEnabled(ctx: TenantContext, enabled: boolean): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "FINANCE");
   await ctx.db.school.update({ where: { id: ctx.schoolId }, data: { familyPaymentEnabled: enabled } });
   await recordAudit({ action: "FEE_SETTINGS_UPDATED", entityType: "School", entityId: ctx.schoolId, schoolId: ctx.schoolId, actorId: ctx.user.id, summary: `Family payments ${enabled ? "switched on" : "switched off"}.` });
 }
@@ -131,14 +134,19 @@ export type FamilyAllocation = { studentId: string; amountMinor: number };
  */
 export async function recordFamilyPayment(
   ctx: TenantContext,
-  input: { parentId: string; paidOn: Date; method: PaymentMethod; referenceNo: string | null; notes: string | null; allocations: FamilyAllocation[] },
-): Promise<{ id: string; receiptNo: string; totalMinor: number }> {
+  input: { parentId: string; paidOn: Date; method: PaymentMethod; referenceNo: string | null; notes: string | null; allocations: FamilyAllocation[]; idempotencyKey?: string | null },
+): Promise<{ id: string; receiptNo: string; totalMinor: number; duplicate?: boolean }> {
   await assertAdminOrStaffPermission(ctx, "fees.collect");
   const school = await ctx.db.school.findFirst({ select: { familyPaymentEnabled: true } });
   if (!school?.familyPaymentEnabled) throw new ForbiddenError("Family payments are switched off. The School Admin can switch them on in Fees.");
   const session = await requireCurrentSession(ctx);
   if (input.paidOn > today()) throw new AppError("VALIDATION", "A payment cannot be dated in the future.");
 
+  // The same form submitted twice: the first payment stands, nothing new is taken.
+  if (input.idempotencyKey) {
+    const earlier = await ctx.db.familyPayment.findFirst({ where: { idempotencyKey: input.idempotencyKey }, select: { id: true, receiptNo: true, totalMinor: true } });
+    if (earlier) return { ...earlier, duplicate: true };
+  }
   const allocations = input.allocations.filter((row) => row.amountMinor > 0);
   if (!allocations.length) throw new ValidationError("Enter an amount for at least one child.");
   if (new Set(allocations.map((row) => row.studentId)).size !== allocations.length) throw new ValidationError("Each child can appear once.");
@@ -161,6 +169,17 @@ export async function recordFamilyPayment(
     const receiptNo = await nextFamilyReceiptNo(ctx);
     try {
       const created = await ctx.db.$transaction(async (tx) => {
+        // Checked again inside the transaction: a payment taken a moment ago at
+        // another desk must not let a child be credited past what they owe.
+        for (const allocation of allocations) {
+          const [charges, paid, carried] = await Promise.all([
+            tx.feeCharge.findMany({ where: { studentId: allocation.studentId, academicSessionId: session.id }, select: { amountMinor: true, concessions: ACTIVE_CONCESSION } }),
+            tx.feePayment.aggregate({ where: { studentId: allocation.studentId, academicSessionId: session.id, voidedAt: null }, _sum: { amountMinor: true } }),
+            tx.feeCarryForward.aggregate({ where: { studentId: allocation.studentId, fromSessionId: session.id }, _sum: { amountMinor: true } }),
+          ]);
+          const pending = Math.max(charges.reduce((sum, row) => sum + netOf(row).netMinor, 0) - (paid._sum.amountMinor ?? 0) - (carried._sum.amountMinor ?? 0), 0);
+          if (allocation.amountMinor > pending) throw new ConflictError("A child's balance changed while this payment was being taken. Reload and check the amounts.");
+        }
         const familyPayment = await tx.familyPayment.create({
           data: {
             schoolId: ctx.schoolId,
@@ -173,6 +192,7 @@ export async function recordFamilyPayment(
             referenceNo: input.referenceNo,
             notes: input.notes,
             recordedById: ctx.user.id,
+            idempotencyKey: input.idempotencyKey ?? null,
           },
           select: { id: true },
         });
@@ -192,7 +212,7 @@ export async function recordFamilyPayment(
           })),
         });
         return familyPayment;
-      });
+      }, { isolationLevel: "Serializable" });
       await recordAudit({
         action: "FAMILY_PAYMENT_RECORDED",
         entityType: "Parent",
@@ -205,7 +225,13 @@ export async function recordFamilyPayment(
       });
       return { id: created.id, receiptNo, totalMinor };
     } catch (error) {
-      if (isUniqueViolation(error)) continue;
+      if (isUniqueViolation(error) || (error as { code?: string } | null)?.code === "P2034") {
+        if (input.idempotencyKey) {
+          const earlier = await ctx.db.familyPayment.findFirst({ where: { idempotencyKey: input.idempotencyKey }, select: { id: true, receiptNo: true, totalMinor: true } });
+          if (earlier) return { ...earlier, duplicate: true };
+        }
+        continue;
+      }
       throw error;
     }
   }
@@ -250,15 +276,18 @@ export async function getFamilyReceipt(ctx: TenantContext, familyPaymentId: stri
 
 /** School Admin: void a family payment — every child's share with it, so no account is left half-credited. */
 export async function voidFamilyPayment(ctx: TenantContext, familyPaymentId: string, reason: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
-  const payment = await ctx.db.familyPayment.findFirst({ where: { id: familyPaymentId, voidedAt: null }, select: { id: true, receiptNo: true } });
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
+  const why = reason.trim();
+  if (why.length < 3) throw new AppError("VALIDATION", "Say why this family receipt is being voided.");
+  reason = why;
+  const payment = await ctx.db.familyPayment.findFirst({ where: { id: familyPaymentId, voidedAt: null }, select: { id: true, receiptNo: true, totalMinor: true } });
   if (!payment) throw new NotFoundError("That family payment was not found, or is already void.");
   const now = new Date();
   await ctx.db.$transaction([
-    ctx.db.familyPayment.updateMany({ where: { id: payment.id }, data: { voidedAt: now, voidReason: reason } }),
+    ctx.db.familyPayment.updateMany({ where: { id: payment.id, voidedAt: null }, data: { voidedAt: now, voidedById: ctx.user.id, voidReason: reason } }),
     ctx.db.feePayment.updateMany({ where: { familyPaymentId: payment.id, voidedAt: null }, data: { voidedAt: now, voidedById: ctx.user.id, voidReason: `Family payment ${payment.receiptNo} voided: ${reason}` } }),
   ]);
-  await recordAudit({ action: "FAMILY_PAYMENT_VOIDED", entityType: "FamilyPayment", entityId: payment.id, schoolId: ctx.schoolId, actorId: ctx.user.id, summary: `Family payment ${payment.receiptNo} voided: ${reason}` });
+  await recordAudit({ action: "FAMILY_PAYMENT_VOIDED", entityType: "FamilyPayment", entityId: payment.id, schoolId: ctx.schoolId, actorId: ctx.user.id, summary: `Family payment ${payment.receiptNo} voided: ${reason}`, metadata: { familyPaymentId: payment.id, receiptNo: payment.receiptNo, totalMinor: payment.totalMinor, reason } });
 }
 
 /** Parents with more than one current child, for the fee desk's family picker. */

@@ -36,6 +36,8 @@ export type StudentContext = {
     sectionLabel: string;
     classId: string;
     rollNumber: string | null;
+    /** Their stream (own, or the section's when the whole section is one stream); null when none. Timetable and homework for other streams are not theirs. */
+    streamId: string | null;
   };
 };
 
@@ -68,11 +70,13 @@ export async function findStudentSelf(
         select: {
           rollNumber: true,
           classId: true,
+          streamId: true,
           academicSession: { select: { id: true, name: true } },
           section: {
             select: {
               id: true,
               name: true,
+              streamId: true,
               class: { select: { name: true } },
               stream: { select: { name: true } },
             },
@@ -104,6 +108,7 @@ export async function findStudentSelf(
           sectionLabel: sectionLabel(enrollment.section),
           classId: enrollment.classId,
           rollNumber: enrollment.rollNumber,
+          streamId: enrollment.streamId ?? enrollment.section.streamId,
         }
       : null,
   };

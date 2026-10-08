@@ -313,6 +313,25 @@ async function seedSchool(spec: SchoolSpec, passwordHash: string): Promise<Crede
     email: adminEmail,
   });
 
+  // --- the Principal (oversight, read-only) ---------------------------------
+  // The demo password is a development credential only: the account must
+  // choose its own password on first sign-in (mustChangePassword), and the
+  // password is never shown in the app or returned by any API.
+  const principalEmail = `principal.${spec.slug}@schoolos.dev`.toLowerCase();
+  await prisma.user.create({
+    data: {
+      activatedAt: new Date(),
+      email: principalEmail,
+      passwordHash,
+      mustChangePassword: true,
+      role: UserRole.PRINCIPAL,
+      firstName: "Meera",
+      lastName: "Iyer",
+      schoolId: school.id,
+    },
+  });
+  credentials.push({ role: "PRINCIPAL", who: `Meera Iyer — ${spec.name} (asked to change the password on first sign-in)`, email: principalEmail });
+
   // --- the academic year ----------------------------------------------------
   const session = await prisma.academicSession.create({
     data: {

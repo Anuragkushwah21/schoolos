@@ -14,7 +14,7 @@ type Result = ActionResult<undefined>;
 export async function createSlotAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await createSlot(ctx, parseFormData(slotSchema, formData));
       return successResult("Period added.");
     },
@@ -25,7 +25,7 @@ export async function createSlotAction(_p: Result, formData: FormData): Promise<
 export async function updateSlotAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await updateSlot(ctx, parseFormData(slotUpdateSchema, formData));
       return successResult("Period updated.");
     },
@@ -38,7 +38,7 @@ const slotIdSchema = z.object({ slotId: id });
 export async function deleteSlotAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { slotId } = parseFormData(slotIdSchema, formData);
       await deleteSlot(ctx, slotId);
       return successResult("Period removed.");

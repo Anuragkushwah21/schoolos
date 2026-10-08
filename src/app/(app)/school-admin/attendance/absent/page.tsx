@@ -24,7 +24,7 @@ export const metadata: Metadata = { title: "Absent students" };
  * is chosen, and the school always comes from the session.
  */
 export default async function AbsentStudentsPage(props: PageProps<"/school-admin/attendance/absent">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const [t, intl] = await Promise.all([getT(), getIntlLocale()]);
   const search = await props.searchParams;
   const requested = parseDateInput(param(search.date));

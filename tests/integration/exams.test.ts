@@ -31,6 +31,7 @@ import {
   publishExams,
   saveMarks,
   submitMarks,
+  verifyExam,
   unpublishExam,
 } from "@/server/exams/service";
 import { getChildResults } from "@/server/parent/child";
@@ -232,20 +233,36 @@ describe("publishing and visibility", () => {
     await deleteExam(adminOf(schoolA), ids[0]!);
   });
 
-  it("publishes, then locks marks until the admin unpublishes", async () => {
+  it("publishes only after every paper is submitted and the results are verified, then locks marks until the admin unpublishes", async () => {
     // The other section has no students, so it has nothing missing; this one is complete.
     const detail = await getExamDetail(adminOf(schoolA), examId);
     expect(detail.papers.every((paper) => paper.entered === paper.expected)).toBe(true);
 
     await expect(publishExams(teacherOf(schoolA), [examId])).rejects.toBeInstanceOf(ForbiddenError);
+    // Draft marks: neither verify nor publish.
+    await expect(verifyExam(adminOf(schoolA), examId)).rejects.toThrow(/not submitted/);
+    await expect(publishExams(adminOf(schoolA), [examId])).rejects.toThrow(/not submitted/);
+    for (const paper of detail.papers) await submitMarks(adminOf(schoolA), paper.id);
+    // Submitted but not verified: still not published.
+    await expect(publishExams(adminOf(schoolA), [examId])).rejects.toThrow(/Not verified/);
+    await expect(verifyExam(teacherOf(schoolA), examId)).rejects.toBeInstanceOf(ForbiddenError);
+    await verifyExam(adminOf(schoolA), examId);
     await publishExams(adminOf(schoolA), [examId]);
+    const published = await prisma.exam.findUniqueOrThrow({ where: { id: examId } });
+    expect(published).toMatchObject({ status: "PUBLISHED", publishedById: schoolA.adminUserId });
     await expect(
       saveMarks(adminOf(schoolA), mathsPaperId, [{ studentId: schoolA.studentIds[0]!, marks: 10, absent: false, remark: null }]),
     ).rejects.toBeInstanceOf(AppError);
     await expect(deleteExam(adminOf(schoolA), examId)).rejects.toBeInstanceOf(AppError);
 
-    await unpublishExam(adminOf(schoolA), examId);
+    await expect(unpublishExam(adminOf(schoolA), examId, " ")).rejects.toThrow(/why/);
+    await unpublishExam(adminOf(schoolA), examId, "Correction");
+    expect((await prisma.exam.findUniqueOrThrow({ where: { id: examId } })).verifiedAt).toBeNull();
     expect((await getMarksSheet(adminOf(schoolA), mathsPaperId)).editable).toBe(true);
+    // Republishing needs the papers submitted and verified again.
+    await expect(publishExams(adminOf(schoolA), [examId])).rejects.toThrow(/not submitted/);
+    for (const paper of detail.papers) await submitMarks(adminOf(schoolA), paper.id);
+    await verifyExam(adminOf(schoolA), examId);
     await publishExams(adminOf(schoolA), [examId]);
   });
 

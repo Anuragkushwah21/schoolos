@@ -19,8 +19,6 @@ export type ActionResult<T = undefined> =
       fieldErrors?: Record<string, string[]>;
     };
 
-export const idleResult: ActionResult<never> = { status: "idle" };
-
 export function successResult(message?: string): ActionResult<undefined>;
 export function successResult<T>(message: string | undefined, data: T): ActionResult<T>;
 export function successResult<T>(

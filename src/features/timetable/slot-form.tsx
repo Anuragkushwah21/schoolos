@@ -26,6 +26,7 @@ export type SlotFormValues = {
   subjectId: string;
   teacherId: string;
   roomId: string | null;
+  streamId: string | null;
   /** Lessons are recorded against it: only the room can change. */
   locked: boolean;
 };
@@ -36,6 +37,7 @@ export function SlotForm({
   subjects,
   teachers,
   rooms,
+  streams = [],
   slot,
   cancelHref,
 }: {
@@ -43,6 +45,8 @@ export function SlotForm({
   subjects: SelectOption[];
   teachers: SelectOption[];
   rooms: SelectOption[];
+  /** The section's streams when it is split into them; empty hides the field. */
+  streams?: SelectOption[];
   slot?: SlotFormValues;
   cancelHref?: Route;
 }) {
@@ -58,6 +62,7 @@ export function SlotForm({
           <input type="hidden" name="endMinute" value={slot.end} />
           <input type="hidden" name="subjectId" value={slot.subjectId} />
           <input type="hidden" name="teacherId" value={slot.teacherId} />
+          {slot.streamId ? <input type="hidden" name="streamId" value={slot.streamId} /> : null}
         </>
       ) : null}
       <FieldRow>
@@ -79,6 +84,17 @@ export function SlotForm({
         <SelectField name={locked ? "_subject" : "subjectId"} label="Subject" options={subjects} placeholder="Select…" defaultValue={slot?.subjectId} disabled={locked} required />
         <SelectField name={locked ? "_teacher" : "teacherId"} label="Teacher" options={teachers} placeholder="Select…" defaultValue={slot?.teacherId} disabled={locked} required />
       </FieldRow>
+      {streams.length ? (
+        <SelectField
+          name={locked ? "_stream" : "streamId"}
+          label="Stream"
+          options={streams}
+          placeholder="Whole section"
+          defaultValue={slot?.streamId ?? ""}
+          disabled={locked}
+          hint="Choose a stream for a period only that stream attends. Streams may have different periods at the same time."
+        />
+      ) : null}
       <p className="text-muted-foreground text-xs">
         {locked
           ? "Lessons have been recorded for this period, so only its room can change."

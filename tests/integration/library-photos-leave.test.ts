@@ -1,6 +1,6 @@
 /**
  * Librarian book issue with physical copies, profile photos for every role,
- * and student leave from parents (and students) to the class teacher.
+ * and student leave from parents (and students) to the class teacher, then the School Admin.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -298,13 +298,17 @@ describe("student leave", () => {
     const asker = parentOfSecond?.parent.userId ? contextFor(schoolA, parentOfSecond.parent.userId, "PARENT") : parentA();
     // The fixture parent may be linked to several children; apply through whoever is linked.
     const { id } = await apply(asker, { studentId: schoolA.studentIds[1] });
-    const { markedDays } = await decideStudentLeave(teacherOf(schoolA), { leaveId: id, decision: "APPROVE", comment: null });
+    // Step 1: the class teacher approves — it is not leave yet, it goes to the admin.
+    await expect(decideStudentLeave(teacherOf(schoolA), { leaveId: id, decision: "APPROVE", comment: null })).resolves.toMatchObject({ status: "TEACHER_APPROVED" });
+    expect((await getRegister(teacherOf(schoolA), schoolA.sectionId, today())).rows.find((row) => row.studentId === schoolA.studentIds[1])?.leave).toBeNull();
+    // Step 2: the School Admin's final approval.
+    const { markedDays } = await decideStudentLeave(adminOf(schoolA), { leaveId: id, decision: "APPROVE", comment: null });
     expect(markedDays).toBe(1);
     expect((await prisma.studentAttendance.findFirstOrThrow({ where: { studentId: schoolA.studentIds[1], date: today() } })).status).toBe("PRESENT");
     const register = await getRegister(teacherOf(schoolA), schoolA.sectionId, today());
     expect(register.rows.find((row) => row.studentId === schoolA.studentIds[1])).toMatchObject({ leave: "Sick", status: "PRESENT" });
     expect(register.rows.find((row) => row.studentId === schoolA.studentIds[2])?.leave).toBeNull();
-    // Only the admin can overturn it now.
+    // Only the admin can change it now.
     await expect(decideStudentLeave(teacherOf(schoolA), { leaveId: id, decision: "REJECT", comment: null })).rejects.toBeInstanceOf(ConflictError);
     await decideStudentLeave(adminOf(schoolA), { leaveId: id, decision: "REJECT", comment: "Was present" });
     expect((await listStudentLeaves(adminOf(schoolA))).find((row) => row.id === id)).toMatchObject({ status: "REJECTED", decidedByAdmin: true });

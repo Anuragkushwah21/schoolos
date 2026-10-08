@@ -13,10 +13,35 @@ import { cn } from "@/lib/utils";
 export function QuickActions({
   title,
   actions,
+  compact = false,
 }: {
   title: string;
   actions: Array<{ href: Route; label: string; icon: LucideIcon; tone?: AccentTone }>;
+  /** Smaller tiles, icon over label, in one card — for a busy home page. */
+  compact?: boolean;
 }) {
+  if (compact) {
+    return (
+      <section aria-label={title} className="bg-card shadow-card mb-8 rounded-2xl border border-border/70 p-4">
+        <h2 className="mb-3 text-sm font-semibold">{title}</h2>
+        <ul className={cn("grid grid-cols-4 gap-2", actions.length > 8 ? "sm:grid-cols-5 xl:grid-cols-10" : "sm:grid-cols-4 lg:grid-cols-8")}>
+          {actions.map(({ href, label, icon: Icon, tone = "blue" }) => (
+            <li key={href}>
+              <Link
+                href={href}
+                className="group/qa hover:bg-muted/60 flex h-full flex-col items-center gap-2 rounded-xl px-1 py-2.5 text-center text-xs leading-tight font-medium transition-colors"
+              >
+                <span className={cn("flex size-11 items-center justify-center rounded-2xl transition-transform group-hover/qa:-translate-y-0.5", TONE_SOLID[tone])}>
+                  <Icon className="size-5" aria-hidden />
+                </span>
+                {label}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </section>
+    );
+  }
   return (
     <section aria-label={title} className="mb-8">
       <h2 className="mb-3 text-base font-semibold">{title}</h2>

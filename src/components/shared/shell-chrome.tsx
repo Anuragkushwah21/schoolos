@@ -14,21 +14,25 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { PersonAvatar } from "@/components/shared/person-avatar";
 import { UserMenu } from "@/features/auth/user-menu";
+import { CampusSwitcher } from "@/features/campuses/forms";
 import { LanguageSelector } from "@/features/i18n/language-selector";
 import { GlobalSearch } from "@/features/search/global-search";
 import { NotificationBell } from "@/features/notifications/notification-bell";
 import type { UserRole } from "@/generated/prisma/enums";
 import { MOBILE_PRIMARY, type NavItem, isNavActive, tabsFor } from "@/lib/nav";
+import { withinModules } from "@/lib/school-modules";
 
 /** Roles with an alert feed behind `/api/v1/me/alerts`. */
-const HAS_ALERTS: readonly UserRole[] = ["SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"];
+const HAS_ALERTS: readonly UserRole[] = ["SCHOOL_ADMIN", "PRINCIPAL", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"];
 /** Roles with a header search; the server decides what each may find. */
 const HAS_SEARCH: readonly UserRole[] = ["SCHOOL_ADMIN", "TEACHER", "NON_TEACHING_STAFF"];
 
 export type ShellUser = { name: string; email: string; role: UserRole; profileHref: Route; photoUrl?: string | null };
 
 /** The sidebar's contents, shared by the desktop rail and the phone drawer. */
-function SidebarBody({ nav, schoolName, user, onNavigate }: { nav: NavItem[]; schoolName: string; user: ShellUser; onNavigate?: () => void }) {
+type Campuses = { list: Array<{ id: string; name: string }>; currentId: string | null };
+
+function SidebarBody({ nav, schoolName, user, campuses, onNavigate }: { nav: NavItem[]; schoolName: string; user: ShellUser; campuses?: Campuses; onNavigate?: () => void }) {
   const t = useT();
   return (
     <div className="flex h-full flex-col">
@@ -41,11 +45,12 @@ function SidebarBody({ nav, schoolName, user, onNavigate }: { nav: NavItem[]; sc
           <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/20 ring-1 ring-white/30">
             <Building2Icon className="size-4" aria-hidden />
           </span>
-          <span className="min-w-0">
+          <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold" title={schoolName}>
               {schoolName}
             </span>
             <span className="block text-xs text-white/80">{t(`role.${user.role}`)}</span>
+            {campuses ? <CampusSwitcher campuses={campuses.list} currentId={campuses.currentId} /> : null}
           </span>
         </div>
       </div>
@@ -83,18 +88,28 @@ export function ShellChrome({
   nav,
   schoolName,
   user,
+  modules = null,
+  campuses,
+  currentSchoolId = null,
   children,
 }: {
   nav: NavItem[];
   schoolName: string;
+  /** An Owner's live campuses, when there is more than one. */
+  campuses?: Array<{ id: string; name: string }>;
+  currentSchoolId?: string | null;
   user: ShellUser;
+  /** The school's optional modules; tabs into the others are hidden. Null for the platform. */
+  modules?: readonly string[] | null;
   children: React.ReactNode;
 }) {
   const t = useT();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const switcher = campuses ? { list: campuses, currentId: currentSchoolId } : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
-  const area = tabsFor(user.role, pathname);
+  const found = tabsFor(user.role, pathname);
+  const area = found && modules ? { ...found, tabs: withinModules(found.tabs, modules) } : found;
   const current = nav.find((item) => isNavActive(item, pathname));
   const primary = (MOBILE_PRIMARY[user.role] ?? [])
     .map((href) => nav.find((item) => item.href === href))
@@ -111,7 +126,7 @@ export function ShellChrome({
       </a>
 
       <aside className="bg-sidebar text-sidebar-foreground border-sidebar-border hidden shrink-0 border-r md:sticky md:top-0 md:block md:h-dvh md:w-64 print:hidden">
-        <SidebarBody nav={nav} schoolName={schoolName} user={user} />
+        <SidebarBody nav={nav} schoolName={schoolName} user={user} campuses={switcher} />
       </aside>
 
       <Sheet open={open} onOpenChange={setOpen}>
@@ -119,7 +134,7 @@ export function ShellChrome({
           <SheetHeader className="sr-only">
             <SheetTitle>{t("common.menu")}</SheetTitle>
           </SheetHeader>
-          <SidebarBody nav={nav} schoolName={schoolName} user={user} onNavigate={() => setOpen(false)} />
+          <SidebarBody nav={nav} schoolName={schoolName} user={user} campuses={switcher} onNavigate={() => setOpen(false)} />
         </SheetContent>
       </Sheet>
 

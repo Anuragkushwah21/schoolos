@@ -13,10 +13,14 @@ import {
   setAdminActiveAction,
   simpleTransitionAction,
 } from "@/features/platform/actions";
+import { ApproveWithPlanForm, CoreModuleList, SchoolModulesForm } from "@/features/platform/module-forms";
+import { cleanModules } from "@/lib/school-modules";
+import { cleanLimits, cleanRoles } from "@/lib/school-roles";
+import { CampusLimitForm } from "@/features/campuses/forms";
 import {
-  ApproveSchoolForm,
   CreateAdminForm,
   ReasonForm,
+  SchoolRolesForm,
   ResetPasswordForm,
   SubscriptionForm,
 } from "@/features/platform/forms";
@@ -49,8 +53,10 @@ export default async function PlatformSchoolPage(
     throw error;
   });
   const plans = await listPlansForSelect();
-  const { school, admins, recentAudit } = data;
+  const { school, admins, recentAudit, academic } = data;
   const subscription = school.subscriptions[0];
+  const planRow = subscription ? plans.find((plan) => plan.id === subscription.plan.id) : null;
+  const schoolModules = cleanModules(school.optionalModules);
 
   const awaitingReview = school.status === "PENDING" || school.status === "UNDER_REVIEW";
 
@@ -145,13 +151,14 @@ export default async function PlatformSchoolPage(
 
               {/* Always mounted: it carries the password issued on approval,
                   which is shown once and cannot be recovered. */}
-              <ApproveSchoolForm
-                schoolId={school.id}
-                canApprove={
-                  Boolean(school.contactEmailVerifiedAt) &&
-                  (awaitingReview || school.status === "REJECTED")
-                }
-              />
+              <div id="approve" className="scroll-mt-24">
+                <ApproveWithPlanForm
+                  schoolId={school.id}
+                  plans={plans.map((plan) => ({ value: plan.id, label: plan.isActive ? plan.name : `${plan.name} (hidden)`, modules: cleanModules(plan.optionalModules) }))}
+                  defaultPlanId={subscription?.plan.id ?? null}
+                  canApprove={Boolean(school.contactEmailVerifiedAt) && (awaitingReview || school.status === "REJECTED")}
+                />
+              </div>
 
               {(awaitingReview || school.status === "REJECTED") && !school.contactEmailVerifiedAt ? (
                 <p className="text-muted-foreground text-sm">
@@ -160,12 +167,14 @@ export default async function PlatformSchoolPage(
               ) : null}
 
               {awaitingReview ? (
+                <div id="reject" className="scroll-mt-24">
                 <ReasonForm
                   schoolId={school.id}
                   transition="reject"
                   label="Reject registration"
                   hint="Recorded on the school and in the audit log."
                 />
+                </div>
               ) : null}
 
               {school.status === "ACTIVE" ? (
@@ -193,6 +202,69 @@ export default async function PlatformSchoolPage(
               ) : null}
             </CardContent>
           </Card>
+
+          {/* ---------------- feature access ---------------- */}
+          <Card id="features" className="scroll-mt-24">
+            <CardHeader>
+              <CardTitle>Feature access</CardTitle>
+              <CardDescription>
+                {subscription ? `Plan: ${subscription.plan.name}. ` : "No plan yet. "}
+                {school.modulesCustomized ? "Optional modules adjusted for this school." : "Optional modules follow the plan."} Core modules are always on.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-5">
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-medium">Core</p>
+                <CoreModuleList />
+              </div>
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-medium">Optional — manage features</p>
+                <SchoolModulesForm
+                  schoolId={school.id}
+                  planName={subscription?.plan.name ?? null}
+                  planModules={planRow ? cleanModules(planRow.optionalModules) : []}
+                  current={schoolModules}
+                  customized={school.modulesCustomized}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ---------------- roles & limits ---------------- */}
+          <Card id="roles" className="scroll-mt-24">
+            <CardHeader>
+              <CardTitle>Roles & limits</CardTitle>
+              <CardDescription>
+                {school.rolesCustomized ? "Roles adjusted for this school." : "Roles follow the plan."} SchoolOS decides what this school can use; its School Admin decides who gets each role.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <SchoolRolesForm schoolId={school.id} roles={cleanRoles(school.enabledRoles)} followPlan={!school.rolesCustomized} limits={cleanLimits(school.roleLimits)} />
+            </CardContent>
+          </Card>
+
+          {/* ---------------- organization / campuses ---------------- */}
+          {school.organization ? (
+            <Card id="organization" className="scroll-mt-24">
+              <CardHeader>
+                <CardTitle>Owner & campuses</CardTitle>
+                <CardDescription>
+                  {`${school.organization.name}${school.organization.owner ? ` · owner ${school.organization.owner.firstName} ${school.organization.owner.lastName} (${school.organization.owner.email})` : " · no owner yet"} · campus limit ${school.organization.campusLimitOverride ?? subscription?.plan.campusLimit ?? 1}${school.organization.campusLimitOverride !== null ? " (set for this organization)" : " (from the plan)"}`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4 text-sm">
+                <ul className="list-disc pl-5">
+                  {school.organization.schools.map((campus) => (
+                    <li key={campus.id}>
+                      {campus.id === school.id ? <strong>{campus.name}</strong> : <Link className="hover:underline" href={`/super-admin/schools/${campus.id}`}>{campus.name}</Link>}
+                      {` · ${campus.status.toLowerCase()}`}
+                    </li>
+                  ))}
+                </ul>
+                <CampusLimitForm organizationId={school.organization.id} current={school.organization.campusLimitOverride} />
+              </CardContent>
+            </Card>
+          ) : null}
 
           {/* ---------------- administrators ---------------- */}
           <Card>
@@ -289,7 +361,10 @@ export default async function PlatformSchoolPage(
             </CardHeader>
             <CardContent>
               <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-                <Detail label="Address">/schools/{school.slug}</Detail>
+                <Detail label="School code">{school.udiseCode ? `${school.slug} · UDISE ${school.udiseCode}` : school.slug}</Detail>
+                <Detail label="Address">{[school.addressLine, school.city, school.state, school.postalCode].filter(Boolean).join(", ")}</Detail>
+                <Detail label="School phone">{school.phone}</Detail>
+                <Detail label="School email">{school.email}</Detail>
                 <Detail label="Location">
                   {[school.city, school.state].filter(Boolean).join(", ")}
                 </Detail>
@@ -312,6 +387,22 @@ export default async function PlatformSchoolPage(
                     ? `${formatDateTime(school.reviewedAt)}${school.reviewedBy ? ` by ${school.reviewedBy.firstName} ${school.reviewedBy.lastName}` : ""}`
                     : null}
                 </Detail>
+              </dl>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Academic overview</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+                <Detail label="Current session">
+                  {academic.currentSession ? `${academic.currentSession.name} (${formatDate(academic.currentSession.startDate)} – ${formatDate(academic.currentSession.endDate)})` : null}
+                </Detail>
+                <Detail label="Classes">{String(school._count.classes)}</Detail>
+                <Detail label="Sections">{String(academic.sections)}</Detail>
+                <Detail label="Principal">{school.principalName}</Detail>
               </dl>
             </CardContent>
           </Card>

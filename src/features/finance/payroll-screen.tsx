@@ -10,12 +10,13 @@ import { Button } from "@/components/ui/button";
 import { rupees } from "@/features/finance/money";
 import { PayrollForm } from "@/features/finance/payroll-form";
 import { dateOnly, formatDate, formatMonth, today, toDateInput } from "@/lib/dates";
+import { pluralize } from "@/lib/format";
 import { param } from "@/lib/search-params";
 import type { TenantContext } from "@/server/auth/current-user";
 import { getPayroll } from "@/server/finance/payroll";
 
 /**
- * One month's payroll: what each teacher is due from their salary structure,
+ * One month's payroll: what each teacher and staff member is due from their salary structure,
  * who is already paid, and a batch "mark paid" for the rest — the School
  * Admin's Finance → Payroll and the staff portal's Payroll, one screen.
  * Without `canPay` it is read-only. The services check again.
@@ -32,7 +33,7 @@ export async function PayrollScreen({ ctx, search, basePath, back, canPay }: { c
       <PageHeader icon={BanknoteIcon} tone="amber"
         back={back}
         title="Payroll"
-        description={`${formatMonth(month)} · generated from each teacher's salary structure.`}
+        description={`${formatMonth(month)} · teachers and non-teaching staff, from each person's salary structure.`}
       />
       <form action={basePath} className="mb-6 flex items-end gap-2">
         <label className="flex flex-col gap-1 text-sm">
@@ -45,8 +46,8 @@ export async function PayrollScreen({ ctx, search, basePath, back, canPay }: { c
       </form>
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label="Due this month" value={rupees(payroll.totals.dueMinor)} />
-        <StatCard label="Paid" value={rupees(payroll.totals.paidMinor)} hint={`${payroll.totals.paid} teachers`} />
-        <StatCard label="Still to pay" value={payroll.totals.unpaid} />
+        <StatCard label="Paid" value={rupees(payroll.totals.paidMinor)} hint={pluralize(payroll.totals.paid, "person", "people")} />
+        <StatCard label="Still to pay" value={rupees(payroll.totals.remainingMinor)} hint={pluralize(payroll.totals.unpaid, "person", "people")} />
         <StatCard label="No salary set" value={payroll.totals.withoutStructure} href={canPay && basePath.startsWith("/school-admin") ? "/school-admin/finance/salaries" : undefined} />
       </div>
       {payroll.rows.length ? (
@@ -56,12 +57,12 @@ export async function PayrollScreen({ ctx, search, basePath, back, canPay }: { c
           today={toDateInput(now)}
           rows={payroll.rows.map((row) => ({
             ...row,
-            payment: row.payment ? { amountMinor: row.payment.amountMinor, paidOn: formatDate(row.payment.paidOn), method: row.payment.method } : null,
+            payment: row.payment ? { amountMinor: row.payment.amountMinor, paidOn: formatDate(row.payment.paidOn), method: row.payment.method, paidBy: row.payment.paidBy } : null,
           }))}
         />
       ) : (
         <EmptyState
-          title="No teachers yet."
+          title="No teachers or staff yet."
           action={
             basePath.startsWith("/school-admin") ? (
               <Button asChild>
@@ -70,7 +71,7 @@ export async function PayrollScreen({ ctx, search, basePath, back, canPay }: { c
             ) : undefined
           }
         >
-          Add your teachers first; their salaries then appear here to pay each month.
+          Add your teachers and staff first; set each salary on their record, and it appears here to pay each month.
         </EmptyState>
       )}
     </>

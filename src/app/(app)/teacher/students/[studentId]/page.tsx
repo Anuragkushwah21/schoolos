@@ -24,6 +24,7 @@ import { getCurrentSession } from "@/server/academics/structure";
 import { remarksForStudent } from "@/server/classwork/remarks";
 import { orHidden } from "@/server/page-helpers";
 import { getMyStudent, myTeachingOptions } from "@/server/people/teacher-self";
+import { attendedDays } from "@/lib/attendance";
 
 export const metadata: Metadata = { title: "Student" };
 
@@ -99,7 +100,7 @@ export default async function TeacherStudentPage(
           value={
             counts.total === 0
               ? "—"
-              : formatPercent(counts.PRESENT + counts.LATE, counts.total)
+              : formatPercent(attendedDays(counts), counts.total)
           }
           hint={`since ${formatDate(detail.from)}`}
         />

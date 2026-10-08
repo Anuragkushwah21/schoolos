@@ -11,10 +11,12 @@ import type { ChildFeeInput, CreateEnquiryInput, EnquiryChildInput, FamilyFeeInp
 import type { CreateStudentInput } from "@/lib/validation/school";
 import type { TenantTx } from "@/server/academics/streams";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { assertAdminOrStaffPermission, staffHolds } from "@/server/auth/staff-access";
 import { isUniqueViolation } from "@/server/db/errors";
 import { type AdmissionResult, createStudent, phoneKey } from "@/server/people/students";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Family enquiries — a lead, never an admission or a fee.
@@ -108,6 +110,17 @@ async function requireAssignee(ctx: TenantContext, userId: string | null) {
   return user.id;
 }
 
+/** An enquiry as taken by someone who may not discuss fees: every fee figure left blank. */
+function withoutFees(input: CreateEnquiryInput): CreateEnquiryInput {
+  return {
+    ...input,
+    children: input.children.map((child) => ({ ...child, feeOriginal: null, discountKind: "NONE", discountValue: null, discountReason: null })),
+    familyDiscountKind: "NONE",
+    familyDiscountValue: null,
+    familyDiscountReason: null,
+  };
+}
+
 /** The family discount, worked out again from the children's current figures. */
 async function refreshFamilyDiscount(tx: TenantTx, enquiryId: string) {
   const enquiry = await tx.enquiry.findFirst({
@@ -131,8 +144,11 @@ async function refreshEnquiryStatus(tx: TenantTx, enquiryId: string) {
 // Create and edit
 // -----------------------------------------------------------------------------
 
-export async function createEnquiry(ctx: TenantContext, input: CreateEnquiryInput): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+export async function createEnquiry(ctx: TenantContext, asked: CreateEnquiryInput): Promise<string> {
+  await assertAdminOrStaffPermission(ctx, "enquiries.manage");
+  // The fee discussion needs its own permission; without it a new enquiry is
+  // taken with no fee figures, whatever the form sent.
+  const input = isSchoolLeader(ctx.user.role) || (await staffHolds(ctx, "enquiries.fees")) ? asked : withoutFees(asked);
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true, name: true } });
   if (!session) throw new AppError("CONFLICT", "Set up the current academic session first.");
 
@@ -250,7 +266,7 @@ export async function createEnquiry(ctx: TenantContext, input: CreateEnquiryInpu
  * history — not here.
  */
 export async function updateEnquiry(ctx: TenantContext, input: UpdateEnquiryInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.manage");
   const enquiry = await ctx.db.enquiry.findFirst({
     where: { id: input.enquiryId },
     select: { id: true, status: true, enquiryNumber: true, children: { select: { id: true, status: true, firstName: true, lastName: true } } },
@@ -330,7 +346,7 @@ export async function updateEnquiry(ctx: TenantContext, input: UpdateEnquiryInpu
 
 /** A child no longer coming (or coming after all). Admitted children cannot be changed here. */
 export async function setChildWithdrawn(ctx: TenantContext, childId: string, withdrawn: boolean): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.manage");
   const child = await ctx.db.enquiryChild.findFirst({ where: { id: childId }, select: { id: true, status: true, enquiryId: true, firstName: true, lastName: true, enquiry: { select: { status: true, enquiryNumber: true } } } });
   if (!child) throw new NotFoundError();
   if (child.status === "ADMITTED") throw new ConflictError("This child is already admitted.");
@@ -351,7 +367,7 @@ export async function setChildWithdrawn(ctx: TenantContext, childId: string, wit
 
 /** One child's discussed fee and discount. Every change is kept as a revision. */
 export async function saveChildFee(ctx: TenantContext, input: ChildFeeInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.fees");
   const child = await ctx.db.enquiryChild.findFirst({
     where: { id: input.childId },
     select: { id: true, enquiryId: true, firstName: true, lastName: true, status: true, concessionAppliedAt: true, enquiry: { select: { status: true, enquiryNumber: true } } },
@@ -385,7 +401,7 @@ export async function saveChildFee(ctx: TenantContext, input: ChildFeeInput): Pr
 
 /** The family / sibling discount, the internal discussion notes, and whether the figures are agreed. */
 export async function saveFamilyFee(ctx: TenantContext, input: FamilyFeeInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.fees");
   const enquiry = await ctx.db.enquiry.findFirst({
     where: { id: input.enquiryId },
     select: { id: true, status: true, enquiryNumber: true, feeStatus: true, children: { select: { status: true, feeOriginalMinor: true, discountMinor: true, finalMinor: true } } },
@@ -437,7 +453,7 @@ export async function addEnquiryFollowUp(
   ctx: TenantContext,
   input: { enquiryId: string; note: string; nextAction: string | null; nextFollowUpOn: Date | null; assignedToId: string | null },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.manage");
   const enquiry = await ctx.db.enquiry.findFirst({ where: { id: input.enquiryId }, select: { id: true, status: true, enquiryNumber: true } });
   if (!enquiry) throw new NotFoundError();
   if (input.nextFollowUpOn && input.nextFollowUpOn < today()) throw new ValidationError(INVALID, { nextFollowUpOn: ["The next follow-up must be today or later"] });
@@ -462,7 +478,7 @@ export async function addEnquiryFollowUp(
 
 /** Move an enquiry by hand: contacted, follow-up, closed — or reopen it. CONVERTED is only ever set by admitting a child. */
 export async function setEnquiryStatus(ctx: TenantContext, input: { enquiryId: string; status: "NEW" | "CONTACTED" | "FOLLOW_UP" | "CLOSED"; reason: string | null }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.manage");
   const enquiry = await ctx.db.enquiry.findFirst({ where: { id: input.enquiryId }, select: { id: true, status: true, enquiryNumber: true } });
   if (!enquiry) throw new NotFoundError();
   if (enquiry.status === "CONVERTED") throw new ConflictError("A converted enquiry is kept as it is.");
@@ -481,6 +497,7 @@ type ParentLike = { id: string; firstName: string; lastName: string; phone: stri
  * email (safe to link), or by name only (link only on confirmation).
  */
 export async function parentMatches(ctx: TenantContext, contact: { phone: string; email: string | null; parentName: string }) {
+  await assertAdminOrStaffPermission(ctx, "enquiries.view");
   const parents = await ctx.db.parent.findMany({
     where: { archivedAt: null },
     select: {
@@ -524,7 +541,7 @@ function contactMatches(parent: ParentLike, enquiry: { phone: string; email: str
 
 /** Link the family to a parent already at this school — never another school's, never by name alone without confirmation. */
 export async function linkExistingParent(ctx: TenantContext, input: { enquiryId: string; parentId: string | null; confirmNameOnly: boolean }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.manage");
   const enquiry = await ctx.db.enquiry.findFirst({ where: { id: input.enquiryId }, select: { id: true, enquiryNumber: true, phone: true, email: true } });
   if (!enquiry) throw new NotFoundError();
   let label = "unlinked";
@@ -571,7 +588,7 @@ const CHILD_SUMMARY = {
 };
 
 export async function listEnquiries(ctx: TenantContext, filters: EnquiryFilters = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.view");
   const q = filters.q?.trim();
   const digits = q?.replace(/\D/g, "") ?? "";
   const date = today();
@@ -634,7 +651,7 @@ export async function listEnquiries(ctx: TenantContext, filters: EnquiryFilters 
 }
 
 export async function getEnquiry(ctx: TenantContext, enquiryId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.view");
   const enquiry = await ctx.db.enquiry.findFirst({
     where: { id: enquiryId },
     include: {
@@ -669,14 +686,14 @@ export async function getEnquiry(ctx: TenantContext, enquiryId: string) {
 
 /** Admins of this school, for "assigned to". */
 export async function enquiryAssignees(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.view");
   const users = await ctx.db.user.findMany({ where: { role: "SCHOOL_ADMIN", isActive: true }, orderBy: { firstName: "asc" }, select: { id: true, firstName: true, lastName: true } });
   return users.map((user) => ({ value: user.id, label: fullName(user) }));
 }
 
 /** For dashboards: open enquiries, and follow-ups due today or overdue. */
 export async function enquiryCounts(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "enquiries.view");
   const [open, due] = await Promise.all([
     ctx.db.enquiry.count({ where: { status: { in: OPEN } } }),
     ctx.db.enquiry.count({ where: { status: { in: OPEN }, nextFollowUpOn: { lte: today() } } }),
@@ -749,14 +766,9 @@ export async function convertEnquiryChild(
   ctx: TenantContext,
   input: { enquiryId: string; childId: string; student: CreateStudentInput; admissionType: AdmissionType; confirmNotDuplicate: boolean },
 ): Promise<AdmissionResult> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const plan = await childConversionPlan(ctx, input.enquiryId, input.childId);
   if (!plan.open) throw new ConflictError("This child has already been admitted, or the enquiry is closed.");
-  if (plan.possibleDuplicates.length && !input.confirmNotDuplicate) {
-    throw new ValidationError(INVALID, {
-      confirmNotDuplicate: [`${plan.possibleDuplicates.map((row) => `${row.name} (${row.admissionNumber})`).join(", ")} already exists with this name. Tick "This is a different child" if it really is someone else.`],
-    });
-  }
   const { count } = await ctx.db.enquiryChild.updateMany({
     where: { id: input.childId, enquiryId: input.enquiryId, status: "OPEN", convertedStudentId: null },
     data: { status: "ADMITTED" },
@@ -764,7 +776,8 @@ export async function convertEnquiryChild(
   if (!count) throw new ConflictError("This child is being admitted, or was admitted a moment ago.");
   let result: AdmissionResult;
   try {
-    result = await createStudent(ctx, input.student);
+    // The possible-duplicate check (and its "Add anyway") is createStudent's.
+    result = await createStudent(ctx, { ...input.student, confirmDuplicate: input.student.confirmDuplicate || input.confirmNotDuplicate });
   } catch (error) {
     await ctx.db.enquiryChild.updateMany({ where: { id: input.childId, convertedStudentId: null }, data: { status: "OPEN" } });
     throw error;
@@ -847,7 +860,7 @@ export async function applyDiscussedConcessions(
   ctx: TenantContext,
   input: { enquiryId: string; confirm: boolean; items: Array<{ childId: string; chargeId: string; amountMinor: number; formIndex?: number }> },
 ): Promise<{ applied: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   if (!input.confirm) throw new ValidationError(INVALID, { confirm: ["Tick to confirm before any fee record is changed"] });
   if (!input.items.length) throw new ValidationError(INVALID, { _form: ["Choose at least one child"] });
   const plan = await concessionPlan(ctx, input.enquiryId);

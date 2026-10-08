@@ -9,9 +9,9 @@ import { resendAccountEmail } from "@/server/auth/account-links";
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
 import { CURRENT_STUDENT, loginState } from "@/lib/validation/lifecycle";
-import { assertRole } from "@/server/auth/assert";
 import { parentStanding } from "@/server/people/lifecycle";
 import type { TenantContext } from "@/server/auth/current-user";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Parents as the office manages them, rather than as an attribute of a student.
@@ -38,7 +38,7 @@ export async function listParents(
   ctx: TenantContext,
   filters: { q?: string; page?: number; standing?: "ACTIVE" | "NO_ACTIVE_CHILDREN" | "ARCHIVED" } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   const page = Math.max(1, filters.page ?? 1);
 
   // A guardian's standing follows their children: active while any child is
@@ -142,7 +142,7 @@ export async function listParents(
  * because `ctx.db` is scoped before this runs.
  */
 export async function getParentWithChildren(ctx: TenantContext, parentId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
 
   const parent = await ctx.db.parent.findFirst({
     where: { id: parentId },
@@ -280,7 +280,7 @@ function shapeParent(parent: ParentRow) {
  * wrong family.
  */
 export async function parentOptions(ctx: TenantContext, q?: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
 
   const rows = await ctx.db.parent.findMany({
     where: {
@@ -329,7 +329,7 @@ export async function parentOptions(ctx: TenantContext, q?: string) {
  * login is reopened separately, by choice.
  */
 export async function setParentArchived(ctx: TenantContext, parentId: string, archived: boolean, reason: string | null): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const parent = await ctx.db.parent.findFirst({
     where: { id: parentId },
     select: {
@@ -373,7 +373,7 @@ export async function setParentArchived(ctx: TenantContext, parentId: string, ar
 
 /** Parents whose login was made but never activated — the ones a resend is for. */
 export async function parentsAwaitingActivation(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   return ctx.db.parent.findMany({
     where: { archivedAt: null, user: { activatedAt: null, isActive: true } },
     select: { id: true, firstName: true, lastName: true, user: { select: { id: true, email: true } } },
@@ -386,7 +386,7 @@ export async function parentsAwaitingActivation(ctx: TenantContext) {
  * parent's page uses — one fresh link each, the old one stops working.
  */
 export async function resendParentActivations(ctx: TenantContext): Promise<{ sent: number; failed: string[] }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "users", "EDIT");
   const parents = (await parentsAwaitingActivation(ctx)).slice(0, 200);
   let sent = 0;
   const failed: string[] = [];

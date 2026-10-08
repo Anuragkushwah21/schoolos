@@ -21,7 +21,7 @@ import { removeSalaryPaymentAction } from "@/features/finance/actions";
 import { SalaryPaymentForm } from "@/features/finance/forms";
 import { rupees } from "@/features/finance/money";
 import { formatDate, formatMonth, toDateInput, today } from "@/lib/dates";
-import { fullName, humanize } from "@/lib/format";
+import { humanize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
 import { listSalaries, listSalaryPayments } from "@/server/finance/salary";
 
@@ -46,7 +46,7 @@ export default async function SalariesPage() {
       <PageHeader icon={BanknoteIcon} tone="amber"
         back={{ href: "/school-admin/finance", label: "Finance" }}
         title="Salaries"
-        description="Only you and the teacher themselves can see these figures."
+        description="Teachers and non-teaching staff. Only you, staff you allow to view payroll, and each person themselves can see these figures."
         actions={
           <Button asChild>
             <Link href="/school-admin/finance/payroll">Monthly payroll</Link>
@@ -73,11 +73,11 @@ export default async function SalariesPage() {
           <CardContent>
             <SalaryPaymentForm
               today={toDateInput(today())}
-              teachers={rows.map((row) => ({
-                value: row.teacherId,
+              people={rows.map((row) => ({
+                value: row.key,
                 label: row.current
-                  ? `${row.name} · ${rupees(row.current.netMinor)} net`
-                  : `${row.name} · salary not set`,
+                  ? `${row.name} (${row.role}) · ${rupees(row.current.netMinor)} net`
+                  : `${row.name} (${row.role}) · salary not set`,
               }))}
             />
           </CardContent>
@@ -94,7 +94,7 @@ export default async function SalariesPage() {
                 {payments.map((payment) => (
                   <li key={payment.id} className="flex flex-wrap items-center gap-3 py-2.5">
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-medium">{fullName(payment.teacher)}</span>
+                      <span className="block text-sm font-medium">{payment.payee}</span>
                       <span className="text-muted-foreground block text-xs">
                         {formatMonth(payment.forMonth)} · paid {formatDate(payment.paidOn)} ·{" "}
                         {humanize(payment.method)}
@@ -130,8 +130,8 @@ export default async function SalariesPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Teacher</TableHead>
-                <TableHead className="hidden md:table-cell">Designation</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead className="hidden md:table-cell">Role</TableHead>
                 <TableHead className="text-right">Salary</TableHead>
                 <TableHead className="text-right">Net</TableHead>
                 <TableHead className="hidden w-32 lg:table-cell">Effective from</TableHead>
@@ -141,13 +141,14 @@ export default async function SalariesPage() {
             </TableHeader>
             <TableBody>
               {rows.map((row) => (
-                <TableRow key={row.teacherId}>
+                <TableRow key={row.key}>
                   <TableCell>
                     <span className="font-medium">{row.name}</span>
                     <p className="text-muted-foreground text-xs">{row.employeeId}</p>
                   </TableCell>
                   <TableCell className="text-muted-foreground hidden md:table-cell">
-                    {row.designation ?? "—"}
+                    {row.role}
+                    {row.designation && row.designation !== row.role ? <span className="block text-xs">{row.designation}</span> : null}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {row.current ? rupees(row.current.amountMinor) : "—"}
@@ -178,7 +179,7 @@ export default async function SalariesPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <Button asChild variant="ghost" size="sm">
-                      <Link href={`/school-admin/teachers/${row.teacherId}` as Route}>Open</Link>
+                      <Link href={(row.teacherId ? `/school-admin/teachers/${row.teacherId}` : `/school-admin/staff/${row.staffMemberId}?tab=salary`) as Route}>Open</Link>
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -187,7 +188,7 @@ export default async function SalariesPage() {
           </Table>
         </div>
       ) : (
-        <EmptyState title="No teachers yet">
+        <EmptyState title="No teachers or staff yet">
           Add staff first; their salary is entered on their own record and is never required to
           create them.
         </EmptyState>

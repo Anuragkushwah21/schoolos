@@ -11,9 +11,11 @@ import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { sectionLabel } from "@/server/academics/structure";
 import { claimSeatsForGroup, claimShare } from "@/server/academics/streams";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { remainingStudentCapacity } from "@/server/platform/limits";
+import { loadStudentIndex, matchCandidate } from "@/server/people/duplicates";
+import { describeMatch, nameKey } from "@/lib/student-duplicates";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Bulk student operations for the School Admin: promotion into a new session,
@@ -57,7 +59,7 @@ export async function promoteStudents(
   ctx: TenantContext,
   input: { fromSessionId: string; toSectionId: string; studentIds: string[] },
 ): Promise<{ promoted: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
 
   const toSection = await ctx.db.section.findFirst({ where: { id: input.toSectionId }, select: SECTION_SELECT });
   if (!toSection) throw new NotFoundError("That section was not found.");
@@ -134,7 +136,7 @@ export async function changeSection(
   ctx: TenantContext,
   input: { toSectionId: string; studentIds: string[] },
 ): Promise<{ moved: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const toSection = await ctx.db.section.findFirst({ where: { id: input.toSectionId }, select: SECTION_SELECT });
   if (!toSection) throw new NotFoundError("That section was not found.");
 
@@ -181,7 +183,7 @@ export async function changeSection(
  * section without streams has nothing to choose.
  */
 export async function assignStream(ctx: TenantContext, input: { streamId: string; studentIds: string[] }): Promise<{ assigned: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const stream = await ctx.db.stream.findFirst({ where: { id: input.streamId, isActive: true }, select: { id: true, name: true } });
   if (!stream) throw new NotFoundError("That stream was not found.");
   const students = await requireStudents(ctx, input.studentIds);
@@ -224,7 +226,7 @@ export async function setStudentsStatus(
   ctx: TenantContext,
   input: { status: StudentStatus; studentIds: string[] },
 ): Promise<{ updated: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const students = await requireStudents(ctx, input.studentIds);
   const changing = students.filter((student) => student.status !== input.status);
 
@@ -290,7 +292,14 @@ export type StudentImportReport = {
   errors: ImportError[];
   /** Not wrong, but worth knowing — e.g. a guardian matched to one already on file. */
   warnings: ImportError[];
+  /**
+   * Rows that may be a child already at the school (or earlier in the file).
+   * Left out unless the office ticks them ("Add anyway") on the preview.
+   */
+  duplicates?: ImportDuplicate[];
 };
+
+export type ImportDuplicate = { line: number; name: string; matches: string[]; likely: boolean; added: boolean };
 
 const GENDERS: Record<string, Gender> = { m: "MALE", male: "MALE", boy: "MALE", f: "FEMALE", female: "FEMALE", girl: "FEMALE", o: "OTHER", other: "OTHER" };
 const RELATIONS: Record<string, ParentRelationship> = { father: "FATHER", mother: "MOTHER", guardian: "GUARDIAN" };
@@ -323,10 +332,10 @@ function parseImportDate(value: string): Date | null {
 export async function importStudents(
   ctx: TenantContext,
   text: string,
-  options: { mode?: "check" | "import"; validOnly?: boolean } = {},
+  options: { mode?: "check" | "import"; validOnly?: boolean; addDuplicateLines?: number[] } = {},
 ): Promise<StudentImportReport> {
   const mode = options.mode ?? "import";
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
   if (!session) throw new AppError("VALIDATION", "Set a current academic session before importing students.");
 
@@ -334,12 +343,12 @@ export async function importStudents(
   try {
     records = readCsvRecords(text, { required: ["First name", "Last name", "Class", "Section", "Guardian phone"], maxRows: 500 });
   } catch (error) {
-    if (error instanceof CsvFormatError) return { total: 0, valid: 0, created: 0, warnings: [], errors: [{ line: 1, message: error.message }] };
+    if (error instanceof CsvFormatError) return { total: 0, valid: 0, created: 0, warnings: [], duplicates: [], errors: [{ line: 1, message: error.message }] };
     throw error;
   }
-  if (!records.length) return { total: 0, valid: 0, created: 0, warnings: [], errors: [{ line: 1, message: "The file has no students." }] };
+  if (!records.length) return { total: 0, valid: 0, created: 0, warnings: [], duplicates: [], errors: [{ line: 1, message: "The file has no students." }] };
 
-  const [sections, shares, existingAdmissions, existingRolls, parents] = await Promise.all([
+  const [sections, shares, existingAdmissions, existingRolls, parents, studentIndex] = await Promise.all([
     ctx.db.section.findMany({ where: { academicSessionId: session.id }, select: SECTION_SELECT }),
     ctx.db.sectionStream.findMany({ where: { section: { academicSessionId: session.id } }, select: { sectionId: true, streamId: true, capacity: true, stream: { select: { name: true } } } }),
     ctx.db.student.findMany({ select: { admissionNumber: true } }),
@@ -348,6 +357,7 @@ export async function importStudents(
       select: { sectionId: true, rollNumber: true },
     }),
     ctx.db.parent.findMany({ select: { id: true, phone: true } }),
+    loadStudentIndex(ctx),
   ]);
 
   const sectionByKey = new Map(sections.map((section) => [`${section.class.name.toLowerCase()}|${section.name.toLowerCase()}`, section]));
@@ -358,6 +368,10 @@ export async function importStudents(
 
   const errors: ImportError[] = [];
   const warnings: ImportError[] = [];
+  const duplicates: ImportDuplicate[] = [];
+  const approved = new Set(options.addDuplicateLines ?? []);
+  // Children met earlier in this file, by name, to catch the same child typed twice.
+  const seenInFile = new Map<string, { line: number; dateOfBirth: Date | null; phone: string }>();
   const rows: Array<{
     admissionNumber: string | null;
     firstName: string;
@@ -439,6 +453,28 @@ export async function importStudents(
       errors.push({ line: record.line, message: problems.join("; ") });
       continue;
     }
+    // The same child already at the school, or earlier in this file?
+    const matches = matchCandidate(studentIndex, { firstName, lastName, dateOfBirth, parentPhones: [phone] });
+    const key = nameKey(firstName, lastName);
+    const earlier = seenInFile.get(key);
+    const inFile = earlier
+      ? [
+          `row ${earlier.line} of this file — same name${earlier.dateOfBirth && dateOfBirth && earlier.dateOfBirth.getTime() === dateOfBirth.getTime() ? ", same date of birth" : ""}${phoneDigits(earlier.phone) === phoneDigits(phone) ? ", same parent mobile" : ""}`,
+        ]
+      : [];
+    if (!earlier) seenInFile.set(key, { line: record.line, dateOfBirth, phone });
+    if (matches.length || inFile.length) {
+      const added = approved.has(record.line);
+      duplicates.push({
+        line: record.line,
+        name: `${firstName} ${lastName}`,
+        matches: [...matches.map(describeMatch), ...inFile],
+        likely: matches.some((match) => match.likely) || inFile.some((text) => text.includes(", same ")),
+        added,
+      });
+      if (!added) continue;
+    }
+
     if (known) warnings.push({ line: record.line, message: `guardian phone ${phone} is already on file — ${firstName} will be linked to that guardian` });
     if (!genderRaw) warnings.push({ line: record.line, message: "gender is blank" });
     perSection.set(section!.id, (perSection.get(section!.id) ?? 0) + 1);
@@ -487,7 +523,7 @@ export async function importStudents(
     errors.push({ line: 1, message: `Your ${capacity.plan} plan allows ${capacity.remaining} more active students; the file has ${rows.length}.` });
   }
   const byLine = (a: ImportError, b: ImportError) => a.line - b.line;
-  const report = { total: records.length, valid: rows.length, errors: errors.sort(byLine), warnings: warnings.sort(byLine) };
+  const report = { total: records.length, valid: rows.length, errors: errors.sort(byLine), warnings: warnings.sort(byLine), duplicates };
   // Line 1 errors are about the whole file; they stop an import of valid rows too.
   const fileLevel = errors.some((error) => error.line === 1);
   if (mode === "check") return { ...report, created: 0 };
@@ -565,7 +601,12 @@ export async function importStudents(
     entityId: ctx.schoolId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${created} student${created === 1 ? "" : "s"} imported from CSV.`,
+    summary: `${created} student${created === 1 ? "" : "s"} imported from CSV.${
+      duplicates.length
+        ? ` Possible duplicates: ${duplicates.filter((row) => row.added).length} added after the office confirmed them, ${duplicates.filter((row) => !row.added).length} left out.`
+        : ""
+    }`,
+    ...(duplicates.length ? { metadata: { duplicates: duplicates.map((row) => ({ line: row.line, name: row.name, added: row.added, matches: row.matches })) } } : {}),
   });
   return { ...report, created };
 }

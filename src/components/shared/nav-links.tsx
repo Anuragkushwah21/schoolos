@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Fragment } from "react";
 import type { Route } from "next";
 import { usePathname } from "next/navigation";
 import { MenuIcon } from "lucide-react";
@@ -10,7 +11,11 @@ import { NAV_ICONS } from "@/components/shared/nav-icons";
 import { type AreaTab, type NavItem, isNavActive } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
-/** The sidebar list. `onNavigate` lets the mobile drawer close itself. */
+/**
+ * The sidebar list. Entries that start a group (`group`) get a small heading
+ * above them, so a long list still reads as a few short ones. `onNavigate`
+ * lets the mobile drawer close itself.
+ */
 export function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
   const pathname = usePathname();
   const t = useT();
@@ -21,21 +26,37 @@ export function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?:
         const active = isNavActive(item, pathname);
         const Icon = NAV_ICONS[item.icon];
         return (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={onNavigate}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 text-[0.9rem] transition-colors",
-              active
-                ? "bg-[linear-gradient(120deg,var(--brand-from),var(--primary))] font-semibold text-white shadow-[0_6px_16px_-8px_var(--primary)]"
-                : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-            )}
-          >
-            <Icon className="size-[18px] shrink-0" aria-hidden />
-            <span className="min-w-0 truncate">{t(item.labelKey)}</span>
-          </Link>
+          <Fragment key={item.href}>
+            {item.group ? (
+              <p className="text-muted-foreground/80 mt-4 mb-1 px-3 text-[0.68rem] font-semibold tracking-[0.08em] uppercase first:mt-0">{t(item.group)}</p>
+            ) : null}
+            <Link
+              href={item.href}
+              onClick={onNavigate}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "group/nav flex min-h-9 items-center gap-3 rounded-xl px-2.5 py-1.5 text-[0.88rem] transition-colors",
+                active
+                  ? "bg-[linear-gradient(120deg,var(--brand-from),var(--primary))] font-semibold text-white shadow-[0_6px_16px_-8px_var(--primary)]"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+              )}
+            >
+              <span
+                className={cn(
+                  "flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors",
+                  active ? "bg-white/20" : "bg-sidebar-accent/70 text-muted-foreground group-hover/nav:text-primary",
+                )}
+              >
+                <Icon className="size-4" aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1 truncate">{t(item.labelKey)}</span>
+              {item.badge ? (
+                <span className={cn("rounded-full px-2 text-xs leading-5 font-bold tabular-nums", active ? "bg-white text-primary" : "bg-destructive text-white")}>
+                  {item.badge}
+                </span>
+              ) : null}
+            </Link>
+          </Fragment>
         );
       })}
     </nav>

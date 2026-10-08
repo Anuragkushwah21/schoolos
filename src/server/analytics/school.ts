@@ -111,31 +111,6 @@ export async function classStrength(ctx: TenantContext, academicSessionId: strin
     .sort((a, b) => a.level - b.level);
 }
 
-/** Where this session's applications stand. Ordered stages, not categories. */
-export async function admissionsFunnel(ctx: TenantContext, academicSessionId: string) {
-  const rows = await ctx.db.admissionApplication.groupBy({
-    by: ["status"],
-    where: { academicSessionId },
-    _count: { _all: true },
-  });
-
-  const count = (status: string) => rows.find((row) => row.status === status)?._count._all ?? 0;
-  const received = rows.reduce((sum, row) => sum + row._count._all, 0);
-
-  return {
-    received,
-    stages: [
-      { key: "RECEIVED", label: "Received", value: received },
-      { key: "UNDER_REVIEW", label: "Under review", value: count("UNDER_REVIEW") },
-      { key: "SHORTLISTED", label: "Shortlisted", value: count("SHORTLISTED") },
-      { key: "APPROVED", label: "Approved", value: count("APPROVED") },
-      { key: "CONVERTED", label: "Admitted", value: count("CONVERTED") },
-    ],
-    rejected: count("REJECTED"),
-    waiting: count("SUBMITTED") + count("UNDER_REVIEW") + count("SHORTLISTED") + count("APPROVED"),
-  };
-}
-
 /**
  * The students a class teacher should look at first: lowest attendance, and
  * only those below the threshold.

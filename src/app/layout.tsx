@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import { I18nProvider } from "@/components/i18n/i18n-provider";
@@ -28,6 +28,14 @@ export const metadata: Metadata = {
   },
   description:
     "Multi-tenant school management: admissions, students, teachers, timetable and attendance for every school on one platform.",
+  // "Add to Home screen" gives parents and staff an app icon that opens
+  // full-screen, like any app on their phone (see app/manifest.ts).
+  appleWebApp: { capable: true, title: "SchoolOS", statusBarStyle: "default" },
+  icons: { apple: "/apple-touch-icon.png" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#4f46e5",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {

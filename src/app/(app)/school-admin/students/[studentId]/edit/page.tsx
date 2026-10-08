@@ -12,7 +12,7 @@ import { getStudentProfile } from "@/server/people/students";
 export const metadata: Metadata = { title: "Edit student" };
 
 export default async function EditStudentPage(props: PageProps<"/school-admin/students/[studentId]/edit">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { studentId } = await props.params;
   const { student } = await orNotFound(getStudentProfile(ctx, studentId));
 

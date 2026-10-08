@@ -2,12 +2,12 @@ import "server-only";
 
 import { addDays, schoolInstant, today } from "@/lib/dates";
 import { CURRENT_EMPLOYEE } from "@/lib/validation/lifecycle";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { classStrength } from "@/server/analytics/school";
 import { needsAttentionCount } from "@/server/exams/attention";
 import { listExams, testCounts } from "@/server/exams/service";
 import { listFeePositions } from "@/server/finance/fees";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * The School Admin dashboard's figures, one small function per section so
@@ -22,7 +22,7 @@ function startOfToday(): Date {
 
 /** Family enquiries and public applications received, and students admitted, today. */
 export async function admissionsToday(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const since = startOfToday();
   const [enquiries, applications, admitted] = await Promise.all([
     ctx.db.enquiry.count({ where: { createdAt: { gte: since } } }),
@@ -49,7 +49,7 @@ export async function studentBands(ctx: TenantContext, academicSessionId: string
 
 /** Teachers and other staff, and how many are on approved leave today. */
 export async function staffToday(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   const date = today();
   const [teachers, staff, onLeave] = await Promise.all([
     ctx.db.teacher.count({ where: { status: { in: ["ACTIVE", "ON_LEAVE"] } } }),
@@ -61,7 +61,7 @@ export async function staffToday(ctx: TenantContext) {
 
 /** The academic picture: who needs attention, marks to chase, results to release, exams coming. */
 export async function academicSnapshot(ctx: TenantContext, academicSessionId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "VIEW");
   const date = today();
   const [attention, counts, exams, upcomingExams, upcomingTests] = await Promise.all([
     needsAttentionCount(ctx),
@@ -79,6 +79,7 @@ export async function academicSnapshot(ctx: TenantContext, academicSessionId: st
     needsAttention: attention,
     pendingMarks: counts.pending,
     readyToPublish: exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length,
+    examsInProgress: exams.filter((exam) => exam.stage === "IN_PROGRESS" || exam.stage === "MARKS_PENDING").length,
     upcomingExams: upcomingExams.length,
     nextExam: upcomingExams[0] ?? null,
     upcomingTests,
@@ -93,7 +94,7 @@ const MONTHS = 6;
  * months of fees against expenses.
  */
 export async function financeSnapshot(ctx: TenantContext, academicSessionId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "finance", "VIEW");
   const date = today();
   const firstMonth = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - (MONTHS - 1), 1));
   const [collectedToday, expensesToday, collectedSession, positions, fees, expenses] = await Promise.all([

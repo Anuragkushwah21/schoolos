@@ -6,8 +6,8 @@ import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { type BaseStaffRole, STAFF_ROLE_NAMES, allowedGrants, cleanGrants, grantDef } from "@/lib/staff-access";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * One staff member covering another's work for a span of days.
@@ -65,7 +65,7 @@ const SELECT = {
 
 /** Create a substitution or change one that has not finished. */
 export async function saveSubstitution(ctx: TenantContext, input: SubstitutionInput): Promise<{ id: string }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   const now = today();
   if (input.originalStaffId === input.substituteStaffId) throw new ValidationError("Please correct the highlighted fields.", { substituteStaffId: ["Choose someone else as the substitute"] });
   if (input.endDate < input.startDate) throw new ValidationError("Please correct the highlighted fields.", { endDate: ["The end date cannot be before the start date"] });
@@ -136,7 +136,7 @@ export async function saveSubstitution(ctx: TenantContext, input: SubstitutionIn
 
 /** End a substitution today: the substitute loses the temporary access at once. The record stays. */
 export async function endSubstitution(ctx: TenantContext, substitutionId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   const row = await ctx.db.staffSubstitution.findFirst({ where: { id: substitutionId }, select: { ...SELECT } });
   if (!row) throw new NotFoundError("That substitution was not found.");
   const status = substitutionStatus(row);
@@ -166,7 +166,7 @@ function loadRows(ctx: TenantContext, where: Prisma.StaffSubstitutionWhereInput,
 
 /** One staff member's substitutions: covered by others, and covering for others. */
 export async function substitutionsFor(ctx: TenantContext, staffId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   const now = today();
   const [coveredBy, covering] = await Promise.all([loadRows(ctx, { originalStaffId: staffId }), loadRows(ctx, { substituteStaffId: staffId })]);
   return { coveredBy: coveredBy.map((row) => shape(row, now)), covering: covering.map((row) => shape(row, now)) };
@@ -174,7 +174,7 @@ export async function substitutionsFor(ctx: TenantContext, staffId: string) {
 
 /** Every substitution, filtered by status, newest first — the history list. */
 export async function listSubstitutions(ctx: TenantContext, filters: { status?: SubstitutionStatus } = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   const now = today();
   const where =
     filters.status === "ACTIVE"
@@ -191,7 +191,7 @@ export async function listSubstitutions(ctx: TenantContext, filters: { status?: 
 
 /** Current staff who could cover for this person: everyone active except them, with whether their role fits. */
 export async function substituteCandidates(ctx: TenantContext, originalStaffId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   const original = await ctx.db.staffMember.findFirst({ where: { id: originalStaffId }, select: { id: true, role: true, grants: true } });
   if (!original) throw new NotFoundError("That staff member was not found.");
   const staff = await ctx.db.staffMember.findMany({

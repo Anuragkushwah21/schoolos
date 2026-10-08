@@ -15,7 +15,7 @@ const PAGES = ["/school-admin", "/teacher", "/student", "/parent"];
 export async function bulkStudentsAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { operation } = parseFormData(z.object({ operation: z.enum(["promote", "move", "status", "stream"]) }), formData);
       if (operation === "promote") {
         const input = parseFormData(promoteSchema, formData);
@@ -52,17 +52,20 @@ export type StudentImportResult = ActionResult<(StudentImportReport & { mode: "c
 export async function importStudentsAction(_p: StudentImportResult, formData: FormData): Promise<StudentImportResult> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       if (formData.get("mode") === "cancel") return { status: "idle" };
       const file = formData.get("file");
       if (!(file instanceof File) || file.size === 0) return { status: "error", message: "Choose the CSV file to import." };
       if (file.size > 2_000_000) return { status: "error", message: "The file is too large. Import at most 500 students at a time." };
       const mode = formData.get("mode") === "import" ? "import" : "check";
-      const report = await importStudents(ctx, await file.text(), { mode, validOnly: formData.get("validOnly") === "1" });
+      // Rows flagged as possible duplicates that the office ticked "Add anyway".
+      const addDuplicateLines = formData.getAll("addDuplicate").map(Number).filter(Number.isInteger);
+      const report = await importStudents(ctx, await file.text(), { mode, validOnly: formData.get("validOnly") === "1", addDuplicateLines });
       if (mode === "import" && report.created) {
-        const skipped = report.total - report.created;
+        const leftOutDuplicates = (report.duplicates ?? []).filter((row) => !row.added).length;
+        const skipped = report.total - report.created - leftOutDuplicates;
         return successResult(
-          `${report.created} student${report.created === 1 ? "" : "s"} admitted.${skipped ? ` ${skipped} row${skipped === 1 ? " was" : "s were"} left out — fix and import them separately.` : ""}`,
+          `${report.created} student${report.created === 1 ? "" : "s"} admitted.${leftOutDuplicates ? ` ${leftOutDuplicates} possible duplicate${leftOutDuplicates === 1 ? " was" : "s were"} not added.` : ""}${skipped > 0 ? ` ${skipped} row${skipped === 1 ? " was" : "s were"} left out — fix and import them separately.` : ""}`,
           { ...report, mode },
         );
       }

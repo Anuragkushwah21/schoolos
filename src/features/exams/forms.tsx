@@ -12,13 +12,17 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import {
+  correctResultAction,
   createClassTestAction,
   createExamAction,
   importMarksAction,
   type ImportResult,
   reopenMarksAction,
+  saveGradingRulesAction,
   saveMarksAction,
+  saveResultSchemeAction,
   updateClassTestAction,
+  unpublishExamAction,
   updateExamAction,
 } from "./actions";
 
@@ -236,24 +240,27 @@ type MarksRow = {
   rollNumber: string | null;
   marksObtained: number | null;
   absent: boolean;
+  exempt?: boolean;
   remark: string | null;
 };
 
 const ENTRY_BADGE = {
   ENTERED: "bg-success-soft text-success-strong",
   ABSENT: "bg-muted text-muted-foreground",
+  EXEMPT: "bg-info-soft text-info-strong",
   MISSING: "bg-warning-soft text-warning-strong",
   INVALID: "bg-danger-soft text-danger-strong",
 } as const;
 
 function MarksRowView({ row, maxMarks, editable }: { row: MarksRow; maxMarks: number; editable: boolean }) {
   const { fieldErrors } = useFormContext();
-  const [absent, setAbsent] = useState(row.absent);
+  const [mode, setMode] = useState<"MARKS" | "ABSENT" | "EXEMPT">(row.exempt ? "EXEMPT" : row.absent ? "ABSENT" : "MARKS");
+  const absent = mode !== "MARKS";
   const [marks, setMarks] = useState(row.marksObtained === null ? "" : String(row.marksObtained));
   const errors = fieldErrors?.[`marks:${row.studentId}`];
   const number = marks.trim() === "" ? null : Number(marks);
   const invalid = number !== null && (!Number.isInteger(number) || number < 0 || number > maxMarks);
-  const status = absent ? "ABSENT" : invalid ? "INVALID" : number === null ? "MISSING" : "ENTERED";
+  const status = mode === "EXEMPT" ? "EXEMPT" : absent ? "ABSENT" : invalid ? "INVALID" : number === null ? "MISSING" : "ENTERED";
   const percent = !absent && number !== null && !invalid && maxMarks ? Math.round((number / maxMarks) * 1000) / 10 : null;
   return (
     <tr className="border-t align-top">
@@ -279,22 +286,23 @@ function MarksRowView({ row, maxMarks, editable }: { row: MarksRow; maxMarks: nu
         />
         {invalid ? <span className="text-danger-strong mt-1 block text-xs">0 to {maxMarks} only</span> : null}
         <FieldError id={`marks-${row.studentId}-error`} messages={errors} />
-        <label className="text-muted-foreground mt-1.5 flex items-center gap-1.5 text-xs">
-          <input
-            type="checkbox"
-            name={`absent:${row.studentId}`}
-            defaultChecked={row.absent}
-            disabled={!editable}
-            onChange={(event) => setAbsent(event.currentTarget.checked)}
-            className="accent-primary size-3.5"
-          />
-          Absent
-        </label>
+        <select
+          name={`status:${row.studentId}`}
+          aria-label={`Status for ${row.name}`}
+          value={mode}
+          disabled={!editable}
+          onChange={(event) => setMode(event.currentTarget.value as "MARKS" | "ABSENT" | "EXEMPT")}
+          className="border-input bg-background mt-1.5 block rounded-md border px-1.5 py-0.5 text-xs"
+        >
+          <option value="MARKS">Marks</option>
+          <option value="ABSENT">Absent</option>
+          <option value="EXEMPT">Exempt</option>
+        </select>
       </td>
       <td className="px-3 py-2 tabular-nums">{percent === null ? "—" : `${percent}%`}</td>
       <td className="px-3 py-2">
         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap ${ENTRY_BADGE[status]}`}>
-          {status === "ENTERED" ? "Entered" : status === "ABSENT" ? "Absent" : status === "INVALID" ? "Check marks" : "Missing"}
+          {status === "ENTERED" ? "Entered" : status === "ABSENT" ? "Absent" : status === "EXEMPT" ? "Exempt" : status === "INVALID" ? "Check marks" : "Missing"}
         </span>
       </td>
       <td className="px-3 py-2">
@@ -560,6 +568,84 @@ export function ReopenMarksForm({ assessmentId }: { assessmentId: string }) {
       <TextField name="reason" label="Why do these marks need correcting?" placeholder="Wrong marks entered for roll 12" maxLength={300} required />
       <div>
         <SubmitButton variant="outline">Reopen for correction</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** Withdraw published results — always with the reason. */
+export function UnpublishExamForm({ examId }: { examId: string }) {
+  return (
+    <details className="relative">
+      <summary className="border-input hover:bg-muted inline-flex h-9 cursor-pointer items-center rounded-md border px-3 text-sm font-medium">Unpublish…</summary>
+      <ActionForm action={unpublishExamAction} className="bg-card absolute right-0 z-10 mt-2 w-80 gap-2 rounded-lg border p-3 shadow-lg">
+        <input type="hidden" name="examId" value={examId} />
+        <p className="text-xs">Students and parents stop seeing these results until they are verified and published again. For one wrong mark, use “Correct a published mark” instead.</p>
+        <TextField name="reason" label="Why" placeholder="Maths marks entered for the wrong section" minLength={3} required />
+        <SubmitButton size="sm" variant="destructive" pendingLabel="Withdrawing…">
+          Withdraw results
+        </SubmitButton>
+      </ActionForm>
+    </details>
+  );
+}
+
+/** Correct one mark on published results, with the reason; the old and new value are logged. */
+export function CorrectResultForm({ students, papers }: { students: Array<{ value: string; label: string }>; papers: Array<{ value: string; label: string }> }) {
+  return (
+    <ActionForm action={correctResultAction} className="gap-3">
+      <FieldRow>
+        <SelectField name="studentId" label="Student" options={students} placeholder="Choose…" required />
+        <SelectField name="assessmentId" label="Subject" options={papers} placeholder="Choose…" required />
+      </FieldRow>
+      <FieldRow>
+        <SelectField
+          name="status"
+          label="Result"
+          options={[
+            { value: "MARKS", label: "Marks" },
+            { value: "ABSENT", label: "Absent" },
+            { value: "EXEMPT", label: "Exempt" },
+          ]}
+          defaultValue="MARKS"
+        />
+        <TextField name="marks" label="Correct marks" type="number" min={0} step={1} hint="Leave blank for Absent or Exempt." />
+      </FieldRow>
+      <TextField name="reason" label="Reason" placeholder="Re-totalled the answer sheet" minLength={3} required />
+      <div>
+        <SubmitButton variant="outline" pendingLabel="Correcting…">
+          Correct mark
+        </SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** Settings → Grading. */
+export function GradingRulesForm({ bandsText, passPercent, usingDefault }: { bandsText: string; passPercent: number; usingDefault: boolean }) {
+  return (
+    <ActionForm action={saveGradingRulesAction} className="gap-4">
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="useDefault" defaultChecked={usingDefault} className="accent-primary size-4" />
+        Use the CBSE nine-point scale (A1 91–100 … E below 33)
+      </label>
+      <TextareaField name="bands" label="Your grades, highest first" rows={9} defaultValue={bandsText} hint={'One per line: "Grade: from %", e.g. "A+: 90". The last one must start at 0.'} />
+      <TextField name="passPercent" label="Pass percentage" type="number" min={1} max={100} step={1} defaultValue={passPercent} hint="Used for any paper without its own pass mark, and for the final result." required />
+      <div>
+        <SubmitButton pendingLabel="Saving…">Save grading rules</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** The session's final result: which exams count and their weights (adding to 100). */
+export function ResultSchemeForm({ name, componentsText }: { name: string; componentsText: string }) {
+  return (
+    <ActionForm action={saveResultSchemeAction} className="gap-3">
+      <TextField name="name" label="Name" defaultValue={name} placeholder="Final result 2026-27" required />
+      <TextareaField name="components" label="Exams and weights" rows={5} defaultValue={componentsText} hint={'One per line, "Exam name: weight". The weights must add up to 100, e.g. "Half-Yearly: 40" and "Annual: 60".'} required />
+      <div>
+        <SubmitButton pendingLabel="Saving…">Save final result</SubmitButton>
       </div>
     </ActionForm>
   );

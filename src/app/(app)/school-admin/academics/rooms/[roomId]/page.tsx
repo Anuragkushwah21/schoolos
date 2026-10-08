@@ -23,7 +23,7 @@ import { getRoomTimetable } from "@/server/timetable/service";
 export const metadata: Metadata = { title: "Room" };
 
 export default async function RoomPage(props: PageProps<"/school-admin/academics/rooms/[roomId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { roomId } = await props.params;
   const room = await orNotFound(getRoom(ctx, roomId));
   const session = await getCurrentSession(ctx);
@@ -128,7 +128,7 @@ export default async function RoomPage(props: PageProps<"/school-admin/academics
               dayOfWeek: slot.dayOfWeek,
               startMinute: slot.startMinute,
               endMinute: slot.endMinute,
-              title: slot.subject.name,
+              title: slot.stream ? `${slot.subject.name} · ${slot.stream.name}` : slot.subject.name,
               subtitle: `${slot.section.class.name} – ${slot.section.name}${slot.section.stream ? ` (${slot.section.stream.name})` : ""}`,
               meta: `${slot.teacher.firstName} ${slot.teacher.lastName}`,
             }))}

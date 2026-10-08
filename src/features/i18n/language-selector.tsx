@@ -39,10 +39,12 @@ export function LanguageSelector({ compact = false }: { compact?: boolean }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size={compact ? "icon" : "default"} aria-label={`${t("language.choose")}: ${LOCALE_LABEL[locale]}`} disabled={pending}>
+        <Button variant="ghost" size={compact ? "icon" : "default"} className={compact ? undefined : "gap-1 px-2 sm:px-3"} aria-label={`${t("language.choose")}: ${LOCALE_LABEL[locale]}`} disabled={pending}>
           {pending ? <Spinner size="xs" /> : <GlobeIcon aria-hidden />}
           {compact ? null : (
-            <span lang={locale} className="hidden sm:inline">
+            // Always written out, on phones too: a globe alone means nothing to
+            // someone who has never changed a language setting.
+            <span lang={locale} className="text-xs sm:text-sm">
               {LOCALE_LABEL[locale]}
             </span>
           )}

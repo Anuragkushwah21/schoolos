@@ -97,9 +97,12 @@ export function FamilyPaymentForm({
     Object.fromEntries(childrenDue.map((child) => [child.id, child.pendingMinor ? toRupeeInput(child.pendingMinor) : ""])),
   );
   const total = Object.values(amounts).reduce((sum, value) => sum + (Number(value) > 0 ? Math.round(Number(value) * 100) : 0), 0);
+  // One key per form: a double press or a retried request takes the money once.
+  const [idempotencyKey] = useState(() => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   return (
     <ActionForm action={recordFamilyPaymentAction}>
       <input type="hidden" name="parentId" value={parentId} />
+      <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
       <input type="hidden" name="back" value={back} />
       <div className="overflow-x-auto rounded-xl border">
         <table className="w-full text-sm">

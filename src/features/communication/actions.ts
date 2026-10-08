@@ -18,7 +18,7 @@ const EVERYWHERE = ["/school-admin", "/teacher", "/student", "/parent", "/staff"
 export async function saveNoticeAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await saveNotice(ctx, parseFormData(noticeSchema, formData));
       return successResult("Notice saved.");
     },
@@ -29,7 +29,7 @@ export async function saveNoticeAction(_p: Result, formData: FormData): Promise<
 export async function deleteNoticeAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { noticeId } = parseFormData(z.object({ noticeId: id }), formData);
       await deleteNotice(ctx, noticeId);
       return successResult("Notice deleted.");
@@ -41,7 +41,7 @@ export async function deleteNoticeAction(_p: Result, formData: FormData): Promis
 export async function saveEventAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await saveEvent(ctx, parseFormData(eventSchema, formData));
       return successResult("Event saved.");
     },
@@ -52,7 +52,7 @@ export async function saveEventAction(_p: Result, formData: FormData): Promise<R
 export async function deleteEventAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { eventId } = parseFormData(z.object({ eventId: id }), formData);
       await deleteEvent(ctx, eventId);
       return successResult("Event deleted.");
@@ -64,7 +64,7 @@ export async function deleteEventAction(_p: Result, formData: FormData): Promise
 export async function setEventPublishedAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { eventId, publish } = parseFormData(z.object({ eventId: id, publish: checkbox }), formData);
       await setEventPublished(ctx, eventId, publish);
       return successResult(publish ? "Event published — everyone can see it." : "Event unpublished — only you can see it now.");
@@ -77,7 +77,7 @@ export async function setEventPublishedAction(_p: Result, formData: FormData): P
 export async function markNoticeReadAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF");
       const { noticeId } = parseFormData(z.object({ noticeId: id }), formData);
       const count = await markNoticesRead(ctx, noticeId === "ALL" ? "ALL" : [noticeId]);
       return successResult(noticeId === "ALL" ? (count ? "All notices marked as read." : "Everything was already read.") : "Marked as read.");

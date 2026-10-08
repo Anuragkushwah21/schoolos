@@ -22,7 +22,7 @@ export const metadata: Metadata = { title: "Homework" };
  * teachers set and change homework from their own portal.
  */
 export default async function AdminHomeworkPage(props: PageProps<"/school-admin/homework">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const [t, intl] = await Promise.all([getT(), getIntlLocale()]);
   const search = await props.searchParams;
   const filters = {

@@ -5,9 +5,10 @@ import { type Lifecycle, countdownLabel, lifecycle, schoolNow } from "@/lib/time
 import { NotFoundError, ValidationError } from "@/lib/errors";
 import type { EventInput } from "@/lib/validation/communication";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { prisma } from "@/server/db/prisma";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * School events: sports day, annual function, a trip — something happening.
@@ -47,19 +48,19 @@ export async function publicEvents(schoolId: string, take = 20) {
 }
 
 export async function listEventsForAdmin(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "VIEW");
   return ctx.db.event.findMany({ orderBy: { date: "desc" }, select: EVENT_CARD });
 }
 
 export async function getEvent(ctx: TenantContext, eventId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "VIEW");
   const event = await ctx.db.event.findFirst({ where: { id: eventId }, select: EVENT_CARD });
   if (!event) throw new NotFoundError();
   return event;
 }
 
 export async function saveEvent(ctx: TenantContext, input: EventInput): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "EDIT");
   const { eventId, ...data } = input;
 
   // An event is a future schedule: a new one, or a moved one, cannot be put in
@@ -94,7 +95,7 @@ export async function saveEvent(ctx: TenantContext, input: EventInput): Promise<
 }
 
 export async function deleteEvent(ctx: TenantContext, eventId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "DELETE");
   const { count } = await ctx.db.event.deleteMany({ where: { id: eventId } });
   if (!count) throw new NotFoundError();
 }
@@ -110,7 +111,7 @@ export type EventRow = Awaited<ReturnType<typeof listEvents>>["upcoming"][number
  * completed. Everyone sees published events; the School Admin also sees drafts.
  */
 export async function listEvents(ctx: TenantContext, options: { completedTake?: number } = {}) {
-  const admin = ctx.user.role === "SCHOOL_ADMIN";
+  const admin = isSchoolLeader(ctx.user.role);
   const clock = schoolNow();
   const rows = await ctx.db.event.findMany({
     where: admin ? {} : { isPublished: true },
@@ -132,7 +133,7 @@ export async function listEvents(ctx: TenantContext, options: { completedTake?: 
 /** One event for its detail page. Drafts are the School Admin's only. */
 export async function viewEvent(ctx: TenantContext, eventId: string) {
   const event = await ctx.db.event.findFirst({
-    where: { id: eventId, ...(ctx.user.role === "SCHOOL_ADMIN" ? {} : { isPublished: true }) },
+    where: { id: eventId, ...(isSchoolLeader(ctx.user.role) ? {} : { isPublished: true }) },
     select: EVENT_CARD,
   });
   if (!event) throw new NotFoundError();
@@ -142,7 +143,7 @@ export async function viewEvent(ctx: TenantContext, eventId: string) {
 
 /** Publish or unpublish an event without opening the form. */
 export async function setEventPublished(ctx: TenantContext, eventId: string, isPublished: boolean): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "EDIT");
   const event = await ctx.db.event.findFirst({ where: { id: eventId }, select: { title: true } });
   if (!event) throw new NotFoundError();
   await ctx.db.event.updateMany({ where: { id: eventId }, data: { isPublished } });
@@ -159,6 +160,6 @@ export async function setEventPublished(ctx: TenantContext, eventId: string, isP
 /** The dashboard's Events card: how many are coming, the next one, how many are done. */
 export async function eventSummary(ctx: TenantContext) {
   const { upcoming, completedCount } = await listEvents(ctx, { completedTake: 0 });
-  const visible = ctx.user.role === "SCHOOL_ADMIN" ? upcoming.filter((row) => row.isPublished) : upcoming;
+  const visible = isSchoolLeader(ctx.user.role) ? upcoming.filter((row) => row.isPublished) : upcoming;
   return { upcoming: visible.length, completed: completedCount, next: visible[0] ?? null };
 }

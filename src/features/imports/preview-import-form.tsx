@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef } from "react";
+import { useActionState, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,8 @@ export type PreviewImportResult = ActionResult<
       created: number;
       errors: Line[];
       warnings: Line[];
+      /** Rows that may be a child already on file — added only when ticked. */
+      duplicates?: Array<{ line: number; name: string; matches: string[]; likely: boolean; added: boolean }>;
       /** Logins created: one activation email each (no passwords are ever returned). */
       invites?: Array<{ email: string; delivered: boolean; label?: string }>;
     }
@@ -50,6 +52,9 @@ export function PreviewImportForm({
   const form = useRef<HTMLFormElement>(null);
   const report = state.status === "success" ? state.data : undefined;
   const checked = report?.mode === "check" ? report : undefined;
+  // Possible duplicates the office chose to add anyway (row numbers).
+  const [addAnyway, setAddAnyway] = useState<Set<number>>(new Set());
+  const duplicates = checked?.duplicates ?? [];
 
   return (
     <form ref={form} action={dispatch} className="flex flex-col gap-4">
@@ -62,7 +67,7 @@ export function PreviewImportForm({
           className="max-w-xs"
           aria-label={`${noun}s CSV file`}
         />
-        <Button type="submit" name="mode" value="check" disabled={pending} variant={checked ? "outline" : "default"}>
+        <Button type="submit" name="mode" value="check" disabled={pending} variant={checked ? "outline" : "default"} onClick={() => setAddAnyway(new Set())}>
           {pending ? "Checking…" : "Check file"}
         </Button>
       </div>
@@ -120,6 +125,45 @@ export function PreviewImportForm({
               </ul>
             </details>
           ) : null}
+          {duplicates.length ? (
+            <div className="border-warning bg-warning-soft flex flex-col gap-3 rounded-xl border-2 p-3 text-sm">
+              <div>
+                <p className="font-semibold">
+                  {duplicates.length === 1 ? "Possible duplicate — 1 row may be a child already at the school" : `Possible duplicates — ${duplicates.length} rows may be a child already at the school`}
+                </p>
+                <p className="text-muted-foreground text-xs">These are not added unless you tick them. Tick only a child you are sure is a different person.</p>
+              </div>
+              <ul className="flex flex-col gap-2">
+                {duplicates.map((row) => (
+                  <li key={row.line} className="bg-card rounded-lg border p-2.5">
+                    <label className="flex cursor-pointer items-start gap-2.5">
+                      <input
+                        type="checkbox"
+                        name="addDuplicate"
+                        value={row.line}
+                        className="mt-1 size-4"
+                        checked={addAnyway.has(row.line)}
+                        onChange={(event) =>
+                          setAddAnyway((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) next.add(row.line);
+                            else next.delete(row.line);
+                            return next;
+                          })
+                        }
+                      />
+                      <span className="min-w-0">
+                        <span className="font-semibold">{`Row ${row.line}: ${row.name}`}</span>
+                        {row.likely ? <span className="bg-destructive ml-2 rounded-full px-2 py-0.5 text-xs font-semibold text-white">Very likely the same child</span> : null}
+                        <span className="text-muted-foreground block text-xs">{`Matches: ${row.matches.join("; ")}`}</span>
+                        <span className="block text-xs font-medium">{addAnyway.has(row.line) ? "Will be added as a new student" : "Will not be added"}</span>
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {checked.warnings.length ? (
             <details className="text-sm">
               <summary className="cursor-pointer font-medium">Warnings (these rows will still be imported)</summary>
@@ -142,9 +186,9 @@ export function PreviewImportForm({
             <Button type="submit" name="mode" value="cancel" variant="ghost" formNoValidate>
               Cancel
             </Button>
-            {checked.valid && !checked.errors.some((error) => error.line === 1) ? (
+            {checked.valid + addAnyway.size && !checked.errors.some((error) => error.line === 1) ? (
               <Button type="submit" name="mode" value="import" disabled={pending}>
-                {pending ? "Importing…" : `Import ${checked.valid} valid record${checked.valid === 1 ? "" : "s"}`}
+                {pending ? "Importing…" : `Import ${checked.valid + addAnyway.size} record${checked.valid + addAnyway.size === 1 ? "" : "s"}`}
               </Button>
             ) : null}
           </div>

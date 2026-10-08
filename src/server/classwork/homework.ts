@@ -5,11 +5,8 @@ import { AppError, ConflictError, ForbiddenError, NotFoundError } from "@/lib/er
 import { homeworkStatus } from "@/lib/time-status";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
-import {
-  accessibleSectionIds,
-  requireSubjectAssignment,
-  requireTeacherSelf,
-} from "@/server/auth/teacher-access";
+import { requireStreamTeaching } from "@/server/academics/stream-scope";
+import { accessibleSectionIds, requireTeacherSelf } from "@/server/auth/teacher-access";
 import { requireCurrentSession, sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import {
@@ -21,6 +18,7 @@ import {
   saveMaterial,
 } from "@/server/classwork/materials";
 import { deleteStoredFile, storeDocument, validateDocument } from "@/server/storage/files";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Work set for a section in one subject.
@@ -49,6 +47,8 @@ export type HomeworkResourceInput = Omit<MaterialFields, "kind" | "body"> & {
 export type HomeworkInput = {
   sectionId: string;
   subjectId: string;
+  /** One stream of a section split into streams; null/absent is the whole section. */
+  streamId?: string | null;
   title: string;
   description: string | null;
   /** Step-by-step instructions for the student. */
@@ -69,6 +69,8 @@ const HOMEWORK_SELECT = {
   teacherId: true,
   createdAt: true,
   _count: { select: { resources: true } },
+  streamId: true,
+  stream: { select: { name: true } },
   subject: { select: { id: true, name: true } },
   section: {
     select: {
@@ -90,6 +92,8 @@ type HomeworkRow = {
   status: HomeworkStatus;
   teacherId: string;
   _count: { resources: number };
+  streamId: string | null;
+  stream: { name: string } | null;
   subject: { id: string; name: string };
   section: { id: string; name: string; class: { name: string }; stream: { name: string } | null };
 };
@@ -107,7 +111,10 @@ function shape(row: HomeworkRow) {
     subjectId: row.subject.id,
     subject: row.subject.name,
     sectionId: row.section.id,
-    section: sectionLabel(row.section),
+    streamId: row.streamId,
+    stream: row.stream?.name ?? null,
+    /** The class, and the stream when the work is for one stream only. */
+    section: row.stream ? `${sectionLabel(row.section)} · ${row.stream.name}` : sectionLabel(row.section),
     overdue: row.status === "PUBLISHED" && row.dueOn < today(),
     /** ASSIGNED, DUE_TODAY or OVERDUE for published work, from the due date. */
     timeStatus: row.status === "PUBLISHED" ? homeworkStatus(row.dueOn) : null,
@@ -149,13 +156,14 @@ export async function createHomework(
   assertRole(ctx.user, "TEACHER");
   const session = await requireCurrentSession(ctx);
 
-  // The one check that matters: do they teach this subject to this section?
-  const { teacherId } = await requireSubjectAssignment(
-    ctx,
-    input.sectionId,
-    input.subjectId,
-    session.id,
-  );
+  // The one check that matters: do they teach this subject to this section
+  // (and stream, when the section is split into streams)?
+  const { teacherId, streamId } = await requireStreamTeaching(ctx, {
+    sectionId: input.sectionId,
+    subjectId: input.subjectId,
+    streamId: input.streamId ?? null,
+    academicSessionId: session.id,
+  });
   assertDates(input.assignedOn, input.dueOn);
 
   // A double-clicked or re-sent form must not set the same work twice.
@@ -164,6 +172,7 @@ export async function createHomework(
       teacherId,
       sectionId: input.sectionId,
       subjectId: input.subjectId,
+      streamId,
       title: input.title,
       assignedOn: input.assignedOn,
       dueOn: input.dueOn,
@@ -186,6 +195,7 @@ export async function createHomework(
       sectionId: input.sectionId,
       subjectId: input.subjectId,
       teacherId,
+      streamId,
       title: input.title,
       description: input.description,
       instructions: input.instructions ?? null,
@@ -193,7 +203,7 @@ export async function createHomework(
       dueOn: input.dueOn,
       status: input.status,
     },
-    select: { id: true, section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } } },
+    select: { id: true, stream: { select: { name: true } }, section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } } },
   });
 
   await recordAudit({
@@ -202,7 +212,7 @@ export async function createHomework(
     entityId: created.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Homework "${input.title}" set for ${sectionLabel(created.section)}.`,
+    summary: `Homework "${input.title}" set for ${sectionLabel(created.section)}${created.stream ? ` (${created.stream.name})` : ""}.`,
   });
 
   const stored: string[] = [];
@@ -254,7 +264,12 @@ export async function updateHomework(
   const existing = await requireOwnHomework(ctx, homeworkId);
   // Moving homework to a different class or subject is still setting it there,
   // so the destination is checked exactly as a new one would be.
-  await requireSubjectAssignment(ctx, input.sectionId, input.subjectId, session.id);
+  const { streamId } = await requireStreamTeaching(ctx, {
+    sectionId: input.sectionId,
+    subjectId: input.subjectId,
+    streamId: input.streamId ?? null,
+    academicSessionId: session.id,
+  });
   assertDates(input.assignedOn, input.dueOn);
 
   await ctx.db.homework.update({
@@ -262,6 +277,7 @@ export async function updateHomework(
     data: {
       sectionId: input.sectionId,
       subjectId: input.subjectId,
+      streamId,
       title: input.title,
       description: input.description,
       ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
@@ -547,7 +563,7 @@ export async function listHomeworkForAdmin(
   ctx: TenantContext,
   filters: { q?: string; sectionId?: string; due?: "upcoming" | "today" | "past"; page?: number } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "homework", "VIEW");
   const now = today();
   const page = Math.max(1, filters.page ?? 1);
   const where = {
@@ -578,6 +594,7 @@ export async function listHomeworkForAdmin(
         dueOn: true,
         subject: { select: { name: true } },
         teacher: { select: { firstName: true, lastName: true } },
+        stream: { select: { name: true } },
         section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } },
         _count: { select: { resources: true } },
       },
@@ -592,7 +609,7 @@ export async function listHomeworkForAdmin(
       title: row.title,
       subject: row.subject.name,
       teacher: `${row.teacher.firstName} ${row.teacher.lastName}`.trim(),
-      section: sectionLabel(row.section),
+      section: row.stream ? `${sectionLabel(row.section)} · ${row.stream.name}` : sectionLabel(row.section),
       assignedOn: row.assignedOn,
       dueOn: row.dueOn,
       resources: row._count.resources,

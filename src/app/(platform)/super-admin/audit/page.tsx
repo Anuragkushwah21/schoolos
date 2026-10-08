@@ -18,7 +18,7 @@ import { formatDateTime } from "@/lib/dates";
 import { humanize } from "@/lib/format";
 import { enumParam, pageParam, param } from "@/lib/search-params";
 import { requireSuperAdmin } from "@/server/auth/current-user";
-import { listAuditLog } from "@/server/platform/audit";
+import { auditChange, listAuditLog } from "@/server/platform/audit";
 
 export const metadata: Metadata = { title: "Audit log" };
 
@@ -71,6 +71,7 @@ export default async function AuditPage(props: PageProps<"/super-admin/audit">) 
                 <TableHead>When</TableHead>
                 <TableHead>Action</TableHead>
                 <TableHead>Summary</TableHead>
+                <TableHead>Previous → new</TableHead>
                 <TableHead>School</TableHead>
                 <TableHead>By</TableHead>
               </TableRow>
@@ -83,6 +84,19 @@ export default async function AuditPage(props: PageProps<"/super-admin/audit">) 
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{humanize(row.action)}</TableCell>
                   <TableCell className="max-w-md whitespace-normal">{row.summary}</TableCell>
+                  <TableCell className="max-w-xs text-xs whitespace-normal">
+                    {(() => {
+                      const change = auditChange(row.metadata);
+                      return change ? (
+                        <>
+                          <span className="text-muted-foreground block">{change.previous}</span>
+                          <span className="block font-medium">→ {change.next}</span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      );
+                    })()}
+                  </TableCell>
                   <TableCell>
                     {row.school ? (
                       <Link href={`/super-admin/schools/${row.school.id}`} className="hover:underline">
@@ -93,7 +107,14 @@ export default async function AuditPage(props: PageProps<"/super-admin/audit">) 
                     )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {row.actor?.email ?? row.ipAddress ?? "—"}
+                    {row.actor ? (
+                      <>
+                        <span className="text-foreground block">{`${row.actor.firstName} ${row.actor.lastName}`}</span>
+                        <span className="block text-xs">{`${humanize(row.actor.role)} · ${row.actor.email}`}</span>
+                      </>
+                    ) : (
+                      (row.ipAddress ?? "System")
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

@@ -35,7 +35,7 @@ export const metadata: Metadata = { title: "Parents" };
  * given whichever name the caller happens to mention.
  */
 export default async function ParentsPage(props: PageProps<"/school-admin/parents">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const q = param(search.q);
   // Families with a current child by default; those whose children have all

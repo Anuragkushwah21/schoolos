@@ -3,7 +3,7 @@ import { z } from "zod";
 import { apiRoute, apiSuccess, readJson } from "@/server/api/handler";
 import { markAlertsRead, notificationCenter } from "@/server/alerts/center";
 
-const ROLES = ["SCHOOL_ADMIN", "PARENT", "STUDENT", "TEACHER", "NON_TEACHING_STAFF"] as const;
+const ROLES = ["SCHOOL_ADMIN", "PRINCIPAL", "PARENT", "STUDENT", "TEACHER", "NON_TEACHING_STAFF"] as const;
 
 /**
  * What the signed-in person would want to be told, each with `key` and `read`.

@@ -11,7 +11,7 @@ import { getSupport } from "@/server/support/service";
 export const metadata: Metadata = { title: "Student support" };
 
 export default async function AdminSupportDetailPage(props: PageProps<"/school-admin/support/[supportId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { supportId } = await props.params;
   const [t, support] = await Promise.all([getT(), orNotFound(getSupport(ctx, supportId))]);
   // An extra class is arranged as a meeting for the student and their family.

@@ -1,4 +1,5 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
+import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
@@ -15,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { ChildSwitcher, ChildTabs } from "@/features/parent/child-nav";
 import { FEE_STATUS_LABEL, FEE_STATUS_TONE, rupees } from "@/features/finance/money";
+import { InstallmentBadge } from "@/features/finance/family-views";
 import { ReceiptLinks } from "@/features/finance/receipt-links";
 import { formatDate } from "@/lib/dates";
 import { humanize } from "@/lib/format";
@@ -73,8 +75,7 @@ export default async function ChildFeesPage(
               className="mb-6 rounded-lg border px-4 py-3 text-sm"
               style={{ borderColor: "var(--viz-warning)", color: "var(--viz-warning)" }}
             >
-              {rupees(summary.pendingMinor)} was due on {formatDate(summary.dueOn)}. Please contact
-              the school office.
+              {`An instalment was due on ${formatDate(summary.dueOn)} and is not fully paid yet. ${rupees(summary.pendingMinor)} is pending in total — please contact the school office.`}
             </div>
           ) : null}
 
@@ -110,35 +111,51 @@ export default async function ChildFeesPage(
                     <TableHeader>
                       <TableRow>
                         <TableHead>Fee</TableHead>
-                        <TableHead className="w-28">Due</TableHead>
+                        <TableHead className="hidden w-28 sm:table-cell">Due</TableHead>
                         <TableHead className="text-right">Amount</TableHead>
+                        <TableHead className="text-right">Status</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {charges.map((charge) => (
                         <TableRow key={charge.id}>
                           <TableCell>
-                            <span className="font-medium">{charge.feeHead.name}</span>
+                            <span className="font-medium">
+                              {charge.feeHead.name}
+                              {charges.some((other) => other.id !== charge.id && other.feeHead.id === charge.feeHead.id) ? ` · instalment ${charge.installmentNo}` : ""}
+                            </span>
+                            <span className="text-muted-foreground block text-xs tabular-nums sm:hidden">{`Due ${formatDate(charge.dueOn)}`}</span>
                             {charge.feeHead.note || charge.notes ? (
                               <p className="text-muted-foreground text-xs">
                                 {charge.notes ?? charge.feeHead.note}
                               </p>
                             ) : null}
                           </TableCell>
-                          <TableCell className="text-muted-foreground tabular-nums">
+                          <TableCell className="text-muted-foreground hidden tabular-nums sm:table-cell">
                             {formatDate(charge.dueOn)}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {rupees(charge.amountMinor)}
+                            {charge.discountMinor ? (
+                              <>
+                                <span className="text-muted-foreground block text-xs line-through">{rupees(charge.originalMinor)}</span>
+                                <span className="text-success-strong block text-xs">{`− ${rupees(charge.discountMinor)} concession`}</span>
+                              </>
+                            ) : null}
+                            {rupees(charge.netMinor)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <InstallmentBadge status={charge.status} overdue={charge.overdue} />
+                            {charge.status === "PARTIAL" ? <span className="text-muted-foreground block text-xs">{`${rupees(charge.remainingMinor)} left`}</span> : null}
                           </TableCell>
                         </TableRow>
                       ))}
                       <TableRow>
-                        <TableCell className="font-medium">Total</TableCell>
-                        <TableCell />
+                        <TableCell className="font-medium">Total (after concessions)</TableCell>
+                        <TableCell className="hidden sm:table-cell" />
                         <TableCell className="text-right font-medium tabular-nums">
                           {rupees(summary.chargedMinor)}
                         </TableCell>
+                        <TableCell />
                       </TableRow>
                     </TableBody>
                   </Table>
@@ -186,7 +203,12 @@ export default async function ChildFeesPage(
             </Card>
           </div>
 
-          <p className="text-muted-foreground mt-6 text-xs">
+          <p className="mt-6 text-sm">
+            <Link className="text-primary font-medium hover:underline" href={`/parent/children/${studentId}/fees/ledger` as Route}>
+              See the full statement (every charge, concession and payment with the running balance)
+            </Link>
+          </p>
+          <p className="text-muted-foreground mt-2 text-xs">
             These figures come from the school&apos;s own records. To pay, or to question an amount,
             contact the school office — this portal does not take payments.
           </p>

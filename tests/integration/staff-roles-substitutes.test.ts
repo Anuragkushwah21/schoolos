@@ -136,12 +136,13 @@ describe("roles", () => {
 
 describe("permissions on and off", () => {
   it("opens a module only while the grant is on — services and API alike", async () => {
+    await setStaffGrants(adminOf(schoolA), accountant.id, ["fees.view", "fees.collect"]);
     await expect(listExpenses(accountant.ctx, {})).rejects.toBeInstanceOf(ForbiddenError);
-    await setStaffGrants(adminOf(schoolA), accountant.id, [...STAFF_ROLE_DEFAULT_GRANTS.ACCOUNTANT, "expenses.view"]);
+    await setStaffGrants(adminOf(schoolA), accountant.id, ["fees.view", "fees.collect", "expenses.view"]);
     await expect(listExpenses(accountant.ctx, {})).resolves.toBeDefined();
     await setStaffGrants(adminOf(schoolA), accountant.id, ["expenses.view"]);
     await expect(listFeePositions(accountant.ctx)).rejects.toBeInstanceOf(ForbiddenError);
-    await setStaffGrants(adminOf(schoolA), accountant.id, STAFF_ROLE_DEFAULT_GRANTS.ACCOUNTANT);
+    await setStaffGrants(adminOf(schoolA), accountant.id, ["fees.view", "fees.collect"]);
     await expect(listExpenses(accountant.ctx, {})).rejects.toBeInstanceOf(ForbiddenError);
     expect((await staffAccessHistory(adminOf(schoolA), accountant.id)).length).toBeGreaterThanOrEqual(3);
 

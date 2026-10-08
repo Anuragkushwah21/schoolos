@@ -2,6 +2,7 @@ import "server-only";
 
 import { formatSpan } from "@/lib/calendar";
 import { addDays, formatDate, today } from "@/lib/dates";
+import { humanize } from "@/lib/format";
 import { attendedShare, emptyCounts } from "@/server/attendance/service";
 import type { TenantContext } from "@/server/auth/current-user";
 import { upcomingHolidays } from "@/server/calendar/holidays";
@@ -15,6 +16,7 @@ import { VISIBLE_PAPER } from "@/server/exams/service";
 import { readStudentFees } from "@/server/finance/fees";
 import { LOW_ATTENDANCE_THRESHOLD } from "@/server/parent/child";
 import { listMyChildren } from "@/server/parent/access";
+import { hasModule } from "@/server/platform/modules";
 
 /**
  * What a guardian would want to be told without going looking.
@@ -40,6 +42,7 @@ export const ALERT_KINDS = [
   "new-remark",
   "notice",
   "fee-due",
+  "fee-paid",
   "holiday",
   "results-published",
   "meeting",
@@ -70,6 +73,8 @@ const REMARK_WINDOW_DAYS = 7;
 const NOTICE_WINDOW_DAYS = 7;
 /** Homework set this recently is "new", even if it is not due for a while. */
 const NEW_HOMEWORK_DAYS = 2;
+/** A payment recorded this recently is still news to the family. */
+const PAYMENT_WINDOW_DAYS = 14;
 /** Fees falling due this soon are worth a reminder before they are late. */
 const FEE_REMINDER_DAYS = 7;
 /** Holidays starting this soon are announced on the dashboard. */
@@ -77,6 +82,11 @@ const HOLIDAY_NOTICE_DAYS = 14;
 
 function rupeesText(minor: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(minor / 100);
+}
+
+/** Homework for one stream concerns only that stream's children; whole-section work concerns everyone in the section. */
+function forChild(work: { streamId: string | null }, child: { streamId: string | null }): boolean {
+  return work.streamId === null || work.streamId === child.streamId;
 }
 
 export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]> {
@@ -111,6 +121,7 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
         title: true,
         dueOn: true,
         sectionId: true,
+        streamId: true,
         subject: { select: { name: true } },
       },
     }),
@@ -164,12 +175,13 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
       },
       orderBy: { createdAt: "desc" },
       take: 10,
-      select: { id: true, title: true, dueOn: true, createdAt: true, sectionId: true, subject: { select: { name: true } } },
+      select: { id: true, title: true, dueOn: true, createdAt: true, sectionId: true, streamId: true, subject: { select: { name: true } } },
     }),
     upcomingHolidays(ctx, 5),
     // Each child's own fee account, read after `listMyChildren` has resolved
     // them through the guardian link — never another family's.
-    Promise.all(placed.map(async (child) => ({ child, account: await readStudentFees(ctx, child.id) }))),
+    // Only when the school's plan has fees.
+    hasModule(ctx, "FINANCE").then((on) => (on ? Promise.all(placed.map(async (child) => ({ child, account: await readStudentFees(ctx, child.id) }))) : [])),
     ctx.db.exam.findMany({
       where: { sectionId: { in: sectionIds }, status: "PUBLISHED", publishedAt: { gte: addDays(now, -RESULT_WINDOW_DAYS) } },
       select: { id: true, name: true, sectionId: true, publishedAt: true },
@@ -220,7 +232,7 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
 
   // --- homework due today or tomorrow ---------------------------------------
   for (const work of dueSoon) {
-    for (const child of placed.filter((c) => c.sectionId === work.sectionId)) {
+    for (const child of placed.filter((c) => c.sectionId === work.sectionId && forChild(work, c))) {
       alerts.push({
         kind: "homework-due",
         childId: child.id,
@@ -276,7 +288,7 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
   for (const meeting of meetings) alerts.push({ ...meeting, childName: null });
 
   // --- library books past their due date ----------------------------------
-  for (const loan of await overdueLoansFor(ctx, placed.map((child) => child.id))) {
+  for (const loan of (await hasModule(ctx, "LIBRARY")) ? await overdueLoansFor(ctx, placed.map((child) => child.id)) : []) {
     const child = placed.find((c) => c.id === loan.studentId);
     alerts.push({
       kind: "library-overdue",
@@ -308,7 +320,7 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
 
   // --- homework just set (due later than tomorrow; sooner is "homework-due") --
   for (const work of newHomework) {
-    for (const child of placed.filter((c) => c.sectionId === work.sectionId)) {
+    for (const child of placed.filter((c) => c.sectionId === work.sectionId && forChild(work, c))) {
       alerts.push({
         kind: "new-homework",
         childId: child.id,
@@ -348,6 +360,39 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
         href: `/parent/children/${child.id}/fees`,
         tone: "info",
       });
+    }
+  }
+
+  // --- fees received at the office, and receipts cancelled -------------------
+  // The family's confirmation that what they paid was recorded: how much, on
+  // which date, the receipt number — the receipt itself is one tap away.
+  const paymentSince = addDays(now, -PAYMENT_WINDOW_DAYS);
+  for (const { child, account } of fees) {
+    for (const payment of account.payments) {
+      if (payment.createdAt >= paymentSince) {
+        alerts.push({
+          kind: "fee-paid",
+          childId: child.id,
+          childName: child.name,
+          title: `${rupeesText(payment.amountMinor)} fees received for ${child.name}`,
+          detail: `Paid on ${formatDate(payment.paidOn)} (${humanize(payment.method)}). Receipt ${payment.receiptNo}.${account.summary.pendingMinor > 0 ? ` Still to pay: ${rupeesText(account.summary.pendingMinor)}.` : " Nothing left to pay."}`,
+          at: payment.createdAt,
+          href: `/parent/children/${child.id}/fees`,
+          tone: "info",
+        });
+      }
+      if (payment.voidedAt && payment.voidedAt >= paymentSince) {
+        alerts.push({
+          kind: "fee-paid",
+          childId: child.id,
+          childName: child.name,
+          title: `Receipt ${payment.receiptNo} cancelled for ${child.name}`,
+          detail: `${rupeesText(payment.amountMinor)} paid on ${formatDate(payment.paidOn)} no longer counts${payment.voidReason ? ` — ${payment.voidReason}` : ""}. Please contact the school office if this is unexpected.`,
+          at: payment.voidedAt,
+          href: `/parent/children/${child.id}/fees`,
+          tone: "warning",
+        });
+      }
     }
   }
 

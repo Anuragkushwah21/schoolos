@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: "Undo promotion" };
  * records in the new session), then confirm with a reason.
  */
 export default async function UndoPromotionPage(props: PageProps<"/school-admin/academics/promotion/undo/[runId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { runId } = await props.params;
   const preview = await orNotFound(previewPromotionReversal(ctx, decodeURIComponent(runId)));
 

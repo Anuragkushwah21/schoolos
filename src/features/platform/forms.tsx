@@ -1,50 +1,21 @@
 "use client";
 
+import { useState } from "react";
+
 import { ActionForm } from "@/components/forms/action-form";
+import { LimitFields, RoleChecks } from "@/features/campuses/forms";
+import { OptionalModuleChecks } from "@/features/platform/module-forms";
 import { CheckboxField, FieldRow, PhoneField, SelectField, SubmitButton, TextField, TextareaField, type SelectOption } from "@/components/forms/fields";
 
 import {
-  approveSchoolAction,
   createSchoolAdminAction,
   reasonTransitionAction,
   resetAdminPasswordAction,
   saveOfferAction,
+  setSchoolRolesAction,
   setSubscriptionAction,
   updatePlanAction,
 } from "./actions";
-
-/**
- * Approval, and the one-time password it issues.
- *
- * The form stays mounted after the school turns ACTIVE — `canApprove` only
- * hides the button. Unmounting it would take the just-issued password with it,
- * and that password cannot be shown again.
- */
-export function ApproveSchoolForm({
-  schoolId,
-  canApprove,
-}: {
-  schoolId: string;
-  canApprove: boolean;
-}) {
-  return (
-    <ActionForm action={approveSchoolAction} className="gap-3">
-      <input type="hidden" name="schoolId" value={schoolId} />
-      {canApprove ? (
-        <>
-          <p className="text-muted-foreground text-sm">
-            Approving activates the school, sets up classes Nursery–12, streams,
-            subjects and the current session, creates an administrator from the
-            registration contact, and emails them the sign-in.
-          </p>
-          <div>
-            <SubmitButton pendingLabel="Approving…">Approve school</SubmitButton>
-          </div>
-        </>
-      ) : null}
-    </ActionForm>
-  );
-}
 
 export function ReasonForm({
   schoolId,
@@ -192,6 +163,10 @@ export function PlanForm({
     maxAdmins: number | null;
     storageMb: number | null;
     isActive: boolean;
+    optionalModules: string[];
+    campusLimit: number;
+    availableRoles: string[];
+    roleLimits: Record<string, number | undefined>;
   };
 }) {
   return (
@@ -211,6 +186,22 @@ export function PlanForm({
         <TextField name="maxAdmins" label="Max admins" inputMode="numeric" defaultValue={plan.maxAdmins ?? ""} />
         <TextField name="storageMb" label="Storage (MB)" inputMode="numeric" defaultValue={plan.storageMb ?? ""} />
       </FieldRow>
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-medium">Optional modules in this plan</p>
+        <p className="text-muted-foreground text-xs">Core modules are in every plan. Schools that follow this plan get the change; schools adjusted by hand keep theirs.</p>
+        <PlanModuleChecks initial={plan.optionalModules} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-medium">Roles available</p>
+        <p className="text-muted-foreground text-xs">School Admin, Teacher, Parent and Student are always available. The School Admin decides who gets these.</p>
+        <RoleChecks name="availableRoles" initial={plan.availableRoles} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-medium">Role & staff limits (per campus)</p>
+        <p className="text-muted-foreground text-xs">Blank means unlimited. Students and teachers use the fields above.</p>
+        <LimitFields initial={plan.roleLimits} keys={["STAFF", "PRINCIPAL", "ACCOUNTANT", "RECEPTIONIST", "LIBRARIAN", "DRIVER", "SECURITY"]} />
+      </div>
+      <TextField name="campusLimit" label="Campus limit (per owner)" inputMode="numeric" defaultValue={plan.campusLimit} hint="1 = single school (multi-campus off)." required />
       <CheckboxField
         name="isActive"
         label="Offered to new schools"
@@ -219,6 +210,30 @@ export function PlanForm({
       />
       <div>
         <SubmitButton>Save plan</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+function PlanModuleChecks({ initial }: { initial: string[] }) {
+  const [modules, setModules] = useState(initial);
+  return <OptionalModuleChecks selected={modules} onChange={setModules} />;
+}
+
+/** Super Admin: which roles one school may use, and its own limits (blank = the plan's). */
+export function SchoolRolesForm({ schoolId, roles, followPlan, limits }: { schoolId: string; roles: string[]; followPlan: boolean; limits: Record<string, number | undefined> }) {
+  return (
+    <ActionForm action={setSchoolRolesAction} className="gap-4">
+      <input type="hidden" name="schoolId" value={schoolId} />
+      <CheckboxField name="followPlan" label="Follow the plan's roles" hint="Untick to choose this school's own set." defaultChecked={followPlan} />
+      <RoleChecks initial={roles} />
+      <div className="flex flex-col gap-2">
+        <p className="text-sm font-medium">Limits for this school</p>
+        <p className="text-muted-foreground text-xs">Blank: the plan&apos;s limit applies.</p>
+        <LimitFields initial={limits} />
+      </div>
+      <div>
+        <SubmitButton variant="outline">Save roles & limits</SubmitButton>
       </div>
     </ActionForm>
   );

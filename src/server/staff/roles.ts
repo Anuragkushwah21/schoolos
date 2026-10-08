@@ -2,11 +2,12 @@ import "server-only";
 
 import type { StaffRole } from "@/generated/prisma/enums";
 import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
-import { type BaseStaffRole, STAFF_ROLE_DEFAULT_GRANTS, STAFF_ROLE_NAMES, allowedGrants, cleanGrants, grantDef } from "@/lib/staff-access";
+import { type BaseStaffRole, PREVIOUS_ROLE_DEFAULT_GRANTS, STAFF_ROLE_DEFAULT_GRANTS, STAFF_ROLE_NAMES, allowedGrants, cleanGrants, grantDef } from "@/lib/staff-access";
 import { CURRENT_EMPLOYEE } from "@/lib/validation/lifecycle";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { upgradeUntouchedGrants } from "@/server/auth/staff-access";
 import { isUniqueViolation } from "@/server/db/errors";
 
 /**
@@ -20,6 +21,10 @@ import { isUniqueViolation } from "@/server/db/errors";
 
 const BASE_ROLES = Object.keys(STAFF_ROLE_NAMES) as BaseStaffRole[];
 
+function sameGrants(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((grant) => b.includes(grant));
+}
+
 /** Create any missing built-in profiles and link staff who have none. Cheap when nothing is missing. */
 export async function ensureRoleProfiles(ctx: TenantContext): Promise<void> {
   const existing = await ctx.db.staffRoleProfile.findMany({ where: { isCustom: false }, select: { baseRole: true } });
@@ -31,6 +36,22 @@ export async function ensureRoleProfiles(ctx: TenantContext): Promise<void> {
       skipDuplicates: true,
     });
   }
+  // Built-in profiles still on an older shipped default (never edited by the
+  // admin) move to the current default.
+  const builtInProfiles = await ctx.db.staffRoleProfile.findMany({ where: { isCustom: false }, select: { id: true, baseRole: true, defaultGrants: true } });
+  for (const profile of builtInProfiles) {
+    const role = profile.baseRole as BaseStaffRole;
+    const older = PREVIOUS_ROLE_DEFAULT_GRANTS[role] ?? [];
+    if (older.some((grants) => sameGrants(grants, profile.defaultGrants))) {
+      await ctx.db.staffRoleProfile.updateMany({ where: { id: profile.id }, data: { defaultGrants: STAFF_ROLE_DEFAULT_GRANTS[role] } });
+    }
+  }
+  // Staff never customised by the admin follow their role's updated defaults (audited, one by one).
+  const untouched = await ctx.db.staffMember.findMany({
+    where: { status: { in: [...CURRENT_EMPLOYEE] }, role: { in: Object.keys(PREVIOUS_ROLE_DEFAULT_GRANTS) as StaffRole[] } },
+    select: { id: true, role: true, grants: true, grantsCustomized: true, firstName: true, lastName: true, roleProfile: { select: { isCustom: true } } },
+  });
+  for (const staff of untouched) await upgradeUntouchedGrants(ctx, staff);
   if (await ctx.db.staffMember.count({ where: { roleProfileId: null } })) {
     const builtIns = await ctx.db.staffRoleProfile.findMany({ where: { isCustom: false }, select: { id: true, baseRole: true } });
     for (const profile of builtIns) {
@@ -138,7 +159,7 @@ export async function saveRoleProfile(ctx: TenantContext, input: RoleProfileInpu
       // Custom roles may have moved designation: each person keeps only what theirs allows.
       const staff = await ctx.db.staffMember.findMany({ where: { roleProfileId: id }, select: { id: true, role: true, firstName: true, lastName: true } });
       for (const person of staff) {
-        await ctx.db.staffMember.updateMany({ where: { id: person.id }, data: { grants: allowedGrants(existing.isCustom ? baseRole : person.role, grants), ...(existing.isCustom ? { role: baseRole } : {}) } });
+        await ctx.db.staffMember.updateMany({ where: { id: person.id }, data: { grants: allowedGrants(existing.isCustom ? baseRole : person.role, grants), grantsCustomized: false, ...(existing.isCustom ? { role: baseRole } : {}) } });
       }
       updatedStaff = staff.length;
     }

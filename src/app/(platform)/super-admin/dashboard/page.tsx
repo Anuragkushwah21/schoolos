@@ -1,295 +1,245 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
+import {
+  BookOpenCheckIcon,
+  Building2Icon,
+  CheckCircle2Icon,
+  ClipboardCheckIcon,
+  GraduationCapIcon,
+  HeartHandshakeIcon,
+  PauseCircleIcon,
+  UsersIcon,
+} from "lucide-react";
 
-import { BarChart, ColumnChart, StackedBar } from "@/components/charts/bars";
-import { ChartFigure } from "@/components/charts/chart-figure";
 import { EmptyState } from "@/components/shared/empty-state";
-import { FilterBar } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDate, formatDateTime } from "@/lib/dates";
-import { formatMoney, humanize, pluralize } from "@/lib/format";
-import { param } from "@/lib/search-params";
-import { SchoolTracker } from "@/features/platform/school-tracker";
+import { formatNumber, humanize } from "@/lib/format";
 import { requireSuperAdmin } from "@/server/auth/current-user";
-import {
-  largestSchools,
-  planDistribution,
-  platformTotals,
-  schoolGrowth,
-  schoolTracker,
-  schoolsByStatus,
-} from "@/server/analytics/platform";
+import { activeSessionCount, moduleAdoption, platformTotals, recentRegistrations, schoolGrowth, schoolsByStatus } from "@/server/analytics/platform";
+import { BarChart, ColumnChart } from "@/components/charts/bars";
+import { ChartFigure } from "@/components/charts/chart-figure";
+import { OPTIONAL_MODULES } from "@/lib/school-modules";
+import { cn } from "@/lib/utils";
 import { prisma } from "@/server/db/prisma";
 import { PLATFORM_AUDIT_WHERE } from "@/server/platform/audit";
 
 export const metadata: Metadata = { title: "Platform" };
 
-export default async function PlatformDashboardPage(props: PageProps<"/super-admin/dashboard">) {
-  // The Super Admin governs the platform and has no school, so this is the one
-  // area that uses the unscoped client directly.
+/**
+ * The Super Admin's home: the platform at a glance — schools first, people
+ * second — the latest registrations with what to do about each, and recent
+ * platform actions. Charts and trends are on Platform Reports; a school's
+ * daily work is never here.
+ */
+export default async function PlatformDashboardPage() {
   const user = await requireSuperAdmin();
-  const q = param((await props.searchParams).q);
-
-  const [tracker, status, growth, plans, totals, largest, queue, recent] = await Promise.all([
-    schoolTracker(user, { q }),
+  const [status, totals, sessions, recent, activity, growth, adoption, unverified, newEnquiries] = await Promise.all([
     schoolsByStatus(user),
-    schoolGrowth(user, 12),
-    planDistribution(user),
     platformTotals(user),
-    largestSchools(user, 6),
-    prisma.school.findMany({
-      where: { status: { in: ["PENDING", "UNDER_REVIEW"] } },
-      orderBy: { createdAt: "asc" },
-      take: 6,
-      select: { id: true, name: true, city: true, state: true, status: true, createdAt: true },
-    }),
+    activeSessionCount(user),
+    recentRegistrations(user, 8),
     prisma.auditLog.findMany({
       // Platform events only; a school's daily operations are not shown here.
       where: PLATFORM_AUDIT_WHERE,
       orderBy: { createdAt: "desc" },
-      take: 8,
+      take: 6,
       select: { id: true, action: true, summary: true, createdAt: true },
     }),
+    schoolGrowth(user, 6),
+    moduleAdoption(user),
+    prisma.school.count({ where: { status: { in: ["PENDING", "UNDER_REVIEW"] }, contactEmailVerifiedAt: null } }),
+    prisma.platformInquiry.count({ where: { status: "NEW" } }),
   ]);
-
-  // Statuses, so the reserved status hues rather than series colours.
-  const statusSegments = [
-    { key: "ACTIVE", label: "Active", value: status.active, color: "var(--viz-good)" },
-    { key: "REVIEW", label: "Awaiting review", value: status.awaitingReview, color: "var(--viz-warning)" },
-    { key: "REJECTED", label: "Rejected", value: status.rejected, color: "var(--viz-neutral)" },
-    { key: "SUSPENDED", label: "Suspended", value: status.suspended, color: "var(--viz-critical)" },
-  ];
-
-  const subscribed = plans.reduce((sum, plan) => sum + plan.value, 0);
+  // Platform alerts: only what needs the Super Admin.
+  const platformAlerts = [
+    status.awaitingReview ? { text: `${status.awaitingReview} school${status.awaitingReview === 1 ? "" : "s"} waiting for approval`, href: "/super-admin/approvals" as Route, tone: "warning" } : null,
+    unverified ? { text: `${unverified} pending school${unverified === 1 ? " has" : "s have"} not verified the contact email`, href: "/super-admin/approvals" as Route, tone: "info" } : null,
+    status.suspended ? { text: `${status.suspended} school${status.suspended === 1 ? " is" : "s are"} suspended`, href: "/super-admin/schools?status=SUSPENDED" as Route, tone: "critical" } : null,
+    newEnquiries ? { text: `${newEnquiries} new enquir${newEnquiries === 1 ? "y" : "ies"} from schools`, href: "/super-admin/inquiries" as Route, tone: "info" } : null,
+  ].filter((row): row is { text: string; href: Route; tone: string } => row !== null);
 
   return (
     <>
       <PageHeader
-        title="Platform overview"
-        description="Every school on SchoolOS."
+        variant="hero"
+        title={`Hello, ${user.firstName} 👋`}
+        description="Every school on SchoolOS, at a glance."
         actions={
-          <Button asChild variant="outline">
-            <Link href="/super-admin/schools?status=REVIEW">Review queue</Link>
-          </Button>
+          status.awaitingReview ? (
+            <Button asChild variant="outline">
+              <Link href="/super-admin/approvals">{`${status.awaitingReview} waiting for approval`}</Link>
+            </Button>
+          ) : undefined
         }
       />
 
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Total schools" value={status.total} href="/super-admin/schools" />
-        <StatCard label="Active schools" value={status.active} href="/super-admin/schools?status=ACTIVE" />
-        <StatCard
-          label="Pending registrations"
-          value={status.awaitingReview}
-          href="/super-admin/schools?status=REVIEW"
-        />
-        <StatCard
-          label="Rejected / inactive"
-          value={status.rejected + status.suspended}
-          hint={`${status.rejected} rejected · ${status.suspended} suspended or inactive`}
-        />
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <StatCard tone="blue" icon={Building2Icon} label="Total schools" value={status.total} hint="on the platform" href="/super-admin/schools" />
+        <StatCard tone="green" icon={CheckCircle2Icon} label="Active schools" value={status.active} hint="using SchoolOS now" href="/super-admin/schools?status=ACTIVE" />
+        <StatCard tone="amber" icon={ClipboardCheckIcon} label="Pending approval" value={status.awaitingReview} hint={status.awaitingReview ? "need a decision" : "all decided"} href="/super-admin/approvals" />
+        <StatCard tone="red" icon={PauseCircleIcon} label="Suspended schools" value={status.suspended} hint="access paused" href="/super-admin/schools?status=SUSPENDED" />
       </div>
 
-      <section aria-labelledby="school-list-heading" className="mb-8">
-        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 id="school-list-heading" className="text-lg font-semibold">
-              School list
-            </h2>
-            <p className="text-muted-foreground text-sm">
-              {pluralize(tracker.totals.schools, "school")} ·{" "}
-              {tracker.totals.students.toLocaleString("en-IN")} students ·{" "}
-              {tracker.totals.teachers.toLocaleString("en-IN")} teachers ·{" "}
-              {formatMoney(tracker.totals.revenueMinor)} fees collected. Click a school for the
-              owner&apos;s details.
-            </p>
+      {/* People across schools: secondary to the school figures. */}
+      <dl className="bg-card mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border sm:grid-cols-4">
+        {[
+          { label: "Students", value: totals.students, icon: GraduationCapIcon },
+          { label: "Teachers", value: totals.teachers, icon: UsersIcon },
+          { label: "Parents", value: totals.parents, icon: HeartHandshakeIcon },
+          { label: "Active academic sessions", value: sessions, icon: BookOpenCheckIcon },
+        ].map(({ label, value, icon: Icon }) => (
+          <div key={label} className="bg-card flex items-center gap-3 p-4">
+            <Icon className="text-muted-foreground size-5 shrink-0" aria-hidden />
+            <div>
+              <dt className="text-muted-foreground text-xs">{label}</dt>
+              <dd className="text-lg font-bold tabular-nums">{formatNumber(value)}</dd>
+            </div>
           </div>
+        ))}
+      </dl>
+
+      <section aria-labelledby="recent-registrations" className="mb-8">
+        <div className="mb-3 flex items-end justify-between gap-3">
+          <h2 id="recent-registrations" className="text-lg font-bold tracking-tight">
+            Recent school registrations
+          </h2>
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/super-admin/schools">View all schools</Link>
+          </Button>
         </div>
-        <FilterBar
-          action="/super-admin/dashboard"
-          search={{ defaultValue: q, placeholder: "Search name, UDISE code, city…" }}
-        />
-        {tracker.rows.length ? (
-          <SchoolTracker
-            rows={tracker.rows.map((row) => ({
-              ...row,
-              joinedLabel: formatDate(row.joinedOn),
-              revenueLabel: formatMoney(row.revenueMinor),
-            }))}
-          />
+        {recent.length ? (
+          <div className="overflow-x-auto rounded-xl border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>School</TableHead>
+                  <TableHead className="hidden md:table-cell">Location</TableHead>
+                  <TableHead className="hidden sm:table-cell">Registered</TableHead>
+                  <TableHead className="hidden lg:table-cell">Admin</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recent.map((school) => {
+                  const waiting = school.status === "PENDING" || school.status === "UNDER_REVIEW";
+                  const href = (hash = "") => `/super-admin/schools/${school.id}${hash}` as Route;
+                  return (
+                    <TableRow key={school.id}>
+                      <TableCell>
+                        <Link href={href()} className="font-medium hover:underline">
+                          {school.name}
+                        </Link>
+                        <p className="text-muted-foreground text-xs">{school.plan ? `${school.plan} plan` : "No plan yet"}</p>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground hidden md:table-cell">{[school.city, school.state].filter(Boolean).join(", ") || "—"}</TableCell>
+                      <TableCell className="hidden whitespace-nowrap sm:table-cell">{formatDate(school.createdAt)}</TableCell>
+                      <TableCell className="hidden lg:table-cell">{school.adminName ?? `${school.contactName} (contact)`}</TableCell>
+                      <TableCell>
+                        <StatusBadge status={school.status} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          {waiting ? (
+                            <>
+                              <Button asChild variant="outline" size="xs">
+                                <Link href={href()}>Review</Link>
+                              </Button>
+                              {school.contactEmailVerifiedAt ? (
+                                <Button asChild size="xs" className="bg-success hover:bg-success/90 bg-none text-white shadow-none">
+                                  <Link href={href("#approve")}>Approve</Link>
+                                </Button>
+                              ) : null}
+                              <Button asChild variant="destructive" size="xs">
+                                <Link href={href("#reject")}>Reject</Link>
+                              </Button>
+                            </>
+                          ) : (
+                            <Button asChild variant="outline" size="xs">
+                              <Link href={href()}>View</Link>
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
         ) : (
-          <EmptyState title={q ? "No school matches that search" : "No schools yet"}>
-            {q ? "Try another name, UDISE code or city." : "Schools appear here once they register."}
-          </EmptyState>
+          <EmptyState title="No schools yet">Schools appear here as they register.</EmptyState>
         )}
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[1.45fr_1fr]">
-        <div className="flex flex-col gap-6">
-          <Card>
-            <CardContent>
-              <ChartFigure
-                title="Registrations, last 12 months"
-                subtitle="Schools that applied each month. Hover a column for how many were approved."
-                table={{
-                  head: ["Month", "Registered", "Approved"],
-                  rows: [...growth]
-                    .reverse()
-                    .map((month) => [month.fullLabel, month.registered, month.approved]),
-                }}
-              >
-                <ColumnChart
-                  data={growth.map((month) => ({
-                    key: month.key,
-                    label: month.label,
-                    value: month.registered,
-                    detail: `${pluralize(month.approved, "approval")}`,
-                  }))}
-                  emptyMessage="No registrations yet."
-                />
-              </ChartFigure>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent>
-              <ChartFigure
-                title="Schools by status"
-                subtitle={`${status.total} in total.`}
-                legend={statusSegments
-                  .filter((segment) => segment.value > 0)
-                  .map((segment) => ({
-                    label: segment.label,
-                    color: segment.color,
-                    value: String(segment.value),
-                  }))}
-                table={{
-                  head: ["Status", "Schools"],
-                  rows: statusSegments.map((segment) => [segment.label, segment.value]),
-                }}
-              >
-                <StackedBar segments={statusSegments} emptyMessage="No schools registered yet." />
-              </ChartFigure>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent>
-              <ChartFigure
-                title="Largest schools"
-                subtitle="Active schools by student count — where the load is."
-                table={{
-                  head: ["School", "Students", "Teachers"],
-                  rows: largest.map((school) => [school.label, school.value, school.teachers]),
-                }}
-              >
-                <BarChart
-                  data={largest.map((school) => ({
-                    key: school.id,
-                    label: school.label,
-                    value: school.value,
-                    detail: `${pluralize(school.teachers, "teacher")}${school.city ? ` · ${school.city}` : ""}`,
-                  }))}
-                  labelWidth={180}
-                  emptyMessage="No active schools yet."
-                />
-              </ChartFigure>
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="flex flex-col gap-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Review queue</CardTitle>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/super-admin/schools?status=REVIEW">View all</Link>
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {queue.length ? (
-                <ul className="divide-y">
-                  {queue.map((school) => (
-                    <li key={school.id} className="flex items-center justify-between gap-3 py-3">
-                      <div className="min-w-0">
-                        <Link
-                          href={`/super-admin/schools/${school.id}`}
-                          className="font-medium hover:underline"
-                        >
-                          {school.name}
-                        </Link>
-                        <p className="text-muted-foreground text-xs">
-                          {[school.city, school.state].filter(Boolean).join(", ")} · registered{" "}
-                          {formatDateTime(school.createdAt)}
-                        </p>
-                      </div>
-                      <StatusBadge status={school.status} />
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <EmptyState title="Nothing waiting">New registrations appear here.</EmptyState>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent>
-              <ChartFigure
-                title="Plan mix"
-                subtitle={`${pluralize(subscribed, "school")} on a live subscription.`}
-                table={{
-                  head: ["Plan", "Schools", "Price / year"],
-                  rows: plans.map((plan) => [
-                    plan.label,
-                    plan.value,
-                    formatMoney(plan.priceMinor, plan.currency),
-                  ]),
-                }}
-              >
-                <BarChart
-                  data={plans.map((plan) => ({
-                    key: plan.id,
-                    label: plan.label,
-                    value: plan.value,
-                    detail: `${formatMoney(plan.priceMinor, plan.currency)} / year`,
-                  }))}
-                  labelWidth={72}
-                  width={380}
-                  emptyMessage="No subscriptions yet."
-                />
-              </ChartFigure>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Platform activity</CardTitle>
-                <CardDescription>{pluralize(totals.liveTokens, "live API token")}.</CardDescription>
-              </div>
-              <Button asChild variant="ghost" size="sm">
-                <Link href="/super-admin/audit">Audit log</Link>
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <ul className="divide-y">
-                {recent.map((entry) => (
-                  <li key={entry.id} className="flex flex-col gap-0.5 py-3">
-                    <p className="text-sm">{entry.summary}</p>
-                    <p className="text-muted-foreground text-xs">
-                      {humanize(entry.action)} · {formatDateTime(entry.createdAt)}
-                    </p>
+      <div className="mb-8 grid gap-6 lg:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Platform alerts</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {platformAlerts.length ? (
+              <ul className="flex flex-col gap-2 text-sm">
+                {platformAlerts.map((alert) => (
+                  <li key={alert.text}>
+                    <Link href={alert.href} className={cn("hover:bg-muted/50 flex items-center gap-2 rounded-lg border px-3 py-2", alert.tone === "critical" ? "border-destructive/40" : alert.tone === "warning" ? "border-warning/50" : "")}>
+                      <span className={cn("size-2 shrink-0 rounded-full", alert.tone === "critical" ? "bg-destructive" : alert.tone === "warning" ? "bg-warning" : "bg-primary")} aria-hidden />
+                      {alert.text}
+                    </Link>
                   </li>
                 ))}
               </ul>
-            </CardContent>
-          </Card>
-        </div>
+            ) : (
+              <p className="text-success-strong text-sm font-medium">All clear.</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <ChartFigure title="School growth" subtitle="Registrations, last 6 months." table={{ head: ["Month", "Registered", "Approved"], rows: [...growth].reverse().map((month) => [month.fullLabel, month.registered, month.approved]) }}>
+              <ColumnChart data={growth.map((month) => ({ key: month.key, label: month.label, value: month.registered }))} emptyMessage="No registrations yet." />
+            </ChartFigure>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <ChartFigure title="Module adoption" subtitle={`Active schools (${adoption.activeSchools}) per optional module.`} table={{ head: ["Module", "Schools"], rows: OPTIONAL_MODULES.map((module) => [module.label, adoption.byModule[module.key] ?? 0]) }}>
+              <BarChart data={OPTIONAL_MODULES.map((module) => ({ key: module.key, label: module.label, value: adoption.byModule[module.key] ?? 0 }))} labelWidth={110} width={360} emptyMessage="No active schools yet." />
+            </ChartFigure>
+          </CardContent>
+        </Card>
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Platform activity</CardTitle>
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/super-admin/audit">Audit logs</Link>
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {activity.length ? (
+            <ul className="divide-y">
+              {activity.map((entry) => (
+                <li key={entry.id} className="flex flex-col gap-0.5 py-3">
+                  <p className="text-sm">{entry.summary}</p>
+                  <p className="text-muted-foreground text-xs">
+                    {humanize(entry.action)} · {formatDateTime(entry.createdAt)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground text-sm">Nothing yet.</p>
+          )}
+        </CardContent>
+      </Card>
     </>
   );
 }

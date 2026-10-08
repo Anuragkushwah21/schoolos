@@ -18,21 +18,30 @@ import { ActivationEmailNote, ResetPortalPasswordForm } from "@/features/school/
 import { endSubstitutionAction } from "@/features/staff/access-actions";
 import { StaffGrantsForm, SubstitutionForm } from "@/features/staff/access-forms";
 import { PermissionMatrix } from "@/features/staff/permission-matrix";
-import { formatDate, formatDateTime, formatDayShort, formatMinutes, minutesToTime, parseDateInput, today, toDateInput } from "@/lib/dates";
+import { removeSalaryAction } from "@/features/finance/actions";
+import { SalaryForm } from "@/features/finance/forms";
+import { rupees, toRupeeInput } from "@/features/finance/money";
+import { formatDate, formatDateTime, formatDayShort, formatMinutes, formatMonth, minutesToTime, parseDateInput, today, toDateInput } from "@/lib/dates";
 import { fullName, humanize, pluralize } from "@/lib/format";
 import { param } from "@/lib/search-params";
-import { type BaseStaffRole, STAFF_MODULE_LABEL, STAFF_MODULES, STAFF_ROLE_MODULES, STAFF_ROLE_NAMES, allowedGrants, grantDef } from "@/lib/staff-access";
+import { type BaseStaffRole, STAFF_ROLE_WORKSPACE, STAFF_MODULE_LABEL, STAFF_MODULES, STAFF_ROLE_MODULES, STAFF_ROLE_NAMES, allowedGrants, grantDef } from "@/lib/staff-access";
 import { activationEmailStatuses } from "@/server/auth/account-links";
 import { requireTenant } from "@/server/auth/current-user";
+import { getStaffSalary } from "@/server/finance/salary";
+import { DOCUMENT_TYPE_LABEL, listStaffDocuments, staffAuditLog, staffPermissionSummary } from "@/server/staff/profiles";
+import { archiveStaffDocumentAction, restoreRoleDefaultsAction } from "@/features/staff/profile-actions";
+import { DocumentVerificationForm, RoleChangeForm, StaffDocumentForm } from "@/features/staff/profile-forms";
+import { AuditEntries } from "@/features/audit/audit-entries";
 import { getStaff, staffAccessHistory, staffAssignments, staffOptions, staffRecord } from "@/server/operations/staff";
 import { orNotFound } from "@/server/page-helpers";
 import { photoUrlFor } from "@/server/people/photos";
 import { listRoleProfiles } from "@/server/staff/roles";
 import { type SubstitutionStatus, substituteCandidates, substitutionsFor } from "@/server/staff/substitutions";
+import { hasModule } from "@/server/platform/modules";
 
 export const metadata: Metadata = { title: "Staff member" };
 
-const TABS = ["profile", "access", "work", "substitutes", "attendance"] as const;
+const TABS = ["profile", "access", "work", "substitutes", "attendance", "salary", "documents", "audit"] as const;
 type Tab = (typeof TABS)[number];
 
 const SUB_TONE: Record<SubstitutionStatus, "positive" | "info" | "neutral" | "warning"> = { ACTIVE: "positive", SCHEDULED: "info", EXPIRED: "neutral", ENDED: "warning" };
@@ -56,11 +65,12 @@ export default async function StaffMemberPage(props: PageProps<"/school-admin/st
   const modulesFirst = STAFF_ROLE_MODULES[staff.role as BaseStaffRole] ?? [];
   const href = (next: Tab) => (next === "profile" ? `/school-admin/staff/${staff.id}` : `/school-admin/staff/${staff.id}?tab=${next}`) as Route;
 
+  const [payrollOn, transportOn] = await Promise.all([hasModule(ctx, "PAYROLL"), hasModule(ctx, "TRANSPORT")]);
   const [photoUrl, substitutions, todayMark, onRoutes] = await Promise.all([
     photoUrlFor(ctx, { type: "STAFF", id: staff.id }),
     substitutionsFor(ctx, staff.id),
     ctx.db.staffAttendance.findFirst({ where: { staffMemberId: staff.id, date: today() }, select: { status: true } }),
-    ctx.db.transportRoute.findMany({ where: { OR: [{ driverId: staff.id }, { attendantId: staff.id }] }, orderBy: { name: "asc" }, select: { id: true, name: true, code: true } }),
+    transportOn ? ctx.db.transportRoute.findMany({ where: { OR: [{ driverId: staff.id }, { attendantId: staff.id }] }, orderBy: { name: "asc" }, select: { id: true, name: true, code: true } }) : Promise.resolve([]),
   ]);
   const activeCover = substitutions.coveredBy.filter((row) => row.status === "ACTIVE");
   const activeCovering = substitutions.covering.filter((row) => row.status === "ACTIVE");
@@ -100,7 +110,7 @@ export default async function StaffMemberPage(props: PageProps<"/school-admin/st
               { label: "Today", value: todayMark ? humanize(todayMark.status) : "Not marked", href: href("attendance") },
               { label: "Login", value: staff.user ? (staff.user.isActive ? (staff.user.activatedAt ? "Can sign in" : "Pending activation") : "Disabled") : "No login", href: href("profile") },
               { label: "Permissions", value: grants.length ? pluralize(grants.length, "permission") : "Only common pages", href: href("access") },
-              ...(onRoutes.length || staff.role === "DRIVER" || staff.role === "TRANSPORT_ATTENDANT"
+              ...(transportOn && (onRoutes.length || staff.role === "DRIVER" || staff.role === "TRANSPORT_ATTENDANT")
                 ? [{ label: "Routes", value: onRoutes.length ? onRoutes.map((route) => (route.code ? `${route.code} · ${route.name}` : route.name)).join(", ") : "None yet", href: href("work") }]
                 : []),
             ].map((item) => (
@@ -126,17 +136,24 @@ export default async function StaffMemberPage(props: PageProps<"/school-admin/st
         tabs={[
           { href: href("profile"), label: "Profile", active: tab === "profile" },
           { href: href("access"), label: "Role & access", count: grants.length, active: tab === "access" },
-          { href: href("work"), label: staff.role === "DRIVER" || staff.role === "TRANSPORT_ATTENDANT" ? "Work & routes" : "Work", count: onRoutes.length || undefined, active: tab === "work" },
+          { href: href("work"), label: transportOn && (staff.role === "DRIVER" || staff.role === "TRANSPORT_ATTENDANT") ? "Work & routes" : "Work", count: onRoutes.length || undefined, active: tab === "work" },
           { href: href("substitutes"), label: "Substitutes", count: activeCover.length + activeCovering.length || undefined, active: tab === "substitutes" },
           { href: href("attendance"), label: "Attendance & leave", active: tab === "attendance" },
+          // Salary only for a school whose plan has payroll.
+          ...(payrollOn ? [{ href: href("salary"), label: "Salary", active: tab === "salary" }] : []),
+          { href: href("documents"), label: "Documents", active: tab === "documents" },
+          { href: href("audit"), label: "Audit log", active: tab === "audit" },
         ]}
       />
 
       {tab === "profile" ? <ProfileTab ctx={ctx} staff={staff} /> : null}
       {tab === "access" ? <AccessTab ctx={ctx} staff={staff} roleName={roleName} grants={grants} modulesFirst={modulesFirst} temporary={activeCovering} /> : null}
-      {tab === "work" ? <WorkTab ctx={ctx} staff={staff} grants={grants} /> : null}
+      {tab === "work" ? <WorkTab ctx={ctx} staff={staff} grants={grants} transportOn={transportOn} /> : null}
       {tab === "substitutes" ? <SubstitutesTab ctx={ctx} staff={staff} grants={grants} substitutions={substitutions} /> : null}
       {tab === "attendance" ? <AttendanceTab ctx={ctx} staffId={staff.id} month={param(search.month)} base={href("attendance")} /> : null}
+      {tab === "salary" && payrollOn ? <SalaryTab ctx={ctx} staffId={staff.id} /> : null}
+      {tab === "documents" ? <DocumentsTab ctx={ctx} staffId={staff.id} showArchived={param(search.archived) === "1"} /> : null}
+      {tab === "audit" ? <AuditTab ctx={ctx} staffId={staff.id} by={param(search.by)} base={href("audit")} /> : null}
     </>
   );
 }
@@ -154,7 +171,7 @@ async function ProfileTab({ ctx, staff }: { ctx: Ctx; staff: Staff }) {
           <CardDescription>Name, role, department, contact and joining date.</CardDescription>
         </CardHeader>
         <CardContent>
-          <StaffForm roles={roles.map((role) => ({ value: role.id, label: role.name }))} staff={{ ...staff, joiningDate: staff.joiningDate ? toDateInput(staff.joiningDate) : "" }} />
+          <StaffForm roles={roles.map((role) => ({ value: role.id, label: role.name }))} staff={{ ...staff, joiningDate: staff.joiningDate ? toDateInput(staff.joiningDate) : "", dateOfBirth: staff.dateOfBirth ? toDateInput(staff.dateOfBirth) : "" }} />
         </CardContent>
       </Card>
       <div className="flex flex-col gap-6">
@@ -210,9 +227,50 @@ async function AccessTab({
   modulesFirst: (typeof STAFF_MODULES)[number][];
   temporary: Awaited<ReturnType<typeof substitutionsFor>>["covering"];
 }) {
-  const history = await staffAccessHistory(ctx, staff.id);
+  const [history, summary, roles] = await Promise.all([staffAccessHistory(ctx, staff.id), staffPermissionSummary(ctx, staff.id), listRoleProfiles(ctx)]);
+  const label = (key: string) => grantDef(key)?.label ?? key;
   return (
     <div className="grid items-start gap-6 xl:grid-cols-[1fr_1fr]">
+      <Card className="xl:col-span-2">
+        <CardHeader>
+          <CardTitle>Permission summary</CardTitle>
+          <CardDescription>
+            Role <strong>{summary.roleName}</strong> · workspace <strong>{STAFF_ROLE_WORKSPACE[staff.role as BaseStaffRole] ?? "As assigned"}</strong>. Responsibilities below only decide what this person may do; the School Admin keeps full access to every workspace.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+          <div className="flex flex-col gap-3">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {[
+                ["Role defaults", summary.defaults.length],
+                ["Custom added", summary.added.length],
+                ["Custom removed", summary.removed.length],
+                ["Effective", summary.effective.length],
+              ].map(([name, value]) => (
+                <div key={name} className="bg-muted/50 rounded-lg p-3 text-center">
+                  <p className="text-muted-foreground text-xs">{name}</p>
+                  <p className="text-lg font-semibold tabular-nums">{value}</p>
+                </div>
+              ))}
+            </div>
+            {summary.added.length ? <p className="text-sm"><span className="text-success-strong font-medium">Added:</span> {summary.added.map(label).join(", ")}</p> : null}
+            {summary.removed.length ? <p className="text-sm"><span className="text-danger font-medium">Removed:</span> {summary.removed.map(label).join(", ")}</p> : null}
+            {summary.added.length || summary.removed.length ? (
+              <div>
+                <ActionButton
+                  action={restoreRoleDefaultsAction}
+                  fields={{ staffId: staff.id }}
+                  variant="outline"
+                  confirm={{ title: "Restore the role's default permissions?", description: `Your custom changes for this person are undone: they get exactly the ${summary.roleName} defaults.`, confirmLabel: "Restore defaults" }}
+                >
+                  Restore role defaults
+                </ActionButton>
+              </div>
+            ) : null}
+          </div>
+          <RoleChangeForm staffId={staff.id} currentRoleId={staff.roleProfileId} roles={roles.filter((role) => !role.archivedAt).map((role) => ({ value: role.id, label: role.name }))} />
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Permissions</CardTitle>
@@ -280,12 +338,13 @@ async function AccessTab({
   );
 }
 
-async function WorkTab({ ctx, staff, grants }: { ctx: Ctx; staff: Staff; grants: string[] }) {
-  const crew = staff.role === "DRIVER" ? ("DRIVER" as const) : staff.role === "TRANSPORT_ATTENDANT" ? ("ATTENDANT" as const) : null;
+async function WorkTab({ ctx, staff, grants, transportOn }: { ctx: Ctx; staff: Staff; grants: string[]; transportOn: boolean }) {
+  // Routes only where the school's plan has transport.
+  const crew = !transportOn ? null : staff.role === "DRIVER" ? ("DRIVER" as const) : staff.role === "TRANSPORT_ATTENDANT" ? ("ATTENDANT" as const) : null;
   const [work, routes, vehicles, drivers, attendants] = await Promise.all([
     staffAssignments(ctx, staff.id),
-    listRoutes(ctx),
-    listVehicles(ctx),
+    transportOn ? listRoutes(ctx) : Promise.resolve([]),
+    transportOn ? listVehicles(ctx) : Promise.resolve([]),
     staffOptions(ctx, ["DRIVER"]),
     staffOptions(ctx, ["TRANSPORT_ATTENDANT"]),
   ]);
@@ -566,6 +625,194 @@ async function SubstitutesTab({ ctx, staff, grants, substitutions }: { ctx: Ctx;
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * Their salary structure (effective-dated: a raise is a new row, so the
+ * history stays), and the months they have been paid. Payments are recorded
+ * from Finance → Payroll or Salaries.
+ */
+async function SalaryTab({ ctx, staffId }: { ctx: Ctx; staffId: string }) {
+  const salary = await getStaffSalary(ctx, staffId);
+  return (
+    <div className="grid items-start gap-6 xl:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>Salary structure</CardTitle>
+          <CardDescription>
+            {salary.current
+              ? `Now ${rupees(salary.current.netMinor)} net (${rupees(salary.current.amountMinor)} + ${rupees(salary.current.allowancesMinor)} − ${rupees(salary.current.deductionsMinor)}), ${salary.current.salaryType.toLowerCase()}.`
+              : "No salary set yet. Enter it here; it then appears in the monthly payroll."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {salary.history.length ? (
+            <ul className="divide-y rounded-lg border">
+              {salary.history.map((row) => (
+                <li key={row.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                  <span className="text-muted-foreground w-28 shrink-0 text-xs tabular-nums">{formatDate(row.effectiveFrom)}</span>
+                  <span className="min-w-0 flex-1 tabular-nums">
+                    {rupees(row.netMinor)} net
+                    <span className="text-muted-foreground block text-xs">
+                      {rupees(row.amountMinor)} + {rupees(row.allowancesMinor)} − {rupees(row.deductionsMinor)}
+                    </span>
+                  </span>
+                  {row.current ? <StatusBadge status="ACTIVE" label="Current" /> : null}
+                  {row.effectiveFrom > today() ? <StatusBadge status="PENDING" label="Scheduled" /> : null}
+                  <ActionButton
+                    action={removeSalaryAction}
+                    fields={{ salaryId: row.id }}
+                    variant="ghost"
+                    size="xs"
+                    confirm={{ title: "Remove this salary record?", description: "The figure before it becomes current again. Use this for a row entered by mistake.", confirmLabel: "Remove" }}
+                  >
+                    Remove
+                  </ActionButton>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <SalaryForm
+            staffMemberId={staffId}
+            today={toDateInput(today())}
+            current={
+              salary.current
+                ? {
+                    salaryType: salary.current.salaryType,
+                    amountRupees: toRupeeInput(salary.current.amountMinor),
+                    allowancesRupees: toRupeeInput(salary.current.allowancesMinor),
+                    deductionsRupees: toRupeeInput(salary.current.deductionsMinor),
+                  }
+                : undefined
+            }
+          />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Salary paid</CardTitle>
+          <CardDescription>The last 24 months. Pay from Finance → Payroll.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {salary.payments.length ? (
+            <ul className="divide-y text-sm">
+              {salary.payments.map((payment) => (
+                <li key={payment.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                  <span>
+                    <span className="font-medium">{formatMonth(payment.forMonth)}</span>
+                    <span className="text-muted-foreground block text-xs">
+                      Paid {formatDate(payment.paidOn)} · {humanize(payment.method)}
+                      {payment.reference ? ` · ${payment.reference}` : ""}
+                    </span>
+                  </span>
+                  <span className="tabular-nums">{rupees(payment.amountMinor)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground text-sm">No salary paid yet.</p>
+          )}
+          <Button asChild variant="outline" size="sm" className="mt-4">
+            <Link href="/school-admin/finance/payroll">Open monthly payroll</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/** Private documents on their record. Archiving keeps the file and the history. */
+async function DocumentsTab({ ctx, staffId, showArchived }: { ctx: Ctx; staffId: string; showArchived: boolean }) {
+  const documents = await listStaffDocuments(ctx, staffId, { archived: showArchived });
+  const VERIFY_TONE = { PENDING: "neutral", VERIFIED: "positive", REJECTED: "negative" } as const;
+  return (
+    <div className="grid items-start gap-6 xl:grid-cols-[1.4fr_1fr]">
+      <Card>
+        <CardHeader>
+          <CardTitle>Documents</CardTitle>
+          <CardDescription>
+            Only School Admins of this school can open them.{" "}
+            <Link href={`/school-admin/staff/${staffId}?tab=documents${showArchived ? "" : "&archived=1"}` as Route} className="underline">
+              {showArchived ? "Hide removed" : "Show removed"}
+            </Link>
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {documents.length ? (
+            <ul className="divide-y">
+              {documents.map((doc) => (
+                <li key={doc.id} className={`flex flex-col gap-2 py-3 ${doc.archivedAt ? "opacity-60" : ""}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <a href={`/api/v1/staff-documents/${doc.id}/file`} target="_blank" rel="noreferrer" className="font-medium hover:underline">
+                      {DOCUMENT_TYPE_LABEL[doc.type]}
+                      {doc.label ? ` — ${doc.label}` : ""}
+                    </a>
+                    <span className="flex items-center gap-2">
+                      <StatusBadge status={doc.verification} tone={VERIFY_TONE[doc.verification]} label={doc.verification === "PENDING" ? "Not checked" : humanize(doc.verification)} />
+                      {doc.archivedAt ? <StatusBadge status="ARCHIVED" label="Removed" /> : null}
+                    </span>
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    {doc.fileName} · {Math.max(1, Math.round(doc.size / 1024))} KB · uploaded {formatDateTime(doc.createdAt)}
+                    {doc.notes ? ` · ${doc.notes}` : ""}
+                  </p>
+                  {!doc.archivedAt ? (
+                    <div className="flex flex-wrap items-end gap-3">
+                      <DocumentVerificationForm documentId={doc.id} verification={doc.verification} />
+                      <ActionButton
+                        action={archiveStaffDocumentAction}
+                        fields={{ documentId: doc.id }}
+                        variant="ghost"
+                        confirm={{ title: "Remove this document from the record?", description: "It is kept in the history (Show removed) and on the audit log.", confirmLabel: "Remove" }}
+                      >
+                        Remove
+                      </ActionButton>
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground text-sm">No documents yet.</p>
+          )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Upload a document</CardTitle>
+          <CardDescription>Aadhaar, PAN and the rest are optional — upload what your school keeps.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <StaffDocumentForm staffId={staffId} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/** What was done to their record, and what they did themselves — in words, with the details one click away. */
+async function AuditTab({ ctx, staffId, by, base }: { ctx: Ctx; staffId: string; by: string | undefined; base: Route }) {
+  const view = by === "BY" ? "BY" : by === "ABOUT" ? "ABOUT" : "ALL";
+  const rows = await staffAuditLog(ctx, staffId, { by: view });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Audit log</CardTitle>
+        <CardDescription>Every entry names who really did it. Entries are never edited or deleted.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ViewTabs
+          label="Audit view"
+          tabs={[
+            { href: base, label: "Everything", active: view === "ALL" },
+            { href: `${base}&by=ABOUT` as Route, label: "Changes to their record", active: view === "ABOUT" },
+            { href: `${base}&by=BY` as Route, label: "Done by them", active: view === "BY" },
+          ]}
+        />
+        <AuditEntries rows={rows} />
+      </CardContent>
+    </Card>
   );
 }
 

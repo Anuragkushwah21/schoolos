@@ -25,6 +25,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SchoolLifeCards } from "@/features/dashboard/school-life";
+import { MyResponsibilitiesCard } from "@/features/responsibilities/my-card";
 import { AlertList } from "@/features/parent/today";
 import { getTeacherAlerts } from "@/server/alerts/feeds";
 import { formatSchoolTime, DAY_LABEL, addDays, dayOfWeek, formatDate, formatDayShort, formatMinutes, toDateInput, today } from "@/lib/dates";
@@ -45,6 +46,7 @@ import { schoolClosureOn } from "@/server/calendar/holidays";
 import { getMyClasses } from "@/server/people/teacher-self";
 import { listConcerns } from "@/server/support/concerns";
 import { listSupport } from "@/server/support/service";
+import { attendedDays } from "@/lib/attendance";
 
 export const metadata: Metadata = { title: "Teacher dashboard" };
 
@@ -247,9 +249,7 @@ export default async function TeacherDashboardPage(props: PageProps<"/teacher/da
                           ? t("dashboard.teacher.attendanceOpensAt", { time: formatSchoolTime(reg.opensAt) })
                           : ""
                         : reg.phase === "DRAFT"
-                          ? reg.finalizeAt
-                            ? t("dashboard.teacher.attendanceDraft", { time: formatSchoolTime(reg.finalizeAt) })
-                            : t("dashboard.teacher.attendanceDraftManual")
+                          ? t("dashboard.teacher.attendanceDraftManual")
                           : reg.phase === "CORRECTABLE" && reg.deadline
                             ? t("dashboard.teacher.attendanceSubmitted", { time: formatSchoolTime(reg.deadline) })
                             : t("dashboard.teacher.attendanceLocked")}
@@ -312,7 +312,7 @@ export default async function TeacherDashboardPage(props: PageProps<"/teacher/da
         <CardHeader>
           <CardTitle className="text-lg">{t("dashboard.teacher.todaysClasses")}</CardTitle>
           <CardDescription>
-            {periods.length ? t("dashboard.teacher.writtenUp", { done: completed, total: periods.length }) : t("dashboard.teacher.noClasses")}
+            {periods.length ? t("dashboard.teacher.writtenUp", { done: completed, total: periods.length }) : null}
             {periods.length && !current && !next ? ` · ${t("dashboard.teacher.noMorePeriods")}` : ""}
           </CardDescription>
         </CardHeader>
@@ -441,7 +441,7 @@ export default async function TeacherDashboardPage(props: PageProps<"/teacher/da
                     key: point.key,
                     label: point.label,
                     value: point.share === null ? null : Math.round(point.share * 100),
-                    detail: point.counts.total > 0 ? `${point.counts.PRESENT + point.counts.LATE} of ${point.counts.total} students` : undefined,
+                    detail: point.counts.total > 0 ? `${attendedDays(point.counts)} of ${point.counts.total} students` : undefined,
                   }))}
                   emptyMessage="Mark a few registers and your trend appears here."
                 />
@@ -612,6 +612,7 @@ export default async function TeacherDashboardPage(props: PageProps<"/teacher/da
         </div>
       </div>
 
+      <MyResponsibilitiesCard ctx={ctx} href="/teacher/responsibilities" />
       <SchoolLifeCards ctx={ctx} base="/teacher" />
 
       <Card>

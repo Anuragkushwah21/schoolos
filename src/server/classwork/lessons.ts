@@ -2,6 +2,7 @@ import "server-only";
 
 import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { AppError, ForbiddenError, NotFoundError } from "@/lib/errors";
+import { visibleToStream } from "@/server/academics/stream-scope";
 import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
@@ -10,6 +11,7 @@ import { requireTeacherSelf } from "@/server/auth/teacher-access";
 import { assertRoomForMore, prepareMaterial, saveMaterial } from "@/server/classwork/materials";
 import { deleteStoredFile, readStoredFile } from "@/server/storage/files";
 import { requireStudentSelf } from "@/server/student/access";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Planning a lesson, and attaching what the class should work from.
@@ -337,6 +339,7 @@ export async function readMaterialFile(ctx: TenantContext, materialId: string) {
           classSession: {
             timetableSlot: {
               sectionId: me.placement.sectionId,
+              AND: [visibleToStream(me.placement.streamId)],
               academicSessionId: me.placement.sessionId,
             },
           },
@@ -345,6 +348,7 @@ export async function readMaterialFile(ctx: TenantContext, materialId: string) {
         {
           homework: {
             sectionId: me.placement.sectionId,
+            AND: [visibleToStream(me.placement.streamId)],
             academicSessionId: me.placement.sessionId,
             status: "PUBLISHED" as const,
           },
@@ -361,7 +365,7 @@ export async function readMaterialFile(ctx: TenantContext, materialId: string) {
       ],
     };
   } else {
-    assertRole(ctx.user, "SCHOOL_ADMIN");
+    assertCan(ctx, "homework", "VIEW");
     where = { id: materialId };
   }
 

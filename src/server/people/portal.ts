@@ -3,6 +3,7 @@ import "server-only";
 import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { CURRENT_STUDENT } from "@/lib/validation/lifecycle";
+import { visibleToStream } from "@/server/academics/stream-scope";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { accessibleSectionIds } from "@/server/auth/teacher-access";
@@ -26,6 +27,7 @@ const SLOT_SELECT = {
   startMinute: true,
   endMinute: true,
   room: true,
+  stream: { select: { name: true } },
   subject: { select: { name: true } },
   teacher: { select: { firstName: true, lastName: true } },
   section: {
@@ -141,10 +143,12 @@ export async function getStudentPlacement(ctx: TenantContext) {
     where: { studentId: student.id, academicSessionId: session.id },
     select: {
       rollNumber: true,
+      streamId: true,
       section: {
         select: {
           id: true,
           name: true,
+          streamId: true,
           class: { select: { name: true } },
           stream: { select: { name: true } },
           classTeacher: { select: { firstName: true, lastName: true } },
@@ -156,10 +160,14 @@ export async function getStudentPlacement(ctx: TenantContext) {
   return { student, session, enrollment };
 }
 
-/** The weekly timetable of a section the caller is entitled to see. */
-export async function getSectionWeek(ctx: TenantContext, sectionId: string, academicSessionId: string) {
+/**
+ * The weekly timetable of a section the caller is entitled to see. With
+ * `stream` (a student's, or null for a student with none), only the
+ * whole-section periods and that stream's.
+ */
+export async function getSectionWeek(ctx: TenantContext, sectionId: string, academicSessionId: string, stream?: { streamId: string | null }) {
   return ctx.db.timetableSlot.findMany({
-    where: { sectionId, academicSessionId },
+    where: { sectionId, academicSessionId, ...(stream ? { AND: [visibleToStream(stream.streamId)] } : {}) },
     orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
     select: SLOT_SELECT,
   });
@@ -300,9 +308,10 @@ export async function requireChildOfParent(ctx: TenantContext, studentId: string
         orderBy: { academicSession: { startDate: "desc" } },
         select: {
           rollNumber: true,
+          streamId: true,
           academicSession: { select: { id: true, name: true, isCurrent: true } },
           section: {
-            select: { id: true, name: true, class: { select: { name: true } }, stream: { select: { name: true } } },
+            select: { id: true, name: true, streamId: true, class: { select: { name: true } }, stream: { select: { name: true } } },
           },
         },
       },

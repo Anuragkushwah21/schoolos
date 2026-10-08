@@ -3,7 +3,7 @@ import "server-only";
 import { approvedLeaveOn } from "@/server/attendance/student-leave";
 
 import { Prisma } from "@/generated/prisma/client";
-import type { AttendanceStatus, RegisterSubmission, RegisterTiming } from "@/generated/prisma/enums";
+import type { AttendanceStatus, RegisterTiming } from "@/generated/prisma/enums";
 import { addDays, dayOfWeek, endOfSchoolDay, formatDate, formatSchoolTime, schoolInstant, today } from "@/lib/dates";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
@@ -14,19 +14,20 @@ import type { TenantContext } from "@/server/auth/current-user";
 import { requireAttendanceAccess } from "@/server/auth/teacher-access";
 import { describeClosure, schoolClosureOn } from "@/server/calendar/holidays";
 import type { TenantDb } from "@/server/tenancy/scope";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * The daily student register: draft → submitted → (teacher) locked.
  *
  *   * Who: `requireAttendanceAccess` — the section's class teacher, a teacher
  *     the office assigned for that day (`RegisterCover`), or the School Admin.
- *   * Draft: marks are saved as the teacher taps (auto-save). A draft is not
- *     the record: nothing reaches `StudentAttendance`, parents or reports.
- *   * Submit: the teacher presses Submit, or — in an AUTO school — the draft
- *     submits itself when the attendance period ends (`finalizeAt`, from the
- *     timetable). That is done on the server whenever anyone reads registers
- *     (`finalizeDueRegisters`) and by the cron endpoint, never by a browser
- *     timer, so it happens even if the teacher closed the laptop.
+ *   * Draft: marks are saved as the teacher taps (auto-save) or presses Save
+ *     draft. A draft is not the record: nothing reaches `StudentAttendance`,
+ *     parents, students, dashboards or reports.
+ *   * Submit: only the teacher's (or School Admin's) explicit Submit
+ *     Attendance makes it final — `markAttendance`. Nothing submits a draft by
+ *     itself: no timer, no page load, no background job (6 Oct 2026: the
+ *     automatic end-of-period submission was removed).
  *   * Correct: after submitting, the teacher may correct until
  *     `correctionDeadline = min(submittedAt + 2 h, 23:59:59 of that date)`,
  *     fixed at submission. After it, only the School Admin can correct —
@@ -38,9 +39,13 @@ import type { TenantDb } from "@/server/tenancy/scope";
  */
 
 export const TEACHER_EDIT_WINDOW_DAYS = 7;
+
+/** How a mark reads on the audit log. */
+const STATUS_WORD: Record<string, string> = { PRESENT: "Present", ABSENT: "Absent", LATE: "Late", EXCUSED: "Leave", HALF_DAY: "Half day" };
 export const CORRECTION_WINDOW_MS = 2 * 60 * 60 * 1000;
 
-export const ATTENDANCE_STATUSES: AttendanceStatus[] = ["PRESENT", "ABSENT", "LATE", "EXCUSED"];
+/** EXCUSED is shown as "Leave"; HALF_DAY only while the school allows it (Settings → Attendance). */
+export const ATTENDANCE_STATUSES: AttendanceStatus[] = ["PRESENT", "ABSENT", "LATE", "EXCUSED", "HALF_DAY"];
 
 export type AttendanceEntry = { studentId: string; status: AttendanceStatus; remarks: string | null };
 
@@ -63,7 +68,6 @@ type RegisterRecord = {
   status: "DRAFT" | "SUBMITTED";
   submittedAt: Date | null;
   correctionDeadline: Date | null;
-  finalizeAt: Date | null;
 };
 
 /**
@@ -132,86 +136,9 @@ export async function attendanceWindow(
   return { opensAt: schoolInstant(input.date, period.startMinute), finalizeAt: schoolInstant(input.date, period.endMinute), fromTimetable: true };
 }
 
-async function schoolSettings(ctx: TenantContext): Promise<{ timing: RegisterTiming; submission: RegisterSubmission }> {
-  const school = await ctx.db.school.findFirst({ select: { attendanceTiming: true, attendanceSubmission: true } });
-  return { timing: school?.attendanceTiming ?? "FIRST_PERIOD", submission: school?.attendanceSubmission ?? "AUTO" };
-}
-
-// -----------------------------------------------------------------------------
-// Automatic submission
-// -----------------------------------------------------------------------------
-
-/**
- * Submit every draft whose attendance period has ended. Called from the
- * reads that show registers and by the cron endpoint; safe to run from both
- * at once — each register flips from DRAFT exactly once.
- */
-export async function finalizeDueRegisters(scope: { db: TenantDb; schoolId: string }, now: Date = new Date()): Promise<number> {
-  const due = await scope.db.attendanceRegister.findMany({
-    where: { status: "DRAFT", finalizeAt: { lte: now } },
-    take: 100,
-    select: {
-      id: true,
-      sectionId: true,
-      academicSessionId: true,
-      date: true,
-      draft: true,
-      finalizeAt: true,
-      section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } },
-    },
-  });
-
-  let submitted = 0;
-  for (const register of due) {
-    const draft = (register.draft ?? { marks: {}, savedById: null }) as DraftMarks;
-    const enrolled = new Set(
-      (await scope.db.studentEnrollment.findMany({ where: { sectionId: register.sectionId, status: "ACTIVE" }, select: { studentId: true } })).map((row) => row.studentId),
-    );
-    const entries = Object.entries(draft.marks).filter(([studentId]) => enrolled.has(studentId));
-    const at = register.finalizeAt!;
-
-    const done = await scope.db.$transaction(async (tx) => {
-      if (!entries.length) {
-        // Nothing was marked: there is nothing to submit. Stop retrying it.
-        await tx.attendanceRegister.updateMany({ where: { id: register.id, status: "DRAFT" }, data: { finalizeAt: null } });
-        return false;
-      }
-      const { count } = await tx.attendanceRegister.updateMany({
-        where: { id: register.id, status: "DRAFT" },
-        data: { status: "SUBMITTED", draft: Prisma.DbNull, submittedAt: at, submittedById: null, autoSubmitted: true, correctionDeadline: correctionDeadlineFor(at, register.date) },
-      });
-      if (!count) return false;
-      for (const [studentId, mark] of entries) {
-        await tx.studentAttendance.upsert({
-          where: { schoolId_studentId_date: { schoolId: scope.schoolId, studentId, date: register.date } },
-          create: {
-            schoolId: scope.schoolId,
-            academicSessionId: register.academicSessionId,
-            studentId,
-            sectionId: register.sectionId,
-            date: register.date,
-            status: mark.status,
-            remarks: mark.remarks,
-            markedByUserId: draft.savedById,
-            markedAt: at,
-          },
-          update: { sectionId: register.sectionId, status: mark.status, remarks: mark.remarks, markedByUserId: draft.savedById, markedAt: at },
-        });
-      }
-      return true;
-    });
-    if (!done) continue;
-    submitted += 1;
-    await recordAudit({
-      action: "ATTENDANCE_MARKED",
-      entityType: "Section",
-      entityId: register.sectionId,
-      schoolId: scope.schoolId,
-      actorId: draft.savedById,
-      summary: `Attendance for ${sectionLabel(register.section)} on ${formatDate(register.date)} submitted automatically at the end of the attendance period: ${entries.length} marked, ${entries.filter(([, mark]) => mark.status === "ABSENT").length} absent.`,
-    });
-  }
-  return submitted;
+async function schoolSettings(ctx: TenantContext): Promise<{ timing: RegisterTiming; halfDay: boolean }> {
+  const school = await ctx.db.school.findFirst({ select: { attendanceTiming: true, attendanceHalfDay: true } });
+  return { timing: school?.attendanceTiming ?? "FIRST_PERIOD", halfDay: school?.attendanceHalfDay ?? true };
 }
 
 // -----------------------------------------------------------------------------
@@ -260,7 +187,6 @@ async function registerState(ctx: TenantContext, sectionId: string, date: Date) 
 /** The register for one section on one day, with where it stands for the person asking. */
 export async function getRegister(ctx: TenantContext, sectionId: string, date: Date) {
   await requireAttendanceAccess(ctx, sectionId, date);
-  await finalizeDueRegisters(ctx);
   const section = await loadSection(ctx, sectionId);
 
   const [enrollments, marks, closure, state, settings] = await Promise.all([
@@ -323,12 +249,13 @@ export async function getRegister(ctx: TenantContext, sectionId: string, date: D
     lastMarked: latest ? { at: latest.markedAt, by: latest.markedBy ? `${latest.markedBy.firstName} ${latest.markedBy.lastName}` : null } : null,
     phase,
     deadline,
-    finalizeAt: state.register?.status === "DRAFT" ? state.register.finalizeAt : null,
     draftSavedAt: state.register?.status === "DRAFT" ? state.register.draftSavedAt : null,
     submittedAt: state.register?.submittedAt ?? state.legacyMarkedAt,
+    /** Who pressed Submit; null for registers submitted automatically before 6 Oct 2026, or taken before registers were tracked. */
+    submittedBy: state.register?.submittedBy ? fullName(state.register.submittedBy) : null,
     autoSubmitted: state.register?.autoSubmitted ?? false,
-    submission: settings.submission,
-    isAdmin: ctx.user.role === "SCHOOL_ADMIN",
+    halfDay: settings.halfDay,
+    isAdmin: isSchoolLeader(ctx.user.role),
     editable,
     lockedReason,
     closure: closure ? { kind: closure.kind, label: closure.label } : null,
@@ -340,7 +267,7 @@ export async function getRegister(ctx: TenantContext, sectionId: string, date: D
 // -----------------------------------------------------------------------------
 
 async function prepareWrite(ctx: TenantContext, input: { sectionId: string; date: Date; entries: AttendanceEntry[] }) {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "TEACHER");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
   try {
     await requireAttendanceAccess(ctx, input.sectionId, input.date);
   } catch (error) {
@@ -360,36 +287,32 @@ async function prepareWrite(ctx: TenantContext, input: { sectionId: string; date
   assertMarkableDate(ctx, input.date, section.academicSession);
   await assertNotHoliday(ctx, input.date);
   if (!input.entries.length) throw new ValidationError("Mark at least one student before saving.");
+  // Half Day only where the School Admin allows it — checked here, not just hidden in the form.
+  if (input.entries.some((entry) => entry.status === "HALF_DAY") && !(await schoolSettings(ctx)).halfDay) {
+    throw new ValidationError("Half Day is turned off for this school. Ask the School Admin to allow it under Settings → Attendance.");
+  }
 
   const enrolled = new Set(
     (await ctx.db.studentEnrollment.findMany({ where: { sectionId: section.id, status: "ACTIVE" }, select: { studentId: true } })).map((row) => row.studentId),
   );
   // A forged student id — including one from another school — fails the whole save.
   if (input.entries.some((entry) => !enrolled.has(entry.studentId))) throw new ForbiddenError("A student in this register is not in this section.");
-  await finalizeDueRegisters(ctx);
   return section;
 }
 
 /**
- * Auto-save: keep the marks as a draft while the teacher works. Not the
- * record — nothing reaches parents or reports until the register is submitted.
+ * Save draft (and auto-save): keep the marks while the teacher works. Never
+ * the record, and never submitted from here — nothing reaches parents,
+ * students, dashboards or reports until the teacher presses Submit Attendance.
  */
 export async function saveRegisterDraft(
   ctx: TenantContext,
   input: { sectionId: string; date: Date; entries: AttendanceEntry[] },
-): Promise<{ savedAt: Date; finalizeAt: Date | null }> {
+): Promise<{ savedAt: Date }> {
   const section = await prepareWrite(ctx, input);
   const state = await registerState(ctx, section.id, input.date);
   if (state.register?.status === "SUBMITTED" || state.legacyMarkedAt) {
     throw new ConflictError("This attendance is already submitted. Use Correct attendance to change it.");
-  }
-
-  const settings = await schoolSettings(ctx);
-  // Only today's register submits itself; a missed earlier day is submitted
-  // by pressing Submit, so a half-filled draft never lands on its own.
-  let finalizeAt: Date | null = state.register?.finalizeAt ?? null;
-  if (!state.register && settings.submission === "AUTO" && input.date.getTime() === today().getTime()) {
-    finalizeAt = (await attendanceWindow(ctx.db, { sectionId: section.id, academicSessionId: section.academicSession.id, date: input.date, timing: settings.timing })).finalizeAt;
   }
 
   const draft: DraftMarks = {
@@ -407,11 +330,12 @@ export async function saveRegisterDraft(
       status: "DRAFT",
       draft,
       draftSavedAt: savedAt,
-      finalizeAt,
+      // No submission time: a draft waits for the teacher, however long.
+      finalizeAt: null,
     },
-    update: { draft, draftSavedAt: savedAt },
+    update: { draft, draftSavedAt: savedAt, finalizeAt: null },
   });
-  return { savedAt, finalizeAt };
+  return { savedAt };
 }
 
 async function writeMarks(ctx: TenantContext, sectionId: string, academicSessionId: string, date: Date, entries: AttendanceEntry[], tx: TenantDb) {
@@ -500,16 +424,22 @@ export async function markAttendance(
   }
   if (changed.length) {
     await ctx.db.$transaction(async (tx) => writeMarks(ctx, section.id, section.academicSession.id, input.date, changed, tx as unknown as TenantDb));
+    const names = new Map(
+      (await ctx.db.student.findMany({ where: { id: { in: changed.map((entry) => entry.studentId) } }, select: { id: true, firstName: true, lastName: true } })).map((row) => [row.id, fullName(row)]),
+    );
+    const word = (status: string | null | undefined) => (status ? STATUS_WORD[status] ?? status : "Not marked");
+    const lines = changed.map((entry) => `${names.get(entry.studentId) ?? "A student"}: ${word(before.get(entry.studentId)?.status)} → ${word(entry.status)}`);
     await recordAudit({
       action: "ATTENDANCE_CORRECTED",
       entityType: "Section",
       entityId: section.id,
       schoolId: ctx.schoolId,
       actorId: ctx.user.id,
-      summary: `Attendance for ${sectionLabel(section)} on ${formatDate(input.date)} corrected: ${changed.length} change${changed.length === 1 ? "" : "s"}${reason ? ` — ${reason}` : ""}.`,
+      summary: `Attendance for ${sectionLabel(section)} on ${formatDate(input.date)} corrected — ${lines.slice(0, 5).join("; ")}${lines.length > 5 ? `; and ${lines.length - 5} more` : ""}${reason ? `. Reason: ${reason}` : ""}.`,
       metadata: {
         reason,
-        changes: changed.map((entry) => ({ studentId: entry.studentId, from: before.get(entry.studentId)?.status ?? null, to: entry.status })),
+        // Old → new per student, in the shape the audit log shows as a table.
+        changes: changed.map((entry) => ({ label: names.get(entry.studentId) ?? entry.studentId, old: word(before.get(entry.studentId)?.status), new: word(entry.status), studentId: entry.studentId })),
       },
     });
   }

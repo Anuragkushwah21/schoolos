@@ -118,6 +118,8 @@ export const acceptAdmissionSchema = z.object({
   rollNumber: optionalText(10),
   admissionNumber: optionalText(30),
   reviewNotes: optionalText(1000),
+  /** True once the caller has seen the "this child may already be at the school" matches. */
+  confirmDuplicate: z.boolean().optional(),
 });
 
 export const admissionFollowUpSchema = z.object({

@@ -23,12 +23,15 @@ type GrantDef = {
   scope?: string;
 };
 
-export const STAFF_MODULES = ["library", "students", "transport", "fees", "expenses", "payroll", "inventory"] as const;
+export const STAFF_MODULES = ["library", "students", "admissions", "meetings", "security", "transport", "fees", "expenses", "payroll", "inventory"] as const;
 export type StaffModule = (typeof STAFF_MODULES)[number];
 
 export const STAFF_MODULE_LABEL: Record<StaffModule, string> = {
   library: "Library",
   students: "Students",
+  admissions: "Enquiries & admissions",
+  meetings: "Meetings / PTM",
+  security: "Visitors & gate",
   transport: "Transport",
   fees: "Fees",
   expenses: "Expenses",
@@ -48,6 +51,17 @@ const DEFS = [
   // --- Students --------------------------------------------------------------
   { key: "students.directory", module: "students", action: "VIEW", label: "Student directory — basic", hint: "Name, admission no. and class of every current student. No fees, marks or records.", scope: "Basic details only" },
   { key: "students.contact", module: "students", action: "VIEW", label: "Student directory — guardian contact", hint: "Adds the primary guardian's name and phone to the directory." },
+  // --- Enquiries & admissions -------------------------------------------------
+  { key: "enquiries.view", module: "admissions", action: "VIEW", label: "Walk-in enquiries", hint: "Family enquiries with their children, follow-ups and status." },
+  { key: "enquiries.manage", module: "admissions", action: "EDIT", label: "Add & follow up enquiries", hint: "Record new enquiries, edit them, add follow-ups and change their status. Fees, discounts and admitting a child stay with the School Admin." },
+  { key: "enquiries.fees", module: "admissions", action: "MANAGE", label: "Discuss fees & discounts on enquiries", hint: "Record the fee discussed with a family and any discount. Applying it to real fee records stays with the School Admin." },
+  { key: "admissions.view", module: "admissions", action: "VIEW", label: "Online applications & status", hint: "Applications from the website and where each one stands." },
+  { key: "admissions.manage", module: "admissions", action: "EDIT", label: "Move applications along", hint: "Change an application's status (review, shortlist, approve, reject) and add follow-ups. Admitting a student stays with the School Admin." },
+  // --- Meetings --------------------------------------------------------------
+  { key: "meetings.schedule", module: "meetings", action: "CREATE", label: "Schedule meetings", hint: "Schedule meetings and PTMs, and change or cancel the ones they scheduled. Deleting a meeting stays with the School Admin." },
+  // --- Visitors & gate --------------------------------------------------------
+  { key: "visitors.view", module: "security", action: "VIEW", label: "Visitor log", hint: "Who came in, whom they met, entry and exit times. Nothing about students' studies, fees or marks." },
+  { key: "visitors.manage", module: "security", action: "EDIT", label: "Record visitor entry & exit", hint: "Log a visitor in, mark them out, correct an entry. Every change is audited." },
   // --- Transport -------------------------------------------------------------
   { key: "transport.myroute", module: "transport", action: "VIEW", label: "My route & stops", hint: "The route they drive or attend (or cover as a substitute): vehicle, stops and times.", scope: "Own route only" },
   { key: "transport.riders", module: "transport", action: "VIEW", label: "Students on my route", hint: "Name, class, section and stop of the students on their route — nobody else.", scope: "Own route's students only" },
@@ -57,12 +71,15 @@ const DEFS = [
   // --- Fees ------------------------------------------------------------------
   { key: "fees.view", module: "fees", action: "VIEW", label: "Fee dashboard & pending fees", hint: "What each student owes, payment history and receipts. Read-only." },
   { key: "fees.collect", module: "fees", action: "CREATE", label: "Collect fees & print receipts", hint: "Record payments (single and family) and print receipts." },
+  { key: "fees.manage", module: "fees", action: "MANAGE", label: "Fee structure & charges", hint: "Add fee heads, charge a class, section or one student, remove a wrong charge, void a wrong receipt, carry forward old dues." },
+  { key: "fees.concessions", module: "fees", action: "EDIT", label: "Give fee concessions", hint: "A discount on a student's fee, with a reason — audited, and shown with who approved it." },
+  { key: "fees.reports", module: "fees", action: "EXPORT", label: "Finance reports", hint: "Download fee, payment — and, with those permissions, expense and salary — reports." },
   // --- Expenses --------------------------------------------------------------
   { key: "expenses.view", module: "expenses", action: "VIEW", label: "View expenses", hint: "The school's spending, by month and category." },
   { key: "expenses.create", module: "expenses", action: "CREATE", label: "Record expenses", hint: "Add an expense with its bill details." },
   { key: "expenses.delete", module: "expenses", action: "DELETE", label: "Remove expenses", hint: "Remove an expense recorded by mistake." },
   // --- Payroll ---------------------------------------------------------------
-  { key: "payroll.view", module: "payroll", action: "VIEW", label: "View payroll & salaries", hint: "Monthly payroll and what each teacher is paid." },
+  { key: "payroll.view", module: "payroll", action: "VIEW", label: "View payroll & salaries", hint: "Monthly payroll and what each teacher and staff member is paid." },
   { key: "payroll.pay", module: "payroll", action: "MANAGE", label: "Record salary payments", hint: "Pay a month's salaries from the payroll." },
   // --- Inventory -------------------------------------------------------------
   { key: "inventory.view", module: "inventory", action: "VIEW", label: "View inventory", hint: "Equipment, furniture and lab items with their condition and location." },
@@ -72,11 +89,6 @@ const DEFS = [
 export type StaffGrant = (typeof DEFS)[number]["key"];
 export const STAFF_GRANTS: readonly GrantDef[] = DEFS;
 export const STAFF_GRANT_KEYS = DEFS.map((def) => def.key) as StaffGrant[];
-const KEYS = new Set<string>(STAFF_GRANT_KEYS);
-
-export function isStaffGrant(value: string): value is StaffGrant {
-  return KEYS.has(value);
-}
 
 export function grantDef(key: string): GrantDef | undefined {
   return STAFF_GRANTS.find((def) => def.key === key);
@@ -113,10 +125,14 @@ export const STAFF_ROLE_DEFAULT_GRANTS: Record<BaseStaffRole, StaffGrant[]> = {
   LIBRARIAN: ["library.view", "library.circulation", "library.books.create", "library.books.edit", "library.copies", "library.fines", "library.reports"],
   DRIVER: ["transport.myroute", "transport.riders", "transport.trips"],
   TRANSPORT_ATTENDANT: ["transport.myroute", "transport.riders", "transport.trips"],
-  ACCOUNTANT: ["fees.view", "fees.collect"],
-  RECEPTIONIST: ["students.directory"],
-  LAB_ASSISTANT: ["inventory.view"],
-  SECURITY: [],
+  // The school's accounts, all of it (7 Oct 2026): fees, expenses and
+  // purchases, paying salaries, reports. The School Admin keeps every bit of
+  // it too, and can take any of it away from one accountant. Salary
+  // structures stay with the School Admin.
+  ACCOUNTANT: ["fees.view", "fees.collect", "fees.manage", "fees.concessions", "fees.reports", "expenses.view", "expenses.create", "expenses.delete", "payroll.view", "payroll.pay"],
+  RECEPTIONIST: ["enquiries.view", "enquiries.manage", "admissions.view", "admissions.manage", "students.directory", "students.contact"],
+  LAB_ASSISTANT: ["inventory.view", "inventory.manage"],
+  SECURITY: ["visitors.view", "visitors.manage"],
   PEON: [],
   OFFICE_STAFF: [],
   COORDINATOR: [],
@@ -129,9 +145,9 @@ export const STAFF_ROLE_MODULES: Record<BaseStaffRole, StaffModule[]> = {
   DRIVER: ["transport"],
   TRANSPORT_ATTENDANT: ["transport"],
   ACCOUNTANT: ["fees", "expenses", "payroll"],
-  RECEPTIONIST: ["students"],
+  RECEPTIONIST: ["admissions", "students", "meetings", "security"],
   LAB_ASSISTANT: ["inventory"],
-  SECURITY: [],
+  SECURITY: ["security"],
   PEON: [],
   OFFICE_STAFF: ["students"],
   COORDINATOR: ["students"],
@@ -146,9 +162,31 @@ export const STAFF_ROLE_MODULES: Record<BaseStaffRole, StaffModule[]> = {
  * their own route.
  */
 export const STAFF_ROLE_EXCLUDED: Partial<Record<BaseStaffRole, readonly StaffGrant[]>> = {
-  LIBRARIAN: ["students.directory", "students.contact", "transport.myroute", "transport.riders", "transport.contacts", "transport.trips", "transport.routes", "fees.view", "fees.collect", "expenses.view", "expenses.create", "expenses.delete", "payroll.view", "payroll.pay"],
+  LIBRARIAN: ["students.directory", "students.contact", "transport.myroute", "transport.riders", "transport.contacts", "transport.trips", "transport.routes", "fees.view", "fees.collect", "fees.manage", "fees.concessions", "fees.reports", "expenses.view", "expenses.create", "expenses.delete", "payroll.view", "payroll.pay"],
   DRIVER: ["students.directory", "students.contact"],
   TRANSPORT_ATTENDANT: ["students.directory", "students.contact"],
+  // Security and support staff never see student finances; security never
+  // guardians' phone numbers, family enquiries or applications either.
+  SECURITY: ["students.contact", "enquiries.view", "enquiries.manage", "admissions.view", "admissions.manage", "meetings.schedule", "enquiries.fees", "fees.view", "fees.collect", "fees.manage", "fees.concessions", "fees.reports", "expenses.view", "expenses.create", "expenses.delete", "payroll.view", "payroll.pay"],
+  PEON: ["enquiries.fees", "fees.view", "fees.collect", "fees.manage", "fees.concessions", "fees.reports", "expenses.view", "expenses.create", "expenses.delete", "payroll.view", "payroll.pay"],
+};
+
+/**
+ * Role defaults this code shipped before (newest last). A school's built-in
+ * role profile still holding exactly one of these was never edited by its
+ * admin, so `ensureRoleProfiles` brings it up to the current default; a
+ * profile the admin changed is left alone.
+ */
+export const PREVIOUS_ROLE_DEFAULT_GRANTS: Partial<Record<BaseStaffRole, StaffGrant[][]>> = {
+  ACCOUNTANT: [
+    ["fees.view", "fees.collect"],
+    ["fees.view", "fees.collect", "fees.reports", "expenses.view", "expenses.create", "payroll.view"],
+    ["fees.view", "fees.collect", "fees.reports", "expenses.view", "expenses.create"],
+    ["fees.view", "fees.collect", "fees.reports", "expenses.view", "expenses.create", "expenses.delete", "payroll.view", "payroll.pay"],
+  ],
+  RECEPTIONIST: [["students.directory"]],
+  LAB_ASSISTANT: [["inventory.view"]],
+  SECURITY: [[]],
 };
 
 /** Whether this designation may hold this grant at all. */
@@ -179,3 +217,40 @@ export const LEGACY_PERMISSION_GRANTS: Record<string, StaffGrant[]> = {
 export function grantsFrom(values: readonly string[]): StaffGrant[] {
   return cleanGrants(values.flatMap((value) => LEGACY_PERMISSION_GRANTS[value] ?? [value]));
 }
+
+/**
+ * Role defaults against what one person actually holds: the defaults their
+ * role gives (those this designation may hold), what the admin added on top,
+ * what the admin took away, and the effective set. Used for the summary on a
+ * staff profile and to carry custom changes across a change of role.
+ */
+export function permissionSummary(role: string, roleDefaults: readonly string[], grants: readonly string[]) {
+  const defaults = allowedGrants(role, roleDefaults);
+  const effective = allowedGrants(role, grants);
+  return {
+    defaults,
+    added: effective.filter((key) => !defaults.includes(key)),
+    removed: defaults.filter((key) => !effective.includes(key)),
+    effective,
+  };
+}
+
+/**
+ * The workspace each designation works in — what the role "is for", shown to
+ * the staff member and the admin. Their default responsibilities (grants)
+ * open it; the admin can add or remove responsibilities per person. Support
+ * staff get no broad workspace: only the common staff pages.
+ */
+export const STAFF_ROLE_WORKSPACE: Record<BaseStaffRole, string> = {
+  ACCOUNTANT: "Finance",
+  RECEPTIONIST: "Front Desk",
+  OFFICE_STAFF: "Front Desk",
+  LIBRARIAN: "Library",
+  DRIVER: "Transport (own route)",
+  TRANSPORT_ATTENDANT: "Transport (own route)",
+  SECURITY: "Gate & Security",
+  LAB_ASSISTANT: "Lab & Inventory",
+  COORDINATOR: "Academic",
+  PEON: "Support duties",
+  OTHER: "As assigned",
+};

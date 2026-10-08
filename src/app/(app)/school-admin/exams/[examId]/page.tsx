@@ -8,8 +8,8 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { TimeStatusBadge } from "@/components/shared/time-status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { deleteExamAction, publishExamsAction, unpublishExamAction } from "@/features/exams/actions";
-import { EditExamForm } from "@/features/exams/forms";
+import { deleteExamAction, publishExamsAction, verifyExamAction } from "@/features/exams/actions";
+import { CorrectResultForm, EditExamForm, UnpublishExamForm } from "@/features/exams/forms";
 import { formatDate, toDateInput } from "@/lib/dates";
 import { EXAM_STAGE_LABEL, EXAM_STAGE_TONE } from "@/lib/exam-stage";
 import { OUTCOME_LABEL, passMarkFor } from "@/lib/grades";
@@ -22,9 +22,9 @@ export const metadata: Metadata = { title: "Exam" };
 const OUTCOME_TONE = { PASS: "positive", FAIL: "negative", INCOMPLETE: "neutral" } as const;
 
 export default async function ExamDetailPage(props: PageProps<"/school-admin/exams/[examId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { examId } = await props.params;
-  const { exam, papers, students, stage, blocker } = await orNotFound(getExamDetail(ctx, examId));
+  const { exam, papers, students, stage, blocker, rules, review } = await orNotFound(getExamDetail(ctx, examId));
   const published = exam.status === "PUBLISHED";
   // The first paper still short of marks: where "View missing marks" goes.
   const firstShort = papers.find((paper) => paper.held && paper.entered < paper.expected);
@@ -43,18 +43,7 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
         }
         actions={
           published ? (
-            <ActionButton
-              action={unpublishExamAction}
-              fields={{ examId: exam.id }}
-              variant="outline"
-              confirm={{
-                title: "Withdraw these results?",
-                description: "Students and parents stop seeing them until you publish again. Marks can then be corrected.",
-                confirmLabel: "Withdraw",
-              }}
-            >
-              Unpublish
-            </ActionButton>
+            <UnpublishExamForm examId={exam.id} />
           ) : (
             <>
               <ActionButton
@@ -69,10 +58,24 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
               >
                 Delete
               </ActionButton>
-              {blocker ? (
+              {review.canVerify ? (
+                <ActionButton
+                  action={verifyExamAction}
+                  fields={{ examId: exam.id }}
+                  variant="outline"
+                  confirm={{
+                    title: "Verify these results?",
+                    description: "Confirm you have checked the submitted marks. Once verified they can be published; reopening a paper clears this.",
+                    confirmLabel: "Verify results",
+                  }}
+                >
+                  Verify results
+                </ActionButton>
+              ) : null}
+              {blocker || !review.verified ? (
                 // Not ready: the button stays visible so the next step is clear,
                 // and the panel below says what is missing.
-                <Button disabled title={`${blocker.headline} ${blocker.detail}`}>
+                <Button disabled title={blocker ? `${blocker.headline} ${blocker.detail}` : "Verify the results first."}>
                   Publish results
                 </Button>
               ) : (
@@ -106,9 +109,17 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
             )}
           </Button>
         </div>
+      ) : !published && review.submittedPapers < papers.length ? (
+        <p role="status" className="border-warning/30 bg-warning-soft text-warning-strong mb-6 rounded-lg border px-4 py-3 text-sm">
+          {`Every mark is in, but ${papers.length - review.submittedPapers} of ${papers.length} papers are still drafts. The teacher (or the office) submits each paper, then the results are verified and published.`}
+        </p>
+      ) : !published && !review.verified ? (
+        <p role="status" className="border-info/30 bg-info-soft text-info-strong mb-6 rounded-lg border px-4 py-3 text-sm">
+          Every paper is submitted. Review the marks below, then verify the results before publishing.
+        </p>
       ) : !published ? (
         <p role="status" className="border-success/30 bg-success-soft text-success-strong mb-6 rounded-lg border px-4 py-3 text-sm">
-          Every paper is held and every mark is in. Results are ready to publish.
+          {`Verified ${review.verifiedAt ? formatDate(review.verifiedAt) : ""}. Results are ready to publish.`}
         </p>
       ) : null}
 
@@ -142,7 +153,7 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
                         {!paper.held ? <span className="text-muted-foreground block text-xs">not held yet</span> : null}
                       </td>
                       <td className="py-2 pr-3 tabular-nums">
-                        {paper.maxMarks} / {passMarkFor(paper.maxMarks, paper.passMarks)}
+                        {paper.maxMarks} / {passMarkFor(paper.maxMarks, paper.passMarks, rules.passPercent)}
                       </td>
                       <td className="py-2 pr-3 tabular-nums">
                         {paper.entered}/{paper.expected}
@@ -177,7 +188,7 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
       <Card className="mt-6">
         <CardHeader>
           <CardTitle>Results</CardTitle>
-          <CardDescription>Totals count an absent paper as zero. Report cards open ready to print.</CardDescription>
+          <CardDescription>Totals count an absent paper as zero and leave an exempt paper out. Grades follow your school&apos;s grading scale. Report cards open ready to print.</CardDescription>
         </CardHeader>
         <CardContent>
           {students.length ? (
@@ -227,6 +238,18 @@ export default async function ExamDetailPage(props: PageProps<"/school-admin/exa
           )}
         </CardContent>
       </Card>
+
+      {published && students.length ? (
+        <Card className="mt-6 max-w-3xl">
+          <CardHeader>
+            <CardTitle>Correct a published mark</CardTitle>
+            <CardDescription>For a single wrong mark: the rest of the results stay with families. The old and new mark and your reason are kept on the audit log.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CorrectResultForm students={students.map((student) => ({ value: student.studentId, label: student.name }))} papers={papers.map((paper) => ({ value: paper.id, label: `${paper.subject} (out of ${paper.maxMarks})` }))} />
+          </CardContent>
+        </Card>
+      ) : null}
     </>
   );
 }

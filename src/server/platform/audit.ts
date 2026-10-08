@@ -5,6 +5,8 @@ import { type AuditAction, PLATFORM_AUDIT_ACTIONS } from "@/lib/audit-actions";
 import { assertRole } from "@/server/auth/assert";
 import type { SessionUser } from "@/server/auth/session";
 import { prisma } from "@/server/db/prisma";
+import { humanize } from "@/lib/format";
+import { describeModules } from "@/server/platform/plans";
 
 export const AUDIT_PAGE_SIZE = 50;
 
@@ -48,7 +50,8 @@ export async function listAuditLog(
         summary: true,
         ipAddress: true,
         createdAt: true,
-        actor: { select: { email: true } },
+        metadata: true,
+        actor: { select: { email: true, firstName: true, lastName: true, role: true } },
         school: { select: { id: true, name: true } },
       },
     }),
@@ -56,4 +59,25 @@ export async function listAuditLog(
   ]);
 
   return { rows, total, page, pageCount: Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE)) };
+}
+
+/**
+ * "Previous → new" for an audit row, from what its writer recorded: a status
+ * change ({ from, to }) or a settings change ({ previous, next }).
+ */
+export function auditChange(metadata: unknown): { previous: string; next: string } | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const data = metadata as Record<string, unknown>;
+  if (typeof data.from === "string" && typeof data.to === "string") return { previous: humanize(data.from), next: humanize(data.to) };
+  const show = (value: unknown): string => {
+    if (!value || typeof value !== "object") return String(value ?? "—");
+    const parts: string[] = [];
+    const record = value as Record<string, unknown>;
+    if (typeof record.plan === "string" || record.plan === null) parts.push(`Plan: ${record.plan ?? "none"}`);
+    if (Array.isArray(record.optionalModules)) parts.push(`Modules: ${describeModules(record.optionalModules as string[])}`);
+    if (typeof record.customized === "boolean") parts.push(record.customized ? "set for this school" : "follows plan");
+    return parts.join(" · ") || "—";
+  };
+  if (data.previous !== undefined && data.next !== undefined) return { previous: show(data.previous), next: show(data.next) };
+  return null;
 }

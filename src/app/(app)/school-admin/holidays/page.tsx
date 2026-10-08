@@ -14,7 +14,7 @@ import { getWeeklyOffDays } from "@/server/calendar/holidays";
 export const metadata: Metadata = { title: "Holidays" };
 
 export default async function AdminHolidaysPage(props: PageProps<"/school-admin/holidays">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const weeklyOffDays = await getWeeklyOffDays(ctx);
 

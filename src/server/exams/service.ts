@@ -8,7 +8,7 @@ import { CsvFormatError, readCsvRecords } from "@/lib/csv";
 import { formatDate, today } from "@/lib/dates";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
-import { examOutcome, gradeFor, paperOutcome, type PaperOutcome, passMarkFor, percentage } from "@/lib/grades";
+import { DEFAULT_RULES, examOutcome, gradeFor, type GradingRules, isEntered, paperOutcome, type PaperOutcome, passMarkFor, percentage } from "@/lib/grades";
 import { spanStatus } from "@/lib/time-status";
 import type { ClassTestInput, CreateExamInput, MarkEntry, UpdateClassTestInput, UpdateExamInput } from "@/lib/validation/exams";
 import { requireCurrentSession, sectionLabel } from "@/server/academics/structure";
@@ -16,6 +16,9 @@ import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireSubjectAssignment, requireTeacherSelf } from "@/server/auth/teacher-access";
+import { assertCan } from "@/server/auth/permissions";
+import { gradingRules } from "@/server/exams/grading";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Exams, class tests and marks.
@@ -90,7 +93,7 @@ const SECTION_LABEL_SELECT = {
  * created.
  */
 export async function createExams(ctx: TenantContext, input: CreateExamInput): Promise<{ ids: string[] }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "EDIT");
   const session = await requireCurrentSession(ctx);
 
   const sectionIds = [...new Set(input.sectionIds)];
@@ -183,6 +186,9 @@ async function requireExam(ctx: TenantContext, examId: string) {
       startDate: true,
       endDate: true,
       publishedAt: true,
+      verifiedAt: true,
+      verifiedById: true,
+      publishedById: true,
       sectionId: true,
       academicSessionId: true,
       academicSession: { select: { name: true } },
@@ -200,7 +206,7 @@ function assertDraft(exam: { status: ExamStatus; name: string }): void {
 }
 
 export async function updateExam(ctx: TenantContext, input: UpdateExamInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "EDIT");
   const exam = await requireExam(ctx, input.examId);
   assertDraft(exam);
 
@@ -240,7 +246,7 @@ export async function updateExam(ctx: TenantContext, input: UpdateExamInput): Pr
 
 /** A draft exam, its papers and any marks already entered. Published exams cannot be deleted. */
 export async function deleteExam(ctx: TenantContext, examId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "DELETE");
   const exam = await requireExam(ctx, examId);
   assertDraft(exam);
 
@@ -302,43 +308,50 @@ type PaperRow = {
 
 /**
  * Every student's standing in an exam: per-paper outcome, total, percentage,
- * grade and overall result. Absent papers count as zero in the total.
+ * grade and overall result, by the school's grading rules.
+ *
+ * The total is marks over the maximum of the papers the student sat or was
+ * absent from: an absent paper counts as zero, an exempt paper is left out of
+ * both — so one child's total can be out of less than the class's.
  */
 export function tabulate(
   papers: PaperRow[],
   roster: Array<{ studentId: string; name: string; admissionNumber: string; rollNumber: string | null }>,
-  results: Array<{ assessmentId: string; studentId: string; marksObtained: number | null; absent: boolean; remarks: string | null }>,
+  results: Array<{ assessmentId: string; studentId: string; marksObtained: number | null; absent: boolean; exempt?: boolean; remarks: string | null }>,
+  rules: GradingRules = DEFAULT_RULES,
 ) {
   const byKey = new Map(results.map((row) => [`${row.assessmentId}:${row.studentId}`, row]));
-  const maxTotal = papers.reduce((sum, paper) => sum + paper.maxMarks, 0);
 
   return roster.map((student) => {
     const outcomes: PaperOutcome[] = [];
     let obtained = 0;
+    let maxTotal = 0;
     const marks = papers.map((paper) => {
       const result = byKey.get(`${paper.id}:${student.studentId}`) ?? null;
-      const outcome = paperOutcome(paper, result);
+      const outcome = paperOutcome(paper, result, rules.passPercent);
       outcomes.push(outcome);
-      if (result?.marksObtained) obtained += result.marksObtained;
-      const percent = result?.marksObtained !== null && result?.marksObtained !== undefined ? percentage(result.marksObtained, paper.maxMarks) : null;
+      if (outcome !== "EXEMPT") maxTotal += paper.maxMarks;
+      if (result?.marksObtained && !result.exempt) obtained += result.marksObtained;
+      const percent = result?.marksObtained !== null && result?.marksObtained !== undefined && !result.exempt ? percentage(result.marksObtained, paper.maxMarks) : null;
       return {
         assessmentId: paper.id,
-        marksObtained: result?.marksObtained ?? null,
+        marksObtained: result?.exempt ? null : (result?.marksObtained ?? null),
         absent: result?.absent ?? false,
+        exempt: result?.exempt ?? false,
         remark: result?.remarks ?? null,
-        grade: result?.absent ? null : gradeFor(percent),
+        grade: result?.absent || result?.exempt ? null : gradeFor(percent, rules.bands),
         outcome,
       };
     });
     const complete = !outcomes.includes("PENDING");
-    const percent = complete ? percentage(obtained, maxTotal) : null;
+    const percent = complete && maxTotal > 0 ? percentage(obtained, maxTotal) : null;
     return {
       ...student,
       marks,
       total: obtained,
       maxTotal,
       percent,
-      grade: gradeFor(percent),
+      grade: gradeFor(percent, rules.bands),
       outcome: examOutcome(outcomes),
       entered: outcomes.filter((outcome) => outcome !== "PENDING").length,
     };
@@ -371,20 +384,24 @@ async function examPapers(ctx: TenantContext, examId: string): Promise<PaperRow[
 
 /** The exam with its papers and every student's tabulated result. School Admin. */
 export async function getExamDetail(ctx: TenantContext, examId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "VIEW");
   const exam = await requireExam(ctx, examId);
   const [papers, roster] = await Promise.all([
     examPapers(ctx, exam.id),
     sectionRoster(ctx, exam.sectionId, exam.academicSessionId),
   ]);
-  const results = await ctx.db.assessmentResult.findMany({
-    where: { assessmentId: { in: papers.map((paper) => paper.id) } },
-    select: { assessmentId: true, studentId: true, marksObtained: true, absent: true, remarks: true },
-  });
-  const students = tabulate(papers, roster, results);
+  const [results, rules, submitted] = await Promise.all([
+    ctx.db.assessmentResult.findMany({
+      where: { assessmentId: { in: papers.map((paper) => paper.id) } },
+      select: { assessmentId: true, studentId: true, marksObtained: true, absent: true, exempt: true, remarks: true },
+    }),
+    gradingRules(ctx),
+    ctx.db.assessment.count({ where: { examId: exam.id, marksStatus: "SUBMITTED" } }),
+  ]);
+  const students = tabulate(papers, roster, results, rules);
   const enteredBy = new Map<string, number>();
   for (const row of results) {
-    if (row.marksObtained !== null || row.absent) enteredBy.set(row.assessmentId, (enteredBy.get(row.assessmentId) ?? 0) + 1);
+    if (isEntered(row)) enteredBy.set(row.assessmentId, (enteredBy.get(row.assessmentId) ?? 0) + 1);
   }
   const now = today();
   const rows = papers.map((paper) => ({ ...paper, held: paper.date <= now, entered: enteredBy.get(paper.id) ?? 0, expected: roster.length }));
@@ -401,6 +418,15 @@ export async function getExamDetail(ctx: TenantContext, examId: string) {
     students,
     stage: examStage(progress),
     blocker: publishBlocker(progress),
+    rules,
+    review: {
+      /** Papers whose marks the teacher (or office) has submitted. */
+      submittedPapers: submitted,
+      verified: exam.verifiedAt !== null,
+      verifiedAt: exam.verifiedAt,
+      /** Verify needs every paper complete and submitted; publish needs verification. */
+      canVerify: exam.status !== "PUBLISHED" && exam.verifiedAt === null && !publishBlocker(progress) && submitted === rows.length && rows.length > 0,
+    },
   };
 }
 
@@ -408,7 +434,7 @@ export async function listExams(
   ctx: TenantContext,
   filters: { academicSessionId?: string; sectionId?: string; status?: ExamStatus } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "VIEW");
   const sessionId =
     filters.academicSessionId ??
     (await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } }))?.id;
@@ -425,6 +451,7 @@ export async function listExams(
       id: true,
       name: true,
       status: true,
+      verifiedAt: true,
       startDate: true,
       endDate: true,
       sectionId: true,
@@ -433,7 +460,8 @@ export async function listExams(
         select: {
           id: true,
           date: true,
-          _count: { select: { results: { where: { OR: [{ marksObtained: { not: null } }, { absent: true }] } } } },
+          marksStatus: true,
+          _count: { select: { results: { where: { OR: [{ marksObtained: { not: null } }, { absent: true }, { exempt: true }] } } } },
         },
       },
     },
@@ -476,6 +504,10 @@ export async function listExams(
         papers: exam.papers.length,
         entered,
         expected: exam.papers.length * students,
+        /** Every paper's marks submitted (needed before verifying). */
+        allSubmitted: exam.papers.length > 0 && exam.papers.every((paper) => paper.marksStatus === "SUBMITTED"),
+        /** Reviewed and verified: required before publishing. */
+        verified: exam.verifiedAt !== null,
         /** DRAFT → IN_PROGRESS → MARKS_PENDING → READY_TO_PUBLISH → PUBLISHED, from the marks. */
         stage: examStage(progress),
       };
@@ -483,36 +515,77 @@ export async function listExams(
     .sort((a, b) => b.startDate.getTime() - a.startDate.getTime() || a.level - b.level || a.section.localeCompare(b.section));
 }
 
+/** Why an exam cannot be verified yet, or null when it can: every paper held, complete and submitted. */
+async function verifyBlocker(ctx: TenantContext, exam: { id: string; sectionId: string; academicSessionId: string }) {
+  const [papers, roster] = await Promise.all([
+    ctx.db.assessment.findMany({ where: { examId: exam.id }, select: { id: true, marksStatus: true, subject: { select: { name: true } } } }),
+    sectionRoster(ctx, exam.sectionId, exam.academicSessionId),
+  ]);
+  const entered = await ctx.db.assessmentResult.count({
+    where: {
+      assessmentId: { in: papers.map((paper) => paper.id) },
+      studentId: { in: roster.map((row) => row.studentId) },
+      OR: [{ marksObtained: { not: null } }, { absent: true }, { exempt: true }],
+    },
+  });
+  const notHeld = await ctx.db.assessment.count({ where: { examId: exam.id, date: { gt: today() } } });
+  const blocker = publishBlocker({ published: false, papers: papers.length, notHeld, entered, expected: papers.length * roster.length });
+  if (blocker) return blocker;
+  const unsubmitted = papers.filter((paper) => paper.marksStatus !== "SUBMITTED");
+  if (unsubmitted.length) {
+    return {
+      headline: "Marks not submitted yet.",
+      detail: `${unsubmitted.map((paper) => paper.subject.name).join(", ")} still ${unsubmitted.length === 1 ? "has" : "have"} draft marks. The teacher (or the office) submits them first.`,
+      action: "marks" as const,
+    };
+  }
+  return null;
+}
+
 /**
- * Publish results. Refused for any exam with marks still missing, and then
- * for none of them: a report card with blank subjects is not a result.
+ * Review step: a School Admin or Principal checks the submitted marks and
+ * verifies the exam. Needs every paper complete and submitted. Reopening a
+ * paper or withdrawing the results clears it again.
+ */
+export async function verifyExam(ctx: TenantContext, examId: string): Promise<void> {
+  assertCan(ctx, "exams", "APPROVE");
+  const exam = await requireExam(ctx, examId);
+  if (exam.status === "PUBLISHED") throw new AppError("VALIDATION", "These results are already published.");
+  if (exam.verifiedAt) return;
+  const blocker = await verifyBlocker(ctx, exam);
+  if (blocker) throw new AppError("VALIDATION", `${blocker.headline} ${blocker.detail}`);
+  const { count } = await ctx.db.exam.updateMany({ where: { id: exam.id, status: "DRAFT", verifiedAt: null }, data: { verifiedAt: new Date(), verifiedById: ctx.user.id } });
+  if (!count) return;
+  await recordAudit({
+    action: "RESULTS_VERIFIED",
+    entityType: "Exam",
+    entityId: exam.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Results of "${exam.name}" for ${sectionLabel(exam.section)} reviewed and verified.`,
+  });
+}
+
+/**
+ * Publish results. Each exam must be complete, submitted and verified first —
+ * draft or unchecked marks never reach families. Refused for any one exam and
+ * then for none of them: a report card with blank subjects is not a result.
  */
 export async function publishExams(ctx: TenantContext, examIds: string[]): Promise<{ published: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "PUBLISH");
   const unique = [...new Set(examIds)];
   const exams = await ctx.db.exam.findMany({
     where: { id: { in: unique } },
-    select: { id: true, name: true, status: true, sectionId: true, academicSessionId: true, section: { select: SECTION_LABEL_SELECT } },
+    select: { id: true, name: true, status: true, verifiedAt: true, sectionId: true, academicSessionId: true, section: { select: SECTION_LABEL_SELECT } },
   });
   if (exams.length !== unique.length) throw new NotFoundError("An exam was not found.");
 
   const incomplete: Array<{ label: string; headline: string; detail: string; action: "papers" | "marks" }> = [];
   for (const exam of exams) {
     if (exam.status === "PUBLISHED") continue;
-    const [papers, roster] = await Promise.all([
-      ctx.db.assessment.findMany({ where: { examId: exam.id }, select: { id: true } }),
-      sectionRoster(ctx, exam.sectionId, exam.academicSessionId),
-    ]);
-    const entered = await ctx.db.assessmentResult.count({
-      where: {
-        assessmentId: { in: papers.map((paper) => paper.id) },
-        studentId: { in: roster.map((row) => row.studentId) },
-        OR: [{ marksObtained: { not: null } }, { absent: true }],
-      },
-    });
-    const notHeld = await ctx.db.assessment.count({ where: { examId: exam.id, date: { gt: today() } } });
-    const blocker = publishBlocker({ published: false, papers: papers.length, notHeld, entered, expected: papers.length * roster.length });
+    const blocker = await verifyBlocker(ctx, exam);
     if (blocker) incomplete.push({ label: sectionLabel(exam.section), ...blocker });
+    else if (!exam.verifiedAt) incomplete.push({ label: sectionLabel(exam.section), headline: "Not verified yet.", detail: "A School Admin or Principal reviews and verifies the marks before they are published.", action: "marks" });
   }
   if (incomplete.length) {
     // Say what is wrong, then what to do — in the words the exam page uses.
@@ -527,17 +600,10 @@ export async function publishExams(ctx: TenantContext, examIds: string[]): Promi
 
   const toPublish = exams.filter((exam) => exam.status !== "PUBLISHED");
   const now = new Date();
-  await ctx.db.$transaction([
-    ctx.db.exam.updateMany({
-      where: { id: { in: toPublish.map((exam) => exam.id) } },
-      data: { status: "PUBLISHED", publishedAt: now },
-    }),
-    // Published papers are final: their marks lock with the exam.
-    ctx.db.assessment.updateMany({
-      where: { examId: { in: toPublish.map((exam) => exam.id) }, marksStatus: "DRAFT" },
-      data: { marksStatus: "SUBMITTED", submittedAt: now, submittedById: ctx.user.id },
-    }),
-  ]);
+  await ctx.db.exam.updateMany({
+    where: { id: { in: toPublish.map((exam) => exam.id) }, status: "DRAFT", verifiedAt: { not: null } },
+    data: { status: "PUBLISHED", publishedAt: now, publishedById: ctx.user.id },
+  });
 
   for (const exam of toPublish) {
     await recordAudit({
@@ -552,13 +618,21 @@ export async function publishExams(ctx: TenantContext, examIds: string[]): Promi
   return { published: toPublish.length };
 }
 
-export async function unpublishExam(ctx: TenantContext, examId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+/**
+ * Withdraw published results — always with the reason, which is on the audit
+ * log. The papers open again, and the exam must be verified again before it
+ * can be republished. (For one wrong mark, `correctPublishedResult` keeps the
+ * rest of the results in families' hands.)
+ */
+export async function unpublishExam(ctx: TenantContext, examId: string, reason: string): Promise<void> {
+  assertCan(ctx, "exams", "PUBLISH");
+  const why = reason.trim();
+  if (why.length < 3) throw new AppError("VALIDATION", "Say why the results are being withdrawn.");
   const exam = await requireExam(ctx, examId);
   if (exam.status !== "PUBLISHED") return;
   // Withdrawn for correction: the papers open again too.
   await ctx.db.$transaction([
-    ctx.db.exam.updateMany({ where: { id: exam.id }, data: { status: "DRAFT", publishedAt: null } }),
+    ctx.db.exam.updateMany({ where: { id: exam.id }, data: { status: "DRAFT", publishedAt: null, publishedById: null, verifiedAt: null, verifiedById: null } }),
     ctx.db.assessment.updateMany({ where: { examId: exam.id }, data: { marksStatus: "DRAFT", submittedAt: null, submittedById: null } }),
   ]);
   await recordAudit({
@@ -567,7 +641,53 @@ export async function unpublishExam(ctx: TenantContext, examId: string): Promise
     entityId: exam.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Results of "${exam.name}" for ${sectionLabel(exam.section)} withdrawn for correction.`,
+    summary: `Results of "${exam.name}" for ${sectionLabel(exam.section)} withdrawn for correction: ${why}`,
+    metadata: { reason: why },
+  });
+}
+
+/**
+ * Correct one mark on published results without withdrawing the exam. School
+ * Admin or Principal only, always with a reason; the audit log keeps the old
+ * and new value. Families see the corrected result straight away.
+ */
+export async function correctPublishedResult(
+  ctx: TenantContext,
+  input: { assessmentId: string; studentId: string; marks: number | null; status: "MARKS" | "ABSENT" | "EXEMPT"; reason: string },
+): Promise<void> {
+  assertCan(ctx, "exams", "APPROVE");
+  const why = input.reason.trim();
+  if (why.length < 3) throw new AppError("VALIDATION", "Say why the mark is being corrected.");
+  const paper = await ctx.db.assessment.findFirst({
+    where: { id: input.assessmentId },
+    select: { id: true, name: true, maxMarks: true, sectionId: true, academicSessionId: true, streamId: true, subject: { select: { name: true } }, section: { select: SECTION_LABEL_SELECT }, exam: { select: { id: true, name: true, status: true } } },
+  });
+  if (!paper) throw new NotFoundError("That paper was not found.");
+  if (paper.exam?.status !== "PUBLISHED") throw new AppError("VALIDATION", "These results are not published. Correct the marks on the marks sheet instead.");
+  const roster = await sectionRoster(ctx, paper.sectionId, paper.academicSessionId, paper.streamId);
+  if (!roster.some((row) => row.studentId === input.studentId)) throw new NotFoundError("That student is not in this class.");
+  if (input.status === "MARKS") {
+    if (input.marks === null || !Number.isInteger(input.marks) || input.marks < 0 || input.marks > paper.maxMarks) {
+      throw new ValidationError("Please correct the highlighted fields.", { marks: [`Marks must be a whole number from 0 to ${paper.maxMarks}.`] });
+    }
+  }
+  const previous = await ctx.db.assessmentResult.findFirst({ where: { assessmentId: paper.id, studentId: input.studentId }, select: { marksObtained: true, absent: true, exempt: true } });
+  const data = { marksObtained: input.status === "MARKS" ? input.marks : null, absent: input.status === "ABSENT", exempt: input.status === "EXEMPT" };
+  await ctx.db.assessmentResult.upsert({
+    where: { schoolId_assessmentId_studentId: { schoolId: ctx.schoolId, assessmentId: paper.id, studentId: input.studentId } },
+    create: { schoolId: ctx.schoolId, assessmentId: paper.id, studentId: input.studentId, ...data },
+    update: data,
+  });
+  const label = (row: { marksObtained: number | null; absent: boolean; exempt: boolean } | null) => (!row ? "no entry" : row.exempt ? "Exempt" : row.absent ? "Absent" : String(row.marksObtained));
+  const student = roster.find((row) => row.studentId === input.studentId)!;
+  await recordAudit({
+    action: "RESULT_CORRECTED",
+    entityType: "Assessment",
+    entityId: paper.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `Published result corrected: ${student.name}, ${paper.subject.name} — ${paper.exam.name} (${sectionLabel(paper.section)}): ${label(previous)} → ${label(data)}. Reason: ${why}`,
+    metadata: { studentId: input.studentId, examId: paper.exam.id, from: previous, to: data, reason: why },
   });
 }
 
@@ -582,7 +702,7 @@ export async function unpublishExam(ctx: TenantContext, examId: string): Promise
  * still teach that subject (and stream) there — never another teacher's test.
  */
 async function requirePaper(ctx: TenantContext, assessmentId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "TEACHER");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
   const paper = await ctx.db.assessment.findFirst({
     where: { id: assessmentId },
     select: {
@@ -625,26 +745,28 @@ export async function getMarksSheet(ctx: TenantContext, assessmentId: string) {
     sectionRoster(ctx, paper.sectionId, paper.academicSessionId, paper.streamId),
     ctx.db.assessmentResult.findMany({
       where: { assessmentId: paper.id },
-      select: { studentId: true, marksObtained: true, absent: true, remarks: true },
+      select: { studentId: true, marksObtained: true, absent: true, exempt: true, remarks: true },
     }),
   ]);
+  const rules = await gradingRules(ctx);
   const byStudent = new Map(results.map((row) => [row.studentId, row]));
-  const passMark = passMarkFor(paper.maxMarks, paper.passMarks);
+  const passMark = passMarkFor(paper.maxMarks, paper.passMarks, rules.passPercent);
   const held = paper.date <= today();
   const published = paper.exam?.status === "PUBLISHED";
   const submitted = paper.marksStatus === "SUBMITTED";
   const rows = roster.map((student) => {
     const result = byStudent.get(student.studentId) ?? null;
-    const marks = result?.marksObtained ?? null;
+    const marks = result?.exempt ? null : (result?.marksObtained ?? null);
     return {
       ...student,
       marksObtained: marks,
       absent: result?.absent ?? false,
+      exempt: result?.exempt ?? false,
       remark: result?.remarks ?? null,
       percent: marks === null ? null : percentage(marks, paper.maxMarks),
-      /** Entered, absent, or still missing — what the teacher must finish. */
-      entry: result?.absent ? ("ABSENT" as const) : marks !== null ? ("ENTERED" as const) : ("MISSING" as const),
-      outcome: paperOutcome(paper, result),
+      /** Entered, absent, exempt, or still missing — what the teacher must finish. */
+      entry: result?.exempt ? ("EXEMPT" as const) : result?.absent ? ("ABSENT" as const) : marks !== null ? ("ENTERED" as const) : ("MISSING" as const),
+      outcome: paperOutcome(paper, result, rules.passPercent),
     };
   });
 
@@ -672,7 +794,7 @@ export async function getMarksSheet(ctx: TenantContext, assessmentId: string) {
     complete: rows.every((row) => row.entry !== "MISSING"),
     canSubmit: !published && !submitted && held,
     /** The office reopens a submitted paper for correction (an exam: by unpublishing). */
-    canReopen: ctx.user.role === "SCHOOL_ADMIN" && submitted && !published,
+    canReopen: isSchoolLeader(ctx.user.role) && submitted && !published,
     rows,
   };
 }
@@ -712,6 +834,7 @@ export async function saveMarks(
     if (seen.has(entry.studentId)) (errors[key] ??= []).push("This student appears twice.");
     seen.add(entry.studentId);
     if (entry.absent && entry.marks !== null) (errors[key] ??= []).push("An absent student cannot have marks.");
+    if (entry.exempt && (entry.marks !== null || entry.absent)) (errors[key] ??= []).push("An exempt student has no marks and is not absent.");
     if (entry.marks !== null && (!Number.isInteger(entry.marks) || entry.marks < 0 || entry.marks > paper.maxMarks)) {
       (errors[key] ??= []).push(`Marks must be a whole number from 0 to ${paper.maxMarks}.`);
     }
@@ -719,8 +842,16 @@ export async function saveMarks(
   }
   if (Object.keys(errors).length) throw new ValidationError("Some marks need correcting.", errors);
 
-  const toClear = entries.filter((entry) => entry.marks === null && !entry.absent && !entry.remark);
+  const toClear = entries.filter((entry) => entry.marks === null && !entry.absent && !entry.exempt && !entry.remark);
   const toSave = entries.filter((entry) => !toClear.includes(entry));
+  // What each mark was before, so the audit log can say exactly what changed.
+  const before = new Map(
+    (await ctx.db.assessmentResult.findMany({ where: { assessmentId: paper.id, studentId: { in: entries.map((e) => e.studentId) } }, select: { studentId: true, marksObtained: true, absent: true, exempt: true } })).map((row) => [row.studentId, row]),
+  );
+  const shown = (row: { marksObtained: number | null; absent: boolean; exempt?: boolean } | undefined) => (!row ? null : row.exempt ? "EXEMPT" : row.absent ? "ABSENT" : row.marksObtained);
+  const changes = entries
+    .map((entry) => ({ studentId: entry.studentId, from: shown(before.get(entry.studentId)), to: toClear.includes(entry) ? null : shown({ marksObtained: entry.marks, absent: entry.absent, exempt: entry.exempt }) }))
+    .filter((change) => change.from !== change.to);
 
   await ctx.db.$transaction([
     ...(toClear.length
@@ -733,11 +864,12 @@ export async function saveMarks(
           schoolId: ctx.schoolId,
           assessmentId: paper.id,
           studentId: entry.studentId,
-          marksObtained: entry.absent ? null : entry.marks,
-          absent: entry.absent,
+          marksObtained: entry.absent || entry.exempt ? null : entry.marks,
+          absent: entry.exempt ? false : entry.absent,
+          exempt: entry.exempt ?? false,
           remarks: entry.remark,
         },
-        update: { marksObtained: entry.absent ? null : entry.marks, absent: entry.absent, remarks: entry.remark },
+        update: { marksObtained: entry.absent || entry.exempt ? null : entry.marks, absent: entry.exempt ? false : entry.absent, exempt: entry.exempt ?? false, remarks: entry.remark },
       }),
     ),
   ]);
@@ -748,8 +880,9 @@ export async function saveMarks(
     entityId: paper.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    // Counts only: the marks themselves are the student's, not the log's.
-    summary: `Marks for ${paper.subject.name} — ${paper.name} (${sectionLabel(paper.section)}): ${toSave.length} saved${toClear.length ? `, ${toClear.length} cleared` : ""}.`,
+    summary: `Marks for ${paper.subject.name} — ${paper.name} (${sectionLabel(paper.section)}): ${toSave.length} saved${toClear.length ? `, ${toClear.length} cleared` : ""}${changes.length ? `, ${changes.length} changed` : ""}.`,
+    // Who changed which mark, from what to what — for the school's own audit.
+    metadata: changes.length ? { assessmentId: paper.id, changes: changes.slice(0, 500) } : undefined,
   });
 
   return { saved: toSave.length, cleared: toClear.length };
@@ -1016,7 +1149,7 @@ export async function submitMarks(ctx: TenantContext, assessmentId: string): Pro
   if (missing.length) {
     throw new AppError(
       "VALIDATION",
-      `${missing.length} student${missing.length === 1 ? " has" : "s have"} no marks yet (${missing.slice(0, 3).map((row) => row.name).join(", ")}${missing.length > 3 ? "…" : ""}). Enter marks or tick Absent, save, then submit.`,
+      `${missing.length} student${missing.length === 1 ? " has" : "s have"} no marks yet (${missing.slice(0, 3).map((row) => row.name).join(", ")}${missing.length > 3 ? "…" : ""}). Enter marks or tick Absent or Exempt, save, then submit.`,
     );
   }
   const { count } = await ctx.db.assessment.updateMany({
@@ -1037,13 +1170,17 @@ export async function submitMarks(ctx: TenantContext, assessmentId: string): Pro
 
 /** School Admin: reopen submitted marks for a correction. The reason is recorded. */
 export async function reopenMarks(ctx: TenantContext, assessmentId: string, reason: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "EDIT");
   const paper = await requirePaper(ctx, assessmentId);
   if (paper.exam?.status === "PUBLISHED") {
     throw new AppError("VALIDATION", "This exam's results are published. Unpublish the exam to correct its marks.");
   }
   if (paper.marksStatus !== "SUBMITTED") return;
-  await ctx.db.assessment.updateMany({ where: { id: paper.id }, data: { marksStatus: "DRAFT", submittedAt: null, submittedById: null } });
+  await ctx.db.$transaction([
+    ctx.db.assessment.updateMany({ where: { id: paper.id }, data: { marksStatus: "DRAFT", submittedAt: null, submittedById: null } }),
+    // Changed marks must be checked again before the exam is published.
+    ...(paper.exam ? [ctx.db.exam.updateMany({ where: { id: paper.exam.id }, data: { verifiedAt: null, verifiedById: null } })] : []),
+  ]);
   await recordAudit({
     action: "MARKS_REOPENED",
     entityType: "Assessment",
@@ -1096,7 +1233,7 @@ const TEST_ROW_SELECT = {
   stream: { select: { name: true } },
   teacher: { select: { firstName: true, lastName: true } },
   exam: { select: { id: true, name: true, status: true } },
-  _count: { select: { results: { where: { OR: [{ marksObtained: { not: null } }, { absent: true }] } } } },
+  _count: { select: { results: { where: { OR: [{ marksObtained: { not: null } }, { absent: true }, { exempt: true }] } } } },
 } satisfies Prisma.AssessmentSelect;
 
 /** Class sizes for a set of tests, counting only the stream a stream test is for. */
@@ -1188,7 +1325,7 @@ export type TestFilters = {
  *   * published — results families can see (submitted tests, published exams).
  */
 export async function listTests(ctx: TenantContext, filters: TestFilters = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "VIEW");
   const session = await requireCurrentSession(ctx);
   const now = today();
   // Each filter is its own AND clause, so their ORs never overwrite each other.
@@ -1213,7 +1350,7 @@ export async function listTests(ctx: TenantContext, filters: TestFilters = {}) {
 
 /** Counts for the admin's tabs. */
 export async function testCounts(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "exams", "VIEW");
   const session = await requireCurrentSession(ctx);
   const now = today();
   const [all, pending, published] = await Promise.all([
@@ -1260,7 +1397,7 @@ export async function listMyPapers(ctx: TenantContext) {
       subject: { select: { name: true } },
       section: { select: SECTION_LABEL_SELECT },
       exam: { select: { name: true, status: true } },
-      _count: { select: { results: { where: { OR: [{ marksObtained: { not: null } }, { absent: true }] } } } },
+      _count: { select: { results: { where: { OR: [{ marksObtained: { not: null } }, { absent: true }, { exempt: true }] } } } },
     },
   });
 

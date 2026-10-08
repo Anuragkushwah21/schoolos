@@ -13,7 +13,10 @@ import {
 export const NOTICE_AUDIENCES = ["ALL", "TEACHERS", "STUDENTS", "PARENTS", "NON_TEACHING_STAFF"] as const;
 export const NOTICE_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
 
-export const NOTICE_SCOPES = ["SCHOOL", "CLASS", "SECTION", "STUDENTS"] as const;
+export const NOTICE_SCOPES = ["SCHOOL", "CLASS", "SECTION", "STUDENTS", "STREAM"] as const;
+
+/** Notice, announcement or emergency alert — one table, a different weight. */
+export const NOTICE_KINDS = ["NOTICE", "ANNOUNCEMENT", "EMERGENCY"] as const;
 
 /** "ADM0001, ADM0002" or one per line → a clean list. */
 const admissionNumbers = z
@@ -34,6 +37,7 @@ export const noticeSchema = z
     title: requiredText("a title", 150),
     body: requiredText("the notice text", 5000),
     audience: z.enum(NOTICE_AUDIENCES),
+    kind: z.enum(NOTICE_KINDS).default("NOTICE"),
     status: z.enum(NOTICE_STATUSES),
     isPublic: checkbox,
     publishAt: optionalDate,
@@ -42,6 +46,7 @@ export const noticeSchema = z
     scope: z.enum(NOTICE_SCOPES).default("SCHOOL"),
     classId: optionalId,
     sectionId: optionalId,
+    streamId: optionalId,
     studentAdmissionNumbers: admissionNumbers,
   })
   .refine((data) => !data.expiresAt || !data.publishAt || data.expiresAt >= data.publishAt, {
@@ -50,6 +55,7 @@ export const noticeSchema = z
   })
   .refine((data) => data.scope !== "CLASS" || Boolean(data.classId), { message: "Choose the class", path: ["classId"] })
   .refine((data) => data.scope !== "SECTION" || Boolean(data.sectionId), { message: "Choose the section", path: ["sectionId"] })
+  .refine((data) => data.scope !== "STREAM" || Boolean(data.streamId), { message: "Choose the stream", path: ["streamId"] })
   .refine((data) => data.scope !== "STUDENTS" || data.studentAdmissionNumbers.length > 0, {
     message: "List at least one admission number",
     path: ["studentAdmissionNumbers"],

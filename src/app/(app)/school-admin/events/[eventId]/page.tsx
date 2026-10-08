@@ -19,7 +19,7 @@ export const metadata: Metadata = { title: "Event" };
 export default async function EditEventPage(
   props: PageProps<"/school-admin/events/[eventId]">,
 ) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { eventId } = await props.params;
   const event = await orNotFound(viewEvent(ctx, eventId));
 

@@ -1,12 +1,15 @@
 import "server-only";
 
 import { addDays, dayOfWeek, today, toDateInput } from "@/lib/dates";
+import { NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
+import { visibleToStream } from "@/server/academics/stream-scope";
 import type { TenantContext } from "@/server/auth/current-user";
 import { type AttendanceCounts, attendedShare, emptyCounts } from "@/server/attendance/service";
 import { monthlyAttendance } from "@/server/analytics/student";
 import { schoolClosureOn } from "@/server/calendar/holidays";
 import { studentStreamWhere, VISIBLE_PAPER } from "@/server/exams/service";
+import { readStudentLedger } from "@/server/finance/fee-reports";
 import { readStudentFees } from "@/server/finance/fees";
 import { type ChildContext, requireChild } from "@/server/parent/access";
 
@@ -52,6 +55,7 @@ export async function getChildToday(ctx: TenantContext, studentId: string, date:
     ctx.db.timetableSlot.findMany({
       where: {
         sectionId: placement.sectionId,
+        AND: [visibleToStream(placement.streamId)],
         academicSessionId: placement.sessionId,
         dayOfWeek: dayOfWeek(date),
       },
@@ -61,12 +65,13 @@ export async function getChildToday(ctx: TenantContext, studentId: string, date:
         startMinute: true,
         endMinute: true,
         room: true,
+        stream: { select: { name: true } },
         subject: { select: { name: true } },
         teacher: { select: { firstName: true, lastName: true } },
       },
     }),
     ctx.db.classSession.findMany({
-      where: { date, timetableSlot: { sectionId: placement.sectionId } },
+      where: { date, timetableSlot: { sectionId: placement.sectionId, AND: [visibleToStream(placement.streamId)] } },
       select: {
         timetableSlotId: true,
         status: true,
@@ -78,6 +83,7 @@ export async function getChildToday(ctx: TenantContext, studentId: string, date:
     ctx.db.homework.findMany({
       where: {
         sectionId: placement.sectionId,
+        AND: [visibleToStream(placement.streamId)],
         status: "PUBLISHED",
         dueOn: { gte: date },
       },
@@ -235,6 +241,7 @@ export async function getChildTimetable(ctx: TenantContext, studentId: string) {
   const slots = await ctx.db.timetableSlot.findMany({
     where: {
       sectionId: child.placement.sectionId,
+      AND: [visibleToStream(child.placement.streamId)],
       academicSessionId: child.placement.sessionId,
     },
     orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
@@ -244,6 +251,7 @@ export async function getChildTimetable(ctx: TenantContext, studentId: string) {
       startMinute: true,
       endMinute: true,
       room: true,
+      stream: { select: { name: true } },
       subject: { select: { name: true } },
       teacher: { select: { firstName: true, lastName: true } },
     },
@@ -275,6 +283,7 @@ export async function getChildActivity(
       date: { gte: from },
       timetableSlot: {
         sectionId: child.placement.sectionId,
+        AND: [visibleToStream(child.placement.streamId)],
         academicSessionId: child.placement.sessionId,
         ...(options.subjectId ? { subjectId: options.subjectId } : {}),
       },
@@ -303,6 +312,7 @@ export async function getChildActivity(
   const subjects = await ctx.db.timetableSlot.findMany({
     where: {
       sectionId: child.placement.sectionId,
+      AND: [visibleToStream(child.placement.streamId)],
       academicSessionId: child.placement.sessionId,
     },
     distinct: ["subjectId"],
@@ -355,6 +365,7 @@ export async function getChildHomework(ctx: TenantContext, studentId: string) {
   const rows = await ctx.db.homework.findMany({
     where: {
       sectionId: child.placement.sectionId,
+      AND: [visibleToStream(child.placement.streamId)],
       academicSessionId: child.placement.sessionId,
       status: "PUBLISHED",
     },
@@ -572,7 +583,7 @@ export async function getChildReport(
     ctx.db.classSession.findMany({
       where: {
         date: { gte: from, lte: to },
-        timetableSlot: { sectionId: child.placement.sectionId },
+        timetableSlot: { sectionId: child.placement.sectionId, AND: [visibleToStream(child.placement.streamId)] },
       },
       orderBy: [{ date: "asc" }],
       select: {
@@ -586,6 +597,7 @@ export async function getChildReport(
     ctx.db.homework.findMany({
       where: {
         sectionId: child.placement.sectionId,
+        AND: [visibleToStream(child.placement.streamId)],
         status: "PUBLISHED",
         assignedOn: { gte: from, lte: to },
       },
@@ -696,6 +708,50 @@ export async function getChildFees(ctx: TenantContext, studentId: string) {
   const child = await requireChild(ctx, studentId);
   const account = await readStudentFees(ctx, studentId, child.placement.sessionId);
   return { child, ...account };
+}
+
+/**
+ * The child's profile as the school holds it: personal details, class, class
+ * teacher, subject teachers, and the guardians on file — read-only. Only for a
+ * child linked to this parent.
+ */
+export async function getChildProfile(ctx: TenantContext, studentId: string) {
+  const child = await requireChild(ctx, studentId);
+  const [student, classTeacher, teachers] = await Promise.all([
+    ctx.db.student.findFirst({
+      where: { id: studentId },
+      select: {
+        admissionNumber: true,
+        dateOfBirth: true,
+        gender: true,
+        bloodGroup: true,
+        admissionDate: true,
+        addressLine: true,
+        city: true,
+        parents: { orderBy: { isPrimary: "desc" }, select: { relationship: true, isPrimary: true, parent: { select: { firstName: true, lastName: true } } } },
+      },
+    }),
+    ctx.db.classTeacherAssignment.findFirst({ where: { sectionId: child.placement.sectionId, toDate: null }, select: { teacher: { select: { firstName: true, lastName: true } } } }),
+    ctx.db.teacherSubjectAssignment.findMany({
+      where: { sectionId: child.placement.sectionId, academicSessionId: child.placement.sessionId },
+      orderBy: { subject: { name: "asc" } },
+      select: { subject: { select: { name: true } }, teacher: { select: { firstName: true, lastName: true } } },
+    }),
+  ]);
+  if (!student) throw new NotFoundError();
+  return {
+    child,
+    student: { ...student, guardians: student.parents.map((row) => ({ name: fullName(row.parent), relationship: row.relationship, primary: row.isPrimary })) },
+    classTeacher: classTeacher ? fullName(classTeacher.teacher) : null,
+    subjectTeachers: teachers.map((row) => ({ subject: row.subject.name, teacher: fullName(row.teacher) })),
+  };
+}
+
+/** One child's fee statement (ledger) for the current session — after the same link check. */
+export async function getChildLedger(ctx: TenantContext, studentId: string) {
+  const child = await requireChild(ctx, studentId);
+  const ledger = await readStudentLedger(ctx, studentId, child.placement.sessionId);
+  return { child, ledger };
 }
 
 // -----------------------------------------------------------------------------

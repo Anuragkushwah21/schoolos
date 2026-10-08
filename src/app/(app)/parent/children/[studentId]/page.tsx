@@ -8,11 +8,12 @@ import { ChildSwitcher, ChildTabs } from "@/features/parent/child-nav";
 import { FocusList, TodaysUpdate } from "@/features/parent/today";
 import { requireTenant } from "@/server/auth/current-user";
 import { orNotFound } from "@/server/page-helpers";
-import { childTransport } from "@/server/operations/transport";
-import { formatDate } from "@/lib/dates";
+import { childTransportToday, type TripState } from "@/server/transport/parent-status";
+import { formatDate, formatSchoolTime } from "@/lib/dates";
 import { childLoans } from "@/server/operations/library";
 import { findChild, listMyChildren } from "@/server/parent/access";
 import { getChildFocus, getChildToday } from "@/server/parent/child";
+import { hasModule } from "@/server/platform/modules";
 
 export const metadata: Metadata = { title: "Child" };
 
@@ -48,10 +49,10 @@ export default async function ParentChildPage(props: PageProps<"/parent/children
     listMyChildren(ctx),
     orNotFound(getChildToday(ctx, studentId)),
     orNotFound(getChildFocus(ctx, studentId)),
-    // After `findChild` above: only a linked child's transport is read.
-    childTransport(ctx, child.student.id),
+    // Checks the guardian link itself: only this linked child's transport.
+    hasModule(ctx, "TRANSPORT").then((on) => (on ? childTransportToday(ctx, child.student.id) : null)),
     // Also after `findChild`: only this linked child's books.
-    childLoans(ctx, child.student.id),
+    hasModule(ctx, "LIBRARY").then((on) => (on ? childLoans(ctx, child.student.id) : [])),
   ]);
 
   const placed = children.filter((sibling) => sibling.sectionId !== null);
@@ -120,27 +121,42 @@ export default async function ParentChildPage(props: PageProps<"/parent/children
       {transport ? (
         <Card className="mt-6">
           <CardHeader>
-            <CardTitle>School transport</CardTitle>
-            <CardDescription>{transport.route}{transport.vehicle ? ` · ${transport.vehicle}` : ""}</CardDescription>
+            <CardTitle>Today&apos;s transport</CardTitle>
+            <CardDescription>
+              {transport.route}
+              {transport.vehicle ? ` · ${transport.vehicle}` : ""} · stop: {transport.stop ?? "not set"}
+            </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3 text-sm sm:grid-cols-3">
+          <CardContent className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <TripLine label="Pickup" planned={transport.scheduled.pickup} trip={transport.pickup} />
+            <TripLine label="Drop" planned={transport.scheduled.drop} trip={transport.drop} />
             <p>
-              <span className="text-muted-foreground block text-xs">Stop</span>
-              {transport.stop ?? "Not set"}
-              {transport.pickup ? ` · pickup ${transport.pickup}` : ""}
-              {transport.drop ? ` · drop ${transport.drop}` : ""}
+              <span className="text-muted-foreground block text-xs">Driver today</span>
+              {transport.driver ? `${transport.driver.name}${transport.driver.substitute ? " (substitute)" : ""}${transport.driver.phone ? ` · ${transport.driver.phone}` : ""}` : "—"}
             </p>
             <p>
-              <span className="text-muted-foreground block text-xs">Driver</span>
-              {transport.driver ? `${transport.driver.name}${transport.driver.phone ? ` · ${transport.driver.phone}` : ""}` : "—"}
-            </p>
-            <p>
-              <span className="text-muted-foreground block text-xs">Attendant</span>
-              {transport.attendant ? `${transport.attendant.name}${transport.attendant.phone ? ` · ${transport.attendant.phone}` : ""}` : "—"}
+              <span className="text-muted-foreground block text-xs">Attendant today</span>
+              {transport.attendant ? `${transport.attendant.name}${transport.attendant.substitute ? " (substitute)" : ""}${transport.attendant.phone ? ` · ${transport.attendant.phone}` : ""}` : "—"}
             </p>
           </CardContent>
         </Card>
       ) : null}
     </>
+  );
+}
+
+const TRIP_LABEL: Record<TripState, string> = { PENDING: "Pending", PICKED_UP: "Completed", DROPPED: "Completed", NOT_PRESENT: "Not present", ISSUE: "Issue reported" };
+const TRIP_TONE = { PENDING: "neutral", PICKED_UP: "positive", DROPPED: "positive", NOT_PRESENT: "warning", ISSUE: "negative" } as const;
+
+/** "Pickup: Completed 7:32 AM", or Pending with the stop's planned time. */
+function TripLine({ label, planned, trip }: { label: string; planned: string | null; trip: { state: TripState; at: Date | null } }) {
+  return (
+    <div>
+      <span className="text-muted-foreground block text-xs">{label}</span>
+      <span className="flex flex-wrap items-center gap-2">
+        <StatusBadge status={trip.state} label={TRIP_LABEL[trip.state]} tone={TRIP_TONE[trip.state]} />
+        {trip.at ? <span className="tabular-nums">{formatSchoolTime(trip.at)}</span> : planned ? <span className="text-muted-foreground">planned {planned}</span> : null}
+      </span>
+    </div>
   );
 }

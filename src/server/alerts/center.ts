@@ -5,8 +5,8 @@ import { createHash } from "node:crypto";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { prisma } from "@/server/db/prisma";
-import { type FeedAlert, getAdminAlerts, getStaffAlerts, getStudentAlerts, getTeacherAlerts } from "@/server/alerts/feeds";
-import { finalizeDueRegisters } from "@/server/attendance/register";
+import { type FeedAlert, getAdminAlerts, getPrincipalAlerts, getStaffAlerts, getStudentAlerts, getTeacherAlerts } from "@/server/alerts/feeds";
+import { emergencyNotifications } from "@/server/communication/notices";
 import { getParentAlerts } from "@/server/parent/alerts";
 
 /**
@@ -20,12 +20,14 @@ import { getParentAlerts } from "@/server/parent/alerts";
 
 export type CenterAlert = Omit<FeedAlert, "at"> & { at: Date; key: string; read: boolean; childName?: string | null };
 
-const ROLES = ["SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"] as const;
+const ROLES = ["SCHOOL_ADMIN", "PRINCIPAL", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"] as const;
 
 async function rawAlerts(ctx: TenantContext): Promise<Array<FeedAlert & { childName?: string | null }>> {
   switch (ctx.user.role) {
     case "SCHOOL_ADMIN":
       return getAdminAlerts(ctx);
+    case "PRINCIPAL":
+      return getPrincipalAlerts(ctx);
     case "TEACHER":
       return getTeacherAlerts(ctx);
     case "STUDENT":
@@ -45,11 +47,9 @@ export function alertKey(alert: Pick<FeedAlert, "kind" | "childId" | "title" | "
 
 export async function notificationCenter(ctx: TenantContext): Promise<{ alerts: CenterAlert[]; unread: number }> {
   assertRole(ctx.user, ...ROLES);
-  // Every page load asks for the bell, which makes this the steadiest place
-  // to submit drafts whose attendance period has ended (see `register.ts`).
-  await finalizeDueRegisters(ctx);
   const [alerts, user] = await Promise.all([
-    rawAlerts(ctx),
+    // Emergency alerts from the Communication Center come first, for everyone they reach.
+    Promise.all([emergencyNotifications(ctx), rawAlerts(ctx)]).then(([urgent, rest]) => [...urgent, ...rest]),
     prisma.user.findUnique({ where: { id: ctx.user.id }, select: { alertsReadAt: true, readAlertKeys: true } }),
   ]);
   const readKeys = new Set(user?.readAlertKeys ?? []);

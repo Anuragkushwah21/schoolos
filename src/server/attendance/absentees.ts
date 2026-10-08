@@ -2,8 +2,8 @@ import "server-only";
 
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Students marked absent on a day, with everything the office needs to ring
@@ -15,7 +15,7 @@ import type { TenantContext } from "@/server/auth/current-user";
  * `ctx.db` (this school only) and never offered to other roles.
  */
 export async function absentStudents(ctx: TenantContext, input: { date: Date; sectionId?: string }) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "EDIT");
 
   const marks = await ctx.db.studentAttendance.findMany({
     where: { date: input.date, status: "ABSENT", ...(input.sectionId ? { sectionId: input.sectionId } : {}) },

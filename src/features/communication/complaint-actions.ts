@@ -26,7 +26,7 @@ export async function raiseComplaintAction(_p: Result, formData: FormData): Prom
 export async function handleComplaintAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "TEACHER");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
       await handleComplaint(ctx, parseFormData(handleComplaintSchema, formData));
       return successResult("Complaint updated.");
     },
@@ -37,7 +37,7 @@ export async function handleComplaintAction(_p: Result, formData: FormData): Pro
 export async function bulkComplaintStatusAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { updated } = await bulkComplaintStatus(ctx, parseFormData(bulkComplaintStatusSchema, formData));
       return successResult(`${updated} complaint${updated === 1 ? "" : "s"} updated.`);
     },

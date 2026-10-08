@@ -16,6 +16,8 @@ import { groupLabel, groupSubjectTeachers, type Placement } from "@/server/acade
 import { listMyChildren } from "@/server/parent/access";
 import { teacherConcernOptions } from "@/server/support/concerns";
 import { teachesStudentSubject } from "@/server/support/teaching";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Student support — "which students need extra help, why, and what is being
@@ -97,7 +99,7 @@ async function assertTeacherMaySupport(ctx: TenantContext, teacherId: string, se
 /** Which support records the caller may see: all (admin) or their sections (teacher). */
 /** Which support records the caller may see: all (admin); for a teacher, their own and their class-teacher sections'. */
 async function visibleSupportWhere(ctx: TenantContext): Promise<Prisma.StudentSupportWhereInput> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return {};
+  if (isSchoolLeader(ctx.user.role)) return {};
   assertRole(ctx.user, "TEACHER");
   const teacher = await requireTeacherSelf(ctx);
   const classTeacherOf = await ctx.db.section.findMany({ where: { classTeacherId: teacher.id, academicSession: { isCurrent: true } }, select: { id: true } });
@@ -107,7 +109,7 @@ async function visibleSupportWhere(ctx: TenantContext): Promise<Prisma.StudentSu
 /** The owner or the class teacher may change a record; the admin always may. */
 /** The owner or the class teacher may change a record; the admin always may. */
 async function assertMayEdit(ctx: TenantContext, support: { teacherId: string | null; section: { classTeacherId: string | null } }) {
-  if (ctx.user.role === "SCHOOL_ADMIN") return;
+  if (isSchoolLeader(ctx.user.role)) return;
   const teacher = await requireTeacherSelf(ctx);
   if (support.teacherId !== teacher.id && support.section.classTeacherId !== teacher.id) {
     throw new ForbiddenError("Only the teacher looking after this support, or the class teacher, can change it.");
@@ -175,7 +177,7 @@ export type SupportRow = ReturnType<typeof shape>;
 // -----------------------------------------------------------------------------
 
 export async function createSupport(ctx: TenantContext, input: SupportInput): Promise<string> {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
+  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
   const { student, academicSessionId, section, group } = await currentPlacement(ctx, input.studentId);
 
   if (input.subjectId && !(await ctx.db.subject.count({ where: { id: input.subjectId } }))) {
@@ -266,7 +268,7 @@ export async function createSupport(ctx: TenantContext, input: SupportInput): Pr
 
 /** A follow-up: a note, and/or a change of status, priority or action. */
 export async function followUpSupport(ctx: TenantContext, input: Omit<SupportFollowUpInput, "parentRemark"> & { parentRemark?: string | null }): Promise<void> {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
+  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
   const support = await ctx.db.studentSupport.findFirst({
     where: { AND: [{ id: input.supportId }, await visibleSupportWhere(ctx)] },
     select: { id: true, status: true, priority: true, action: true, teacherId: true, subjectId: true, student: { select: { firstName: true, lastName: true } }, section: { select: { id: true, classTeacherId: true } } },
@@ -328,7 +330,7 @@ export type SupportFilters = {
 };
 
 export async function listSupport(ctx: TenantContext, filters: SupportFilters = {}) {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
+  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
   const status = filters.status ?? "OPEN";
   const rows = await ctx.db.studentSupport.findMany({
     where: {
@@ -367,7 +369,7 @@ export async function listSupport(ctx: TenantContext, filters: SupportFilters = 
  * subjects, how it is going, and how many parent concerns wait for review.
  */
 export async function supportSummary(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
   const [open, byStatus, concernsNew, bySource] = await Promise.all([
     ctx.db.studentSupport.findMany({
       where: { status: { in: [...OPEN_SUPPORT] } },
@@ -395,7 +397,7 @@ export async function supportSummary(ctx: TenantContext) {
 
 /** One record with its follow-ups, the parent's concern and the extra class, for staff. */
 export async function getSupport(ctx: TenantContext, supportId: string) {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
+  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
   const row = await ctx.db.studentSupport.findFirst({
     where: { AND: [{ id: supportId }, await visibleSupportWhere(ctx)] },
     select: {
@@ -447,7 +449,7 @@ export async function getSupport(ctx: TenantContext, supportId: string) {
 
 /** Support on a student's profile, for the office. */
 export async function supportForStudent(ctx: TenantContext, studentId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const rows = await ctx.db.studentSupport.findMany({
     where: { studentId },
     orderBy: [{ resolvedAt: { sort: "asc", nulls: "first" } }, { updatedAt: "desc" }],
@@ -559,7 +561,7 @@ export async function supportSuggestions(ctx: TenantContext) {
 
 /** Students and subjects a teacher may choose from when adding support. */
 export async function supportFormOptions(ctx: TenantContext) {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
+  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
   if (ctx.user.role === "TEACHER") return teacherSupportOptions(ctx);
   const [enrollments, subjects, teachers] = await Promise.all([
     ctx.db.studentEnrollment.findMany({
@@ -611,7 +613,7 @@ async function teacherSupportOptions(ctx: TenantContext) {
 
 /** The details an extra-class meeting is prefilled with. School Admin only. */
 export async function extraClassPrefill(ctx: TenantContext, supportId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const row = await ctx.db.studentSupport.findFirst({ where: { id: supportId }, select: ROW_SELECT });
   if (!row) return null;
   const support = shape(row);
@@ -630,7 +632,7 @@ export async function extraClassPrefill(ctx: TenantContext, supportId: string) {
  * after the meeting exists, inside the same school.
  */
 export async function linkExtraClass(ctx: TenantContext, supportId: string, meetingId: string, when: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   await attachExtraClass(ctx, supportId, meetingId, when);
 }
 
@@ -717,7 +719,7 @@ export async function studentSupportAlerts(ctx: TenantContext, studentId: string
  * teacher, so it shows in each of their Meetings and calendars.
  */
 export async function scheduleExtraClass(ctx: TenantContext, input: ExtraClassInput): Promise<string> {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
+  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
   const support = await ctx.db.studentSupport.findFirst({
     where: { AND: [{ id: input.supportId }, await visibleSupportWhere(ctx)] },
     select: {

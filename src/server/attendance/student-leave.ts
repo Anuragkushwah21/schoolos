@@ -14,6 +14,8 @@ import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireTeacherSelf } from "@/server/auth/teacher-access";
 import { findChild, listMyChildren } from "@/server/parent/access";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Student leave — "Rahul will be away on 2–3 Oct, he is unwell."
@@ -42,7 +44,9 @@ export const LEAVE_REASON_LABEL: Record<StudentLeaveReason, string> = {
 
 /** No single request runs longer than this; longer absences are for the office. */
 export const MAX_LEAVE_DAYS = 60;
-const OPEN: StudentLeaveStatus[] = ["PENDING", "APPROVED"];
+const OPEN: StudentLeaveStatus[] = ["PENDING", "TEACHER_APPROVED", "APPROVED"];
+/** Still waiting for a decision: the class teacher's (PENDING) or the School Admin's (TEACHER_APPROVED). */
+const AWAITING: StudentLeaveStatus[] = ["PENDING", "TEACHER_APPROVED"];
 
 const reasonText = (row: { reason: StudentLeaveReason; reasonText: string | null }) =>
   row.reason === "OTHER" && row.reasonText ? row.reasonText : LEAVE_REASON_LABEL[row.reason];
@@ -132,7 +136,7 @@ export async function applyStudentLeave(ctx: TenantContext, input: StudentLeaveI
   });
   if (overlapping) {
     throw new ConflictError(
-      `${fullName(student)} already has a ${overlapping.status === "APPROVED" ? "approved" : "pending"} leave request for ${formatDate(overlapping.fromDate)}${overlapping.toDate > overlapping.fromDate ? `–${formatDate(overlapping.toDate)}` : ""} that overlaps these dates.`,
+      `${fullName(student)} already has an ${overlapping.status === "APPROVED" ? "approved" : "open"} leave request for ${formatDate(overlapping.fromDate)}${overlapping.toDate > overlapping.fromDate ? `–${formatDate(overlapping.toDate)}` : ""} that overlaps these dates.`,
     );
   }
 
@@ -167,7 +171,7 @@ export async function cancelStudentLeave(ctx: TenantContext, leaveId: string): P
   assertRole(ctx.user, "PARENT", "STUDENT");
   const leave = await ctx.db.studentLeave.findFirst({ where: { AND: [{ id: leaveId }, await ownLeavesWhere(ctx)] }, select: { id: true, status: true, fromDate: true, student: { select: { firstName: true, lastName: true } } } });
   if (!leave) throw new NotFoundError("That leave request was not found.");
-  if (!(leave.status === "PENDING" || (leave.status === "APPROVED" && leave.fromDate > today()))) {
+  if (!(AWAITING.includes(leave.status) || (leave.status === "APPROVED" && leave.fromDate > today()))) {
     throw new ConflictError("Only a pending request, or an approved one that has not started yet, can be cancelled.");
   }
   await ctx.db.studentLeave.updateMany({ where: { id: leave.id, status: leave.status }, data: { status: "CANCELLED", cancelledAt: new Date() } });
@@ -179,30 +183,63 @@ export async function cancelStudentLeave(ctx: TenantContext, leaveId: string): P
 // -----------------------------------------------------------------------------
 
 /**
- * Approve or reject. The class teacher of the student's current section
- * decides pending requests; the School Admin may decide any, and may overturn
- * a decision. Returns how many days in the range already have attendance —
- * never changed here, but worth the approver's attention.
+ * Approve or reject, in two steps:
+ *
+ *   1. The class teacher of the student's current section reviews a PENDING
+ *      request. Approving sends it on to the School Admin (TEACHER_APPROVED);
+ *      rejecting is final.
+ *   2. The School Admin gives the final approval (APPROVED) or rejects. The
+ *      admin may also decide a request the teacher has not reached yet (no
+ *      class teacher, or urgent), and may overturn any decision.
+ *
+ * Only APPROVED is leave: the register and calendar show nothing before it.
+ * Returns how many days in the range already have attendance — never changed
+ * here, but worth the approver's attention.
  */
-export async function decideStudentLeave(ctx: TenantContext, input: StudentLeaveDecisionInput): Promise<{ markedDays: number }> {
-  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN");
+export async function decideStudentLeave(ctx: TenantContext, input: StudentLeaveDecisionInput): Promise<{ markedDays: number; status: StudentLeaveStatus }> {
+  assertRole(ctx.user, "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
   const leave = await ctx.db.studentLeave.findFirst({
     where: { id: input.leaveId },
     select: { id: true, status: true, studentId: true, fromDate: true, toDate: true, student: { select: { firstName: true, lastName: true } } },
   });
   if (!leave) throw new NotFoundError("That leave request was not found.");
-  const next: StudentLeaveStatus = input.decision === "APPROVE" ? "APPROVED" : "REJECTED";
+  const who = `${fullName(leave.student)} ${formatDate(leave.fromDate)}–${formatDate(leave.toDate)}`;
 
   if (ctx.user.role === "TEACHER") {
     const teacher = await requireTeacherSelf(ctx);
     const { section } = await currentPlacement(ctx, leave.studentId).catch(() => ({ section: null }));
     // Same answer for another class's student and another school's request.
     if (!section || section.classTeacherId !== teacher.id) throw new NotFoundError("That leave request was not found.");
-    if (leave.status !== "PENDING") throw new ConflictError("This request has already been decided. The School Admin can change the decision.");
-  } else if (leave.status === "CANCELLED") {
-    throw new ConflictError("This request was cancelled by the family.");
+    if (leave.status !== "PENDING") throw new ConflictError("You have already reviewed this request. The School Admin gives the final decision.");
+
+    const next: StudentLeaveStatus = input.decision === "APPROVE" ? "TEACHER_APPROVED" : "REJECTED";
+    const { count } = await ctx.db.studentLeave.updateMany({
+      where: { id: leave.id, status: "PENDING" },
+      data: {
+        status: next,
+        teacherReviewedById: ctx.user.id,
+        teacherReviewedAt: new Date(),
+        teacherApproved: next === "TEACHER_APPROVED",
+        teacherComment: input.comment,
+        // A teacher's rejection is the final decision; an approval is not.
+        ...(next === "REJECTED" ? { decidedById: ctx.user.id, decidedAt: new Date(), decisionComment: input.comment } : {}),
+      },
+    });
+    if (!count) throw new ConflictError("This request changed a moment ago. Refresh and try again.");
+    await recordAudit({
+      action: next === "REJECTED" ? "STUDENT_LEAVE_REJECTED" : "STUDENT_LEAVE_TEACHER_APPROVED",
+      entityType: "StudentLeave",
+      entityId: leave.id,
+      schoolId: ctx.schoolId,
+      actorId: ctx.user.id,
+      summary: `Leave for ${who} ${next === "REJECTED" ? "rejected by the class teacher" : "approved by the class teacher, sent to the School Admin for final approval"}${input.comment ? `: ${input.comment}` : ""}.`,
+    });
+    return { markedDays: 0, status: next };
   }
-  if (leave.status === next) return { markedDays: 0 };
+
+  if (leave.status === "CANCELLED") throw new ConflictError("This request was cancelled by the family.");
+  const next: StudentLeaveStatus = input.decision === "APPROVE" ? "APPROVED" : "REJECTED";
+  if (leave.status === next) return { markedDays: 0, status: next };
 
   const { count } = await ctx.db.studentLeave.updateMany({
     where: { id: leave.id, status: leave.status },
@@ -211,15 +248,17 @@ export async function decideStudentLeave(ctx: TenantContext, input: StudentLeave
   if (!count) throw new ConflictError("This request changed a moment ago. Refresh and try again.");
 
   const markedDays = next === "APPROVED" ? await ctx.db.studentAttendance.count({ where: { studentId: leave.studentId, date: { gte: leave.fromDate, lte: leave.toDate } } }) : 0;
+  const was =
+    leave.status === "PENDING" ? " (before the class teacher's review)" : leave.status === "TEACHER_APPROVED" ? " (after the class teacher approved)" : ` (was ${leave.status.toLowerCase()})`;
   await recordAudit({
     action: next === "APPROVED" ? "STUDENT_LEAVE_APPROVED" : "STUDENT_LEAVE_REJECTED",
     entityType: "StudentLeave",
     entityId: leave.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Leave for ${fullName(leave.student)} ${formatDate(leave.fromDate)}–${formatDate(leave.toDate)} ${next === "APPROVED" ? "approved" : "rejected"}${leave.status !== "PENDING" ? ` (was ${leave.status.toLowerCase()})` : ""}${input.comment ? `: ${input.comment}` : ""}.`,
+    summary: `Leave for ${who} ${next === "APPROVED" ? "given final approval" : "rejected"} by the School Admin${was}${input.comment ? `: ${input.comment}` : ""}.`,
   });
-  return { markedDays };
+  return { markedDays, status: next };
 }
 
 // -----------------------------------------------------------------------------
@@ -237,7 +276,7 @@ async function ownLeavesWhere(ctx: TenantContext): Promise<Prisma.StudentLeaveWh
 
 /** Admin: the school. Teacher: students of the sections they are class teacher of now. Parent: their children. Student: their own. */
 async function visibleWhere(ctx: TenantContext): Promise<Prisma.StudentLeaveWhereInput> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return {};
+  if (isSchoolLeader(ctx.user.role)) return {};
   if (ctx.user.role === "TEACHER") {
     const teacher = await requireTeacherSelf(ctx);
     return { student: { enrollments: { some: { status: "ACTIVE", academicSession: { isCurrent: true }, section: { classTeacherId: teacher.id } } } } };
@@ -260,6 +299,10 @@ const LEAVE_SELECT = {
   createdAt: true,
   requestedBy: { select: { firstName: true, lastName: true } },
   decidedBy: { select: { firstName: true, lastName: true, role: true } },
+  teacherReviewedAt: true,
+  teacherApproved: true,
+  teacherComment: true,
+  teacherReviewedBy: { select: { firstName: true, lastName: true } },
   student: {
     select: {
       id: true,
@@ -298,7 +341,7 @@ export async function listStudentLeaves(ctx: TenantContext, filters: StudentLeav
     take: 300,
     select: LEAVE_SELECT,
   });
-  const mayDecide = ctx.user.role === "SCHOOL_ADMIN" || ctx.user.role === "TEACHER";
+  const mayDecide = isSchoolLeader(ctx.user.role) || ctx.user.role === "TEACHER";
   return rows.map((row) => {
     const placement = row.student.enrollments[0];
     const classTeacher = placement?.section.classTeacher ? fullName(placement.section.classTeacher) : null;
@@ -320,11 +363,14 @@ export async function listStudentLeaves(ctx: TenantContext, filters: StudentLeav
       requestedAt: row.createdAt,
       /** Who decided — or, while pending, who will (the class teacher). */
       approver: row.decidedBy ? fullName(row.decidedBy) : classTeacher,
-      decidedByAdmin: row.decidedBy?.role === "SCHOOL_ADMIN",
+      classTeacher,
+      decidedByAdmin: row.decidedBy ? isSchoolLeader(row.decidedBy.role) : false,
       decidedAt: row.decidedAt,
       comment: row.decisionComment,
-      mayDecide: mayDecide && (ctx.user.role === "SCHOOL_ADMIN" ? row.status !== "CANCELLED" : row.status === "PENDING"),
-      mayCancel: !mayDecide && (row.status === "PENDING" || (row.status === "APPROVED" && row.fromDate > today())),
+      /** The class teacher's review (step 1), when there has been one. */
+      teacherReview: row.teacherReviewedAt ? { by: row.teacherReviewedBy ? fullName(row.teacherReviewedBy) : "Class teacher", at: row.teacherReviewedAt, approved: row.teacherApproved !== false, comment: row.teacherComment } : null,
+      mayDecide: mayDecide && (isSchoolLeader(ctx.user.role) ? row.status !== "CANCELLED" : row.status === "PENDING"),
+      mayCancel: !mayDecide && (AWAITING.includes(row.status) || (row.status === "APPROVED" && row.fromDate > today())),
     };
   });
 }
@@ -355,7 +401,7 @@ export async function studentLeaveSettings(ctx: TenantContext) {
 
 /** School Admin: how far back a family may date a request (0 = from today). */
 export async function saveStudentLeaveSettings(ctx: TenantContext, input: { backdateDays: number }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "settings", "EDIT");
   if (!Number.isInteger(input.backdateDays) || input.backdateDays < 0 || input.backdateDays > 60) throw new AppError("VALIDATION", "Choose 0 to 60 days.");
   await ctx.db.school.update({ where: { id: ctx.schoolId }, data: { studentLeaveBackdateDays: input.backdateDays } });
   await recordAudit({ action: "STUDENT_LEAVE_SETTINGS_UPDATED", entityType: "School", entityId: ctx.schoolId, schoolId: ctx.schoolId, actorId: ctx.user.id, summary: `Student leave may start up to ${input.backdateDays} days back.` });
@@ -390,26 +436,51 @@ export async function teacherLeaveAlerts(ctx: TenantContext) {
 export async function familyLeaveAlerts(ctx: TenantContext, studentIds: string[], href: string) {
   if (!studentIds.length) return [];
   const rows = await ctx.db.studentLeave.findMany({
-    where: { studentId: { in: studentIds }, status: { in: ["APPROVED", "REJECTED"] }, decidedAt: { gte: addDays(today(), -ALERT_DAYS) } },
-    orderBy: { decidedAt: "desc" },
+    where: {
+      studentId: { in: studentIds },
+      OR: [
+        { status: { in: ["APPROVED", "REJECTED"] }, decidedAt: { gte: addDays(today(), -ALERT_DAYS) } },
+        { status: "TEACHER_APPROVED", teacherReviewedAt: { gte: addDays(today(), -ALERT_DAYS) } },
+      ],
+    },
+    orderBy: { updatedAt: "desc" },
     take: 10,
-    select: { studentId: true, status: true, decidedAt: true, fromDate: true, toDate: true, student: { select: { firstName: true, lastName: true } } },
+    select: { studentId: true, status: true, decidedAt: true, teacherReviewedAt: true, fromDate: true, toDate: true, student: { select: { firstName: true, lastName: true } } },
   });
-  return rows.map((row) => ({
-    kind: "student-leave" as const,
-    childId: row.studentId,
-    childName: row.student.firstName,
-    title: `${fullName(row.student)}'s leave request has been ${row.status === "APPROVED" ? "approved" : "rejected"}.`,
-    detail: `${formatDate(row.fromDate)}${row.toDate > row.fromDate ? ` – ${formatDate(row.toDate)}` : ""}`,
-    at: row.decidedAt!,
-    href,
-    tone: row.status === "APPROVED" ? ("info" as const) : ("warning" as const),
-  }));
+  return rows.map((row) => {
+    const dates = `${formatDate(row.fromDate)}${row.toDate > row.fromDate ? ` – ${formatDate(row.toDate)}` : ""}`;
+    if (row.status === "TEACHER_APPROVED") {
+      return {
+        kind: "student-leave" as const,
+        childId: row.studentId,
+        childName: row.student.firstName,
+        title: `${fullName(row.student)}'s leave was approved by the class teacher.`,
+        detail: `${dates}. Waiting for the school's final approval.`,
+        at: row.teacherReviewedAt!,
+        href,
+        tone: "info" as const,
+      };
+    }
+    return {
+      kind: "student-leave" as const,
+      childId: row.studentId,
+      childName: row.student.firstName,
+      title: `${fullName(row.student)}'s leave request has been ${row.status === "APPROVED" ? "approved" : "rejected"}.`,
+      detail: dates,
+      at: row.decidedAt!,
+      href,
+      tone: row.status === "APPROVED" ? ("info" as const) : ("warning" as const),
+    };
+  });
 }
 
-/** School Admin: how many requests are waiting. */
-export async function pendingLeaveCount(ctx: TenantContext): Promise<number> {
-  return ctx.db.studentLeave.count({ where: { status: "PENDING" } });
+/** School Admin: how many requests are waiting — for the class teacher, and for the admin's final approval. */
+export async function pendingLeaveCount(ctx: TenantContext): Promise<{ withTeacher: number; forAdmin: number }> {
+  const [withTeacher, forAdmin] = await Promise.all([
+    ctx.db.studentLeave.count({ where: { status: "PENDING" } }),
+    ctx.db.studentLeave.count({ where: { status: "TEACHER_APPROVED" } }),
+  ]);
+  return { withTeacher, forAdmin };
 }
 
 // -----------------------------------------------------------------------------
@@ -427,8 +498,10 @@ export async function studentLeaveSummary(ctx: TenantContext) {
   const [grouped, pending, approved] = await Promise.all([
     ctx.db.studentLeave.groupBy({ by: ["status"], where, _count: { _all: true } }),
     ctx.db.studentLeave.findFirst({
-      where: { AND: [where, { status: "PENDING" }] },
-      orderBy: { fromDate: "asc" },
+      // What this person is waiting on: the teacher reviews PENDING; the admin
+      // gives final approval to TEACHER_APPROVED first; families wait on both.
+      where: { AND: [where, { status: { in: ctx.user.role === "TEACHER" ? ["PENDING"] : isSchoolLeader(ctx.user.role) ? ["TEACHER_APPROVED", "PENDING"] : AWAITING } }] },
+      orderBy: [{ status: "desc" }, { fromDate: "asc" }],
       select: { id: true, fromDate: true, toDate: true, status: true, student: { select: { firstName: true, lastName: true } } },
     }),
     ctx.db.studentLeave.findFirst({
@@ -438,10 +511,10 @@ export async function studentLeaveSummary(ctx: TenantContext) {
     }),
   ]);
   const count = (status: StudentLeaveStatus) => grouped.find((row) => row.status === status)?._count._all ?? 0;
-  const decider = ctx.user.role === "SCHOOL_ADMIN" || ctx.user.role === "TEACHER";
+  const decider = isSchoolLeader(ctx.user.role) || ctx.user.role === "TEACHER";
   const pick = decider ? (pending ?? approved) : (approved ?? pending);
   return {
-    pending: count("PENDING"),
+    pending: ctx.user.role === "TEACHER" ? count("PENDING") : count("PENDING") + count("TEACHER_APPROVED"),
     approved: count("APPROVED"),
     rejected: count("REJECTED"),
     highlight: pick ? { ...pick, student: fullName(pick.student) } : null,

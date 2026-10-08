@@ -25,6 +25,7 @@ import { canMarkAttendance } from "@/server/auth/teacher-access";
 import { getCurrentSession } from "@/server/academics/structure";
 import { orHidden } from "@/server/page-helpers";
 import { getMyRoster } from "@/server/people/teacher-self";
+import { attendedDays } from "@/lib/attendance";
 
 export const metadata: Metadata = { title: "Class students" };
 
@@ -114,7 +115,7 @@ export default async function TeacherClassRosterPage(
                   <TableCell className="text-right tabular-nums">
                     {student.share === null
                       ? "—"
-                      : formatPercent(student.counts.PRESENT + student.counts.LATE, student.counts.total)}
+                      : formatPercent(attendedDays(student.counts), student.counts.total)}
                   </TableCell>
                   <TableCell className="text-muted-foreground text-right tabular-nums">
                     {student.counts.total}

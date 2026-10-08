@@ -4,9 +4,10 @@ import type { Route } from "next";
 
 import { CURRENT_EMPLOYEE, CURRENT_STUDENT } from "@/lib/validation/lifecycle";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { prisma } from "@/server/db/prisma";
+import { hasModule } from "@/server/platform/modules";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * How far a school — or one academic session — is from ready to run.
@@ -58,7 +59,7 @@ export type SetupReport = {
 };
 
 export async function setupReport(ctx: TenantContext, options: { sessionId?: string } = {}): Promise<SetupReport> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "VIEW");
 
   const [school, session] = await Promise.all([
     prisma.school.findUnique({
@@ -122,7 +123,8 @@ export async function setupReport(ctx: TenantContext, options: { sessionId?: str
     step("classTeachers", running.length > 0 && noClassTeacher === 0, { missing: noClassTeacher, total: running.length }, `/school-admin/academics/class-teachers${forSession}` as Route),
     step("subjectTeachers", running.length > 0 && noSubjectTeacher === 0, { missing: noSubjectTeacher, total: running.length }, "/school-admin/teachers"),
     step("timetable", running.length > 0 && noTimetable === 0, { missing: noTimetable, total: running.length }, "/school-admin/timetable"),
-    step("fees", feeHeads > 0 && charges > 0, { heads: feeHeads, charges }, "/school-admin/finance/fees"),
+    // Only for a school whose plan has fees.
+    ...((await hasModule(ctx, "FINANCE")) ? [step("fees", feeHeads > 0 && charges > 0, { heads: feeHeads, charges }, "/school-admin/finance/fees")] : []),
   ];
 
   const settled = steps.filter((s) => s.state !== "todo").length;
@@ -140,7 +142,7 @@ export async function setupReport(ctx: TenantContext, options: { sessionId?: str
 
 /** Skip an optional step for now, or bring it back. Required steps cannot be skipped. */
 export async function setSetupStepSkipped(ctx: TenantContext, key: SetupStepKey, skip: boolean): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   if (!OPTIONAL_STEPS.includes(key)) return;
   const school = await prisma.school.findUniqueOrThrow({ where: { id: ctx.schoolId }, select: { setupSkipped: true } });
   const next = new Set(school.setupSkipped);

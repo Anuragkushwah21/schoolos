@@ -5,9 +5,10 @@ import { AppError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireTeacherSelf } from "@/server/auth/teacher-access";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * "Needs Attention" — never a label like "weak", and never from one test
@@ -50,7 +51,7 @@ export function attentionRule(settings: { percent: number; repeat: number }): st
 }
 
 export async function saveAttentionSettings(ctx: TenantContext, input: { percent: number; repeat: number }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "settings", "EDIT");
   if (!Number.isInteger(input.percent) || input.percent < 1 || input.percent > 99) throw new AppError("VALIDATION", "Choose a threshold from 1% to 99%.");
   if (!Number.isInteger(input.repeat) || input.repeat < 1 || input.repeat > 3) throw new AppError("VALIDATION", "Choose 1, 2 or 3 of the last three tests.");
   await ctx.db.school.update({ where: { id: ctx.schoolId }, data: { needsAttentionPercent: input.percent, needsAttentionRepeat: input.repeat } });
@@ -70,7 +71,7 @@ export async function saveAttentionSettings(ctx: TenantContext, input: { percent
  * are class teacher of (the overall picture). Others: nobody.
  */
 async function scopeWhere(ctx: TenantContext, sessionId: string): Promise<{ results: Prisma.AssessmentWhereInput; support: Prisma.StudentSupportWhereInput } | null> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return { results: {}, support: {} };
+  if (isSchoolLeader(ctx.user.role)) return { results: {}, support: {} };
   if (ctx.user.role !== "TEACHER") return null;
   const teacher = await requireTeacherSelf(ctx);
   const [assignments, classSections] = await Promise.all([

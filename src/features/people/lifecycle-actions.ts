@@ -21,7 +21,7 @@ const PAGES = ["/school-admin", "/teacher", "/student", "/parent", "/staff"];
 export async function changeStatusAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const t = await getT();
       const input = parseFormData(statusChangeSchema, formData);
       const options = { effectiveDate: input.effectiveDate, reason: input.reason, remarks: input.remarks, confirmReturn: input.confirmReturn };
@@ -43,7 +43,7 @@ export async function changeStatusAction(_p: Result, formData: FormData): Promis
 export async function loginAccessAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await setLoginAccess(ctx, parseFormData(loginAccessSchema, formData));
       return successResult((await getT())("lifecycle.loginChanged"));
     },

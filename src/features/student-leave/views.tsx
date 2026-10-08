@@ -10,7 +10,8 @@ import { cancelStudentLeaveAction } from "./actions";
 import { LeaveDecisionForm } from "./forms";
 
 const STATUS = {
-  PENDING: { label: "Pending", tone: "warning" },
+  PENDING: { label: "With class teacher", tone: "warning" },
+  TEACHER_APPROVED: { label: "Waiting for school approval", tone: "info" },
   APPROVED: { label: "Approved", tone: "positive" },
   REJECTED: { label: "Rejected", tone: "negative" },
   CANCELLED: { label: "Cancelled", tone: "neutral" },
@@ -24,7 +25,7 @@ const dates = (row: Pick<StudentLeaveRow, "fromDate" | "toDate" | "days">) =>
  * decides or decided, when, and the comment. Approve / Reject where this
  * person may decide; Cancel where they asked for it.
  */
-export function LeaveList({ rows, showStudent = true }: { rows: StudentLeaveRow[]; showStudent?: boolean }) {
+export function LeaveList({ rows, showStudent = true, admin = false }: { rows: StudentLeaveRow[]; showStudent?: boolean; /** The School Admin, whose approval is the final one. */ admin?: boolean }) {
   if (!rows.length) {
     return (
       <EmptyState icon={CalendarOffIcon} tone="blue" title="No leave requests">
@@ -51,11 +52,9 @@ export function LeaveList({ rows, showStudent = true }: { rows: StudentLeaveRow[
           </p>
           <p className="text-muted-foreground text-xs">
             Requested by {row.requestedBy} · {formatDateTime(row.requestedAt)}
-            {row.approver ? ` · ${row.status === "PENDING" ? "Goes to" : row.status === "CANCELLED" ? "Class teacher" : row.status === "APPROVED" ? "Approved by" : "Rejected by"} ${row.approver}${row.decidedByAdmin ? " (School Admin)" : ""}` : row.status === "PENDING" ? " · Goes to the School Admin (no class teacher)" : ""}
-            {row.decidedAt ? ` on ${formatDate(row.decidedAt)}` : ""}
           </p>
-          {row.comment ? <p className="bg-muted rounded-lg px-3 py-2 text-sm">“{row.comment}”</p> : null}
-          {row.mayDecide ? <LeaveDecisionForm leaveId={row.id} status={row.status} /> : null}
+          <LeaveSteps row={row} />
+          {row.mayDecide ? <LeaveDecisionForm leaveId={row.id} status={row.status} finalStep={admin} /> : null}
           {row.mayCancel ? (
             <ActionButton action={cancelStudentLeaveAction} fields={{ leaveId: row.id }} variant="outline" size="sm" className="w-fit" confirm={{ title: "Cancel this leave request?", description: "The class teacher will no longer see it as a request.", confirmLabel: "Cancel request" }}>
               Cancel request
@@ -64,5 +63,71 @@ export function LeaveList({ rows, showStudent = true }: { rows: StudentLeaveRow[
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * The two approvals, in order: 1. the class teacher, 2. the school (School
+ * Admin). Each says done, waiting, or not needed, with who, when and what
+ * they said — so a parent can see exactly where their request is.
+ */
+function LeaveSteps({ row }: { row: StudentLeaveRow }) {
+  const cancelled = row.status === "CANCELLED";
+  const review = row.teacherReview;
+  const adminDecided = row.decidedByAdmin && row.decidedAt;
+  // Rejected by the teacher and not taken up by the admin: it stopped at step 1.
+  const teacherRejected = row.status === "REJECTED" && !row.decidedByAdmin;
+
+  const teacherLine = review
+    ? `${review.approved ? "Approved" : "Rejected"} by ${review.by} on ${formatDate(review.at)}`
+    : adminDecided
+      ? "Not needed — the School Admin decided directly"
+      : cancelled
+        ? "Cancelled before review"
+        : row.classTeacher
+          ? `Waiting for ${row.classTeacher}`
+          : "No class teacher — goes straight to the School Admin";
+  const teacherState = review ? (review.approved ? "yes" : "no") : adminDecided ? "skip" : cancelled ? "skip" : "wait";
+
+  const schoolLine = adminDecided
+    ? `${row.status === "APPROVED" ? "Approved" : "Rejected"} by ${row.approver} on ${formatDate(row.decidedAt!)}`
+    : teacherRejected
+      ? "Not needed — rejected by the class teacher"
+      : cancelled
+        ? "Cancelled"
+        : row.status === "TEACHER_APPROVED"
+          ? "Waiting for the School Admin's final approval"
+          : "After the class teacher";
+  const schoolState = adminDecided ? (row.status === "APPROVED" ? "yes" : "no") : teacherRejected || cancelled ? "skip" : row.status === "TEACHER_APPROVED" ? "wait" : "later";
+
+  return (
+    <ol className="bg-muted/40 flex flex-col gap-1.5 rounded-xl px-3 py-2.5 text-xs">
+      <Step n={1} title="Class teacher" text={teacherLine} state={teacherState} comment={review?.comment ?? null} />
+      <Step n={2} title="School approval" text={schoolLine} state={schoolState} comment={adminDecided ? row.comment : null} />
+    </ol>
+  );
+}
+
+const STEP_STYLE = {
+  yes: "bg-success text-white",
+  no: "bg-destructive text-white",
+  wait: "bg-warning text-white",
+  later: "bg-muted-foreground/25 text-muted-foreground",
+  skip: "bg-muted-foreground/25 text-muted-foreground",
+} as const;
+const STEP_MARK = { yes: "✓", no: "✕", wait: "…", later: "", skip: "–" } as const;
+
+function Step({ n, title, text, state, comment }: { n: number; title: string; text: string; state: keyof typeof STEP_STYLE; comment: string | null }) {
+  return (
+    <li className="flex items-start gap-2">
+      <span className={`mt-px flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${STEP_STYLE[state]}`} aria-hidden>
+        {STEP_MARK[state] || n}
+      </span>
+      <span className="min-w-0">
+        <span className="font-semibold">{title}: </span>
+        <span className="text-muted-foreground">{text}</span>
+        {comment ? <span className="mt-0.5 block italic">“{comment}”</span> : null}
+      </span>
+    </li>
   );
 }

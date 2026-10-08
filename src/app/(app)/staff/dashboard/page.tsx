@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LibraryTodayPanel } from "@/features/operations/library-desk";
 import { SchoolLifeCards } from "@/features/dashboard/school-life";
+import { MyResponsibilitiesCard } from "@/features/responsibilities/my-card";
 import { AlertList } from "@/features/parent/today";
 import { STAFF_MODULE_NAV } from "@/lib/nav";
 import { getStaffAlerts } from "@/server/alerts/feeds";
@@ -16,9 +17,17 @@ import { activeSubstitutionsAsSubstitute, requireStaffSelf, staffGrants } from "
 import { getT } from "@/server/i18n";
 import { libraryToday } from "@/server/operations/library";
 import { assetSummary } from "@/server/operations/inventory";
+import { enquiryCounts } from "@/server/admissions/enquiries";
+import { applicationCounts } from "@/server/admissions/service";
+import { listVisitors } from "@/server/operations/visitors";
 import { myWorkCoversToday } from "@/server/attendance/cover";
 import { orNotFound } from "@/server/page-helpers";
-import { FeeDeskTodayPanel, MyAttendanceCard, MyRoutesPanel } from "@/features/staff/work-panels";
+import { MyAttendanceCard, MyRoutesPanel } from "@/features/staff/work-panels";
+import { AccountsDesk } from "@/features/staff/accounts-desk";
+import { listExpenses } from "@/server/finance/expenses";
+import { listFeePositions } from "@/server/finance/fees";
+import { getPayroll } from "@/server/finance/payroll";
+import { monthOf } from "@/server/finance/salary";
 import { formatDate, toDateInput, today } from "@/lib/dates";
 import { fullName, humanize } from "@/lib/format";
 import { STAFF_ROLE_NAMES, type BaseStaffRole } from "@/lib/staff-access";
@@ -51,11 +60,19 @@ export default async function StaffDashboardPage() {
   ]);
   const holds = (...keys: string[]) => keys.some((key) => (grants as string[]).includes(key));
   // Each desk's day, only for the desk they run.
-  const [library, feeDesk, routes, inventory] = await Promise.all([
+  const accounts = holds("fees.view", "fees.collect", "expenses.view", "payroll.view");
+  const now = today();
+  const [library, feeDesk, routes, inventory, enquiries, applications, visitors, feeTotals, monthSpend, payroll] = await Promise.all([
     holds("library.view") ? libraryToday(ctx) : null,
     holds("fees.view", "fees.collect") ? feeDeskToday(ctx) : null,
     assignedRoute ? myAssignedRoutes(ctx) : [],
     holds("inventory.view") ? assetSummary(ctx) : null,
+    holds("enquiries.view") ? enquiryCounts(ctx) : null,
+    holds("admissions.view") ? applicationCounts(ctx) : null,
+    holds("visitors.view", "visitors.manage") ? listVisitors(ctx) : null,
+    accounts && holds("fees.view", "fees.collect") ? listFeePositions(ctx).then((result) => result.totals).catch(() => null) : null,
+    accounts && holds("expenses.view") ? listExpenses(ctx, { from: monthOf(now), to: now, category: null, take: 500 }).then((rows) => rows.reduce((sum, row) => sum + row.amountMinor, 0)) : null,
+    accounts && holds("payroll.view") ? getPayroll(ctx, now).then((result) => ({ unpaid: result.totals.unpaid, dueMinor: result.rows.filter((row) => !row.payment).reduce((sum, row) => sum + (row.dueMinor ?? 0), 0) })) : null,
   ]);
   const modules = STAFF_MODULE_NAV.filter(({ grants: needs, item }) => holds(...needs) && (item.href !== "/staff/my-route" || assignedRoute)).map(({ item }) => item);
   const roleName = profile?.name ?? STAFF_ROLE_NAMES[staff.role as BaseStaffRole] ?? humanize(staff.role);
@@ -88,7 +105,74 @@ export default async function StaffDashboardPage() {
 
       {library ? <LibraryTodayPanel today={library} basePath="/staff/library" canManage={holds("library.circulation")} addBookHref={holds("library.books.create") ? "/staff/library#add-book" : undefined} /> : null}
 
-      {feeDesk ? <FeeDeskTodayPanel desk={feeDesk} canCollect={holds("fees.collect")} /> : null}
+      {visitors ? (
+        <Card size="sm" className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between gap-2">
+              Gate
+              <Link href="/staff/visitors" className="text-primary text-sm font-medium hover:underline">
+                Visitor log →
+              </Link>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 gap-2">
+            <div className={`rounded-lg p-3 ${visitors.inside ? "bg-warning-soft" : "bg-muted/50"}`}>
+              <p className="text-muted-foreground text-xs">Visitors inside now</p>
+              <p className="text-lg font-semibold tabular-nums">{visitors.inside}</p>
+            </div>
+            <div className="bg-muted/50 rounded-lg p-3">
+              <p className="text-muted-foreground text-xs">Visitors today</p>
+              <p className="text-lg font-semibold tabular-nums">{visitors.today}</p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {enquiries || applications ? (
+        <Card size="sm" className="mb-6">
+          <CardHeader>
+            <CardTitle>Front desk</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-2 sm:grid-cols-3">
+            {enquiries ? (
+              <>
+                <Link href="/staff/enquiries" className="bg-muted/50 hover:bg-primary-soft rounded-lg p-3">
+                  <p className="text-muted-foreground text-xs">Open enquiries</p>
+                  <p className="text-lg font-semibold tabular-nums">{enquiries.open}</p>
+                </Link>
+                <Link href="/staff/enquiries" className={`rounded-lg p-3 ${enquiries.due ? "bg-warning-soft" : "bg-muted/50"} hover:bg-primary-soft`}>
+                  <p className="text-muted-foreground text-xs">Follow-ups due today</p>
+                  <p className="text-lg font-semibold tabular-nums">{enquiries.due}</p>
+                </Link>
+              </>
+            ) : null}
+            {applications ? (
+              <Link href="/staff/admissions" className="bg-muted/50 hover:bg-primary-soft rounded-lg p-3">
+                <p className="text-muted-foreground text-xs">Online applications in progress</p>
+                <p className="text-lg font-semibold tabular-nums">{applications.open}</p>
+              </Link>
+            ) : null}
+            {holds("enquiries.manage") ? (
+              <Link href="/staff/enquiries/new" className="text-primary text-sm font-medium hover:underline sm:col-span-3">
+                + New walk-in enquiry
+              </Link>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {accounts ? (
+        <AccountsDesk
+          data={{
+            collectedTodayMinor: feeDesk ? feeDesk.totalMinor : null,
+            receiptsToday: feeDesk ? feeDesk.receipts : null,
+            pendingMinor: feeTotals ? feeTotals.pendingMinor : null,
+            spentThisMonthMinor: monthSpend,
+            payroll,
+          }}
+          can={{ collect: holds("fees.collect"), manage: holds("fees.manage"), expense: holds("expenses.create"), pay: holds("payroll.pay"), reports: holds("fees.reports") }}
+        />
+      ) : null}
 
       {inventory ? (
         <Card size="sm" className="mb-6">
@@ -163,6 +247,7 @@ export default async function StaffDashboardPage() {
         <MyAttendanceCard attendance={attendance} todayIso={toDateInput(today())} />
       </div>
 
+      <MyResponsibilitiesCard ctx={ctx} href="/staff/responsibilities" />
       <SchoolLifeCards ctx={ctx} base="/staff" />
 
       <Card>

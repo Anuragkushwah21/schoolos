@@ -16,6 +16,7 @@ export const GET = apiRoute({ roles: ["TEACHER", "STUDENT"] }, async ({ ctx }) =
   const { session, enrollment } = await getStudentPlacement(ctx);
   if (!session || !enrollment) throw new NotFoundError("You are not placed in a class yet.");
 
-  const slots = await getSectionWeek(ctx, enrollment.section.id, session.id);
+  // Whole-section periods and the student's own stream's only.
+  const slots = await getSectionWeek(ctx, enrollment.section.id, session.id, { streamId: enrollment.streamId ?? enrollment.section.streamId });
   return apiSuccess({ session, section: enrollment.section, slots });
 });

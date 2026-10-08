@@ -1,7 +1,7 @@
 import "server-only";
 
 import { CsvFormatError, readCsvRecords } from "@/lib/csv";
-import { formatMinutes, today } from "@/lib/dates";
+import { today } from "@/lib/dates";
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import type { AssignTransportInput, RouteInput, StopInput, VehicleInput } from "@/lib/validation/operations";
@@ -12,13 +12,14 @@ import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { isUniqueViolation } from "@/server/db/errors";
 import type { ReportTable } from "@/server/reports/exports";
+import { assertModuleEnabled } from "@/server/platform/modules";
 
 /**
  * Transport: vehicles, routes with ordered stops, the driver and attendant of
  * each route (non-teaching staff), and which student rides which route.
  *
  * School Admin manages everything. A parent sees only their own child's route
- * and stop (`childTransport`). No live GPS in this phase.
+ * and stop, with today's pickup and drop (`server/transport/parent-status.ts`). No live GPS in this phase.
  */
 
 async function audit(ctx: TenantContext, action: "TRANSPORT_UPDATED" | "TRANSPORT_ASSIGNED", summary: string, entityId: string | null = null) {
@@ -29,6 +30,7 @@ async function audit(ctx: TenantContext, action: "TRANSPORT_UPDATED" | "TRANSPOR
 
 export async function listVehicles(ctx: TenantContext) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   return ctx.db.vehicle.findMany({
     orderBy: { registrationNo: "asc" },
     select: { id: true, registrationNo: true, type: true, capacity: true, status: true, notes: true, routes: { select: { id: true, name: true } } },
@@ -37,6 +39,7 @@ export async function listVehicles(ctx: TenantContext) {
 
 export async function saveVehicle(ctx: TenantContext, input: VehicleInput): Promise<string> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const { vehicleId, ...data } = input;
   try {
     let id: string;
@@ -91,6 +94,7 @@ export async function listRoutes(ctx: TenantContext) {
  */
 export async function saveRoute(ctx: TenantContext, input: RouteInput): Promise<string> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const { routeId, ...data } = input;
   const [vehicle, driver, attendant] = await Promise.all([
     data.vehicleId ? ctx.db.vehicle.findFirst({ where: { id: data.vehicleId }, select: { id: true, routes: { select: { id: true, name: true } } } }) : null,
@@ -127,6 +131,7 @@ export async function saveRoute(ctx: TenantContext, input: RouteInput): Promise<
  */
 export async function addStop(ctx: TenantContext, input: StopInput): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const route = await ctx.db.transportRoute.findFirst({ where: { id: input.routeId }, select: { id: true, name: true } });
   if (!route) throw new NotFoundError("That route was not found.");
   if (input.pickupMinute !== null && input.dropMinute !== null && input.dropMinute <= input.pickupMinute) {
@@ -149,6 +154,7 @@ export async function addStop(ctx: TenantContext, input: StopInput): Promise<voi
 
 export async function removeStop(ctx: TenantContext, stopId: string): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const stop = await ctx.db.routeStop.findFirst({ where: { id: stopId }, select: { id: true, name: true, _count: { select: { students: true } } } });
   if (!stop) throw new NotFoundError("That stop was not found.");
   if (stop._count.students) throw new ConflictError(`${stop._count.students} students board at ${stop.name}. Move them first.`);
@@ -163,6 +169,7 @@ export async function removeStop(ctx: TenantContext, stopId: string): Promise<vo
  */
 export async function assignTransport(ctx: TenantContext, input: AssignTransportInput): Promise<{ assigned: number }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const route = await ctx.db.transportRoute.findFirst({
     where: { id: input.routeId },
     select: { id: true, name: true, isActive: true, vehicle: { select: { capacity: true } }, stops: { select: { id: true } } },
@@ -197,6 +204,7 @@ export async function assignTransport(ctx: TenantContext, input: AssignTransport
 
 export async function removeTransport(ctx: TenantContext, studentId: string): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const { count } = await ctx.db.studentTransport.deleteMany({ where: { studentId } });
   if (!count) throw new NotFoundError("That student is not on a route.");
   await audit(ctx, "TRANSPORT_ASSIGNED", "A student was taken off transport.", studentId);
@@ -204,6 +212,7 @@ export async function removeTransport(ctx: TenantContext, studentId: string): Pr
 
 export async function routeRiders(ctx: TenantContext, routeId: string) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const rows = await ctx.db.studentTransport.findMany({
     where: { routeId },
     orderBy: [{ stop: { sequence: "asc" } }, { student: { firstName: "asc" } }],
@@ -237,39 +246,12 @@ export async function routeRiders(ctx: TenantContext, routeId: string) {
   }));
 }
 
-/** What a parent sees about one of their children — the caller has already checked the link. */
-export async function childTransport(ctx: TenantContext, studentId: string) {
-  const row = await ctx.db.studentTransport.findFirst({
-    where: { studentId, status: "ACTIVE" },
-    select: {
-      route: {
-        select: {
-          name: true,
-          vehicle: { select: { registrationNo: true } },
-          driver: { select: { firstName: true, lastName: true, phone: true } },
-          attendant: { select: { firstName: true, lastName: true, phone: true } },
-        },
-      },
-      stop: { select: { name: true, pickupMinute: true, dropMinute: true } },
-    },
-  });
-  if (!row) return null;
-  return {
-    route: row.route.name,
-    vehicle: row.route.vehicle?.registrationNo ?? null,
-    driver: row.route.driver ? { name: fullName(row.route.driver), phone: row.route.driver.phone } : null,
-    attendant: row.route.attendant ? { name: fullName(row.route.attendant), phone: row.route.attendant.phone } : null,
-    stop: row.stop?.name ?? null,
-    pickup: row.stop?.pickupMinute !== null && row.stop?.pickupMinute !== undefined ? formatMinutes(row.stop.pickupMinute) : null,
-    drop: row.stop?.dropMinute !== null && row.stop?.dropMinute !== undefined ? formatMinutes(row.stop.dropMinute) : null,
-  };
-}
-
 export type ImportError = { line: number; message: string };
 
 /** Assign students to routes from CSV: Admission no., Route, Stop. All rows checked first. */
 export async function importTransport(ctx: TenantContext, text: string): Promise<{ assigned: number; errors: ImportError[] }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   let records;
   try {
     records = readCsvRecords(text, { required: ["Admission no.", "Route"], maxRows: 1000 });
@@ -375,6 +357,7 @@ async function crewMember(ctx: TenantContext, staffId: string, as: RouteCrewRole
  */
 export async function assignRouteCrew(ctx: TenantContext, input: { routeId: string; staffId: string; as: RouteCrewRole }): Promise<{ replaced: string | null }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const staff = await crewMember(ctx, input.staffId, input.as);
   const route = await ctx.db.transportRoute.findFirst({
     where: { id: input.routeId },
@@ -392,6 +375,7 @@ export async function assignRouteCrew(ctx: TenantContext, input: { routeId: stri
 /** Take a driver or attendant off a route. The route keeps running without them until someone is assigned. */
 export async function removeRouteCrew(ctx: TenantContext, input: { routeId: string; staffId: string }): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const route = await ctx.db.transportRoute.findFirst({ where: { id: input.routeId }, select: { id: true, name: true, driverId: true, attendantId: true } });
   if (!route) throw new NotFoundError("That route was not found.");
   if (route.driverId !== input.staffId && route.attendantId !== input.staffId) throw new NotFoundError("They are not on that route.");
@@ -409,6 +393,7 @@ export async function removeRouteCrew(ctx: TenantContext, input: { routeId: stri
  */
 export async function moveRouteCrew(ctx: TenantContext, input: { staffId: string; fromRouteId: string; toRouteId: string }): Promise<{ replaced: string | null }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   if (input.fromRouteId === input.toRouteId) throw new AppError("VALIDATION", "Choose a different route.");
   const [from, to] = await Promise.all([
     ctx.db.transportRoute.findFirst({ where: { id: input.fromRouteId }, select: { id: true, name: true, driverId: true, attendantId: true } }),

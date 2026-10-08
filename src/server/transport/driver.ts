@@ -9,6 +9,7 @@ import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { activeSubstitutionsAsSubstitute, assertStaffGrant, requireStaffSelf, staffHolds } from "@/server/auth/staff-access";
+import { assertModuleEnabled } from "@/server/platform/modules";
 
 /**
  * A driver's or attendant's own transport work.
@@ -190,18 +191,32 @@ const ALLOWED: Record<TransportTrip, TransportTripStatus[]> = {
  * and the route must be one of mine. Marking again replaces today's mark.
  */
 export async function markTrip(ctx: TenantContext, input: { routeId: string; studentId: string; trip: TransportTrip; status: TransportTripStatus; note?: string | null }) {
-  await assertStaffGrant(ctx, "transport.trips");
-  await assertMyRoute(ctx, input.routeId);
+  // The School Admin may mark or correct any route's trip; a driver or
+  // attendant only their own route's (or the one they cover today).
+  if (ctx.user.role !== "SCHOOL_ADMIN") {
+    await assertStaffGrant(ctx, "transport.trips");
+    await assertMyRoute(ctx, input.routeId);
+  }
   if (!ALLOWED[input.trip].includes(input.status)) throw new AppError("VALIDATION", "That status does not apply to this trip.");
   if (input.status === "ISSUE" && !input.note?.trim()) throw new AppError("VALIDATION", "Say what the issue is.");
   const ride = await ctx.db.studentTransport.findFirst({ where: { routeId: input.routeId, studentId: input.studentId, status: "ACTIVE" }, select: { stopId: true } });
   if (!ride) throw new NotFoundError("That student is not on this route.");
   const date = today();
   const data = { status: input.status, note: input.note?.trim() || null, stopId: ride.stopId, markedById: ctx.user.id, markedAt: new Date() };
-  await ctx.db.transportTripLog.upsert({
+  const before = await ctx.db.transportTripLog.findFirst({ where: { date, studentId: input.studentId, trip: input.trip }, select: { status: true } });
+  const log = await ctx.db.transportTripLog.upsert({
     where: { schoolId_date_studentId_trip: { schoolId: ctx.schoolId, date, studentId: input.studentId, trip: input.trip } },
     create: { schoolId: ctx.schoolId, date, routeId: input.routeId, studentId: input.studentId, trip: input.trip, ...data },
     update: { routeId: input.routeId, ...data },
+    select: { id: true, student: { select: { firstName: true, lastName: true } }, route: { select: { name: true } } },
+  });
+  await recordAudit({
+    action: "TRANSPORT_TRIP_MARKED",
+    entityType: "TransportTripLog",
+    entityId: log.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `${input.trip === "PICKUP" ? "Pickup" : "Drop"} for ${fullName(log.student)} on ${log.route.name}: ${input.status.toLowerCase().replace("_", " ")}${before && before.status !== input.status ? ` (was ${before.status.toLowerCase().replace("_", " ")})` : ""}.`,
   });
 }
 
@@ -253,6 +268,7 @@ async function routeDays(ctx: TenantContext, routeId: string, days: number) {
 /** The School Admin's view of a route's last days and reported issues. */
 export async function routeActivity(ctx: TenantContext, routeId: string, days = 14) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "TRANSPORT");
   const route = await ctx.db.transportRoute.findFirst({ where: { id: routeId }, select: { id: true } });
   if (!route) throw new NotFoundError("That route was not found.");
   const date = today();

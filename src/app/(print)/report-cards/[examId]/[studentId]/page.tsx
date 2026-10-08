@@ -15,7 +15,7 @@ import { orNotFound } from "@/server/page-helpers";
  */
 
 const load = cache(async (examId: string, studentId: string) => {
-  const ctx = await requireTenant("SCHOOL_ADMIN", "PARENT", "STUDENT");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL", "PARENT", "STUDENT");
   return { ctx, card: await orNotFound(getReportCard(ctx, examId, studentId)) };
 });
 

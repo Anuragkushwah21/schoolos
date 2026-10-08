@@ -4,12 +4,12 @@ import type { AttendanceStatus, TeacherAttendanceStatus } from "@/generated/pris
 import { formatDate, today, toDateInput } from "@/lib/dates";
 import { AppError, NotFoundError, ValidationError } from "@/lib/errors";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireSectionAccess } from "@/server/auth/teacher-access";
 import { sectionLabel } from "@/server/academics/structure";
 import { schoolClosureOn } from "@/server/calendar/holidays";
 import { approvedLeaveOn } from "@/server/staff/leave";
+import { attendedDays } from "@/lib/attendance";
 
 /**
  * Daily attendance.
@@ -28,7 +28,8 @@ import { approvedLeaveOn } from "@/server/staff/leave";
  * expected on one, but a special working Saturday can still be recorded.
  */
 
-import { assertNotHoliday, ATTENDANCE_STATUSES, finalizeDueRegisters } from "./register";
+import { assertNotHoliday, ATTENDANCE_STATUSES } from "./register";
+import { assertCan } from "@/server/auth/permissions";
 
 // The student register — draft, submission, correction window — lives in
 // `./register`; it is re-exported here so existing imports keep working.
@@ -54,7 +55,7 @@ export const STAFF_ATTENDANCE_STATUSES: TeacherAttendanceStatus[] = ["PRESENT", 
  * what the register form sends back.
  */
 export async function getStaffRegister(ctx: TenantContext, date: Date) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "VIEW");
 
   const [teachers, marks, leave, staff, staffMarks, staffLeave] = await Promise.all([
     ctx.db.teacher.findMany({
@@ -126,7 +127,7 @@ export async function markStaffAttendance(
   ctx: TenantContext,
   input: { date: Date; entries: StaffAttendanceEntry[] },
 ): Promise<{ saved: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "attendance", "EDIT");
   if (input.date > today()) throw new AppError("VALIDATION", "Attendance cannot be marked for a future date.");
   await assertNotHoliday(ctx, input.date);
   if (!input.entries.length) throw new ValidationError("Mark at least one person before saving.");
@@ -181,12 +182,12 @@ export async function markStaffAttendance(
 export type AttendanceCounts = Record<AttendanceStatus, number> & { total: number };
 
 export function emptyCounts(): AttendanceCounts {
-  return { PRESENT: 0, ABSENT: 0, LATE: 0, EXCUSED: 0, total: 0 };
+  return { PRESENT: 0, ABSENT: 0, LATE: 0, EXCUSED: 0, HALF_DAY: 0, total: 0 };
 }
 
-/** Present + late, over everything marked. Excused days still count as marked. */
+/** Days attended (present + late + half of the half days), over everything marked. Leave (excused) days still count as marked. */
 export function attendedShare(counts: AttendanceCounts): number | null {
-  return counts.total ? (counts.PRESENT + counts.LATE) / counts.total : null;
+  return counts.total ? attendedDays(counts) / counts.total : null;
 }
 
 /** The section and its current students, for reports (the caller has checked access). */
@@ -263,7 +264,7 @@ export async function sectionReport(ctx: TenantContext, sectionId: string, from:
 
 /** One row per section of the session: how the whole school is doing. */
 export async function schoolReport(ctx: TenantContext, academicSessionId: string, from: Date, to: Date) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "reports", "VIEW");
 
   const [sections, grouped] = await Promise.all([
     ctx.db.section.findMany({
@@ -308,7 +309,6 @@ export async function schoolReport(ctx: TenantContext, academicSessionId: string
 /** Today at a glance, for the admin dashboard. */
 export async function todayOverview(ctx: TenantContext, academicSessionId: string) {
   // Drafts whose period has ended count as taken from now on.
-  await finalizeDueRegisters(ctx);
   const date = today();
   const [sections, marked, byStatus, staff, closure] = await Promise.all([
     ctx.db.section.count({ where: { academicSessionId, enrollments: { some: { status: "ACTIVE" } } } }),

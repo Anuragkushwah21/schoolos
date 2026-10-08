@@ -4,6 +4,9 @@ import { roleProfilePath } from "@/lib/roles";
 import type { SessionUser } from "@/server/auth/session";
 import { getT } from "@/server/i18n";
 import { selfPhotoUrl } from "@/server/people/photos";
+import { withinModules } from "@/lib/school-modules";
+import { switchableCampuses } from "@/server/platform/campuses";
+import { schoolModules } from "@/server/platform/modules";
 
 /**
  * Chrome shared by every signed-in area: a slim sidebar of what people do,
@@ -27,12 +30,23 @@ export async function AppShell({
   nav?: NavItem[];
   children: React.ReactNode;
 }) {
-  const [t, photoUrl] = await Promise.all([getT(), selfPhotoUrl(user).catch(() => null)]);
+  const [t, photoUrl, modules, campuses] = await Promise.all([
+    getT(),
+    selfPhotoUrl(user).catch(() => null),
+    // A school's sidebar shows only the modules its plan includes.
+    user.schoolId ? schoolModules(user.schoolId) : Promise.resolve(null),
+    // An Owner with more than one live campus gets the campus switcher.
+    user.role === "SCHOOL_ADMIN" ? switchableCampuses(user).catch(() => []) : Promise.resolve([]),
+  ]);
+  const links = nav ?? NAV_BY_ROLE[user.role];
 
   return (
     <ShellChrome
-      nav={nav ?? NAV_BY_ROLE[user.role]}
+      nav={modules ? withinModules(links, modules) : links}
+      modules={modules}
       schoolName={user.schoolName ?? t("nav.platform")}
+      campuses={campuses.length > 1 ? campuses : undefined}
+      currentSchoolId={user.schoolId}
       user={{
         name: `${user.firstName} ${user.lastName}`.trim(),
         email: user.email,

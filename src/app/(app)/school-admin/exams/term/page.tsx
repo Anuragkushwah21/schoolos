@@ -22,7 +22,7 @@ import { listExams } from "@/server/exams/service";
 export const metadata: Metadata = { title: "Examinations" };
 
 export default async function ExamsPage(props: PageProps<"/school-admin/exams/term">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const session = await getCurrentSession(ctx);
   if (!session) return <SetupNotice title="Examinations" need="session" />;
 
@@ -35,7 +35,7 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams/te
     sectionOptions(ctx, session.id),
   ]);
   const exams = stage ? all.filter((exam) => exam.stage === stage) : all;
-  const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length;
+  const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH" && exam.verified).length;
 
   return (
     <>
@@ -82,7 +82,7 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams/te
                 {exams.map((exam) => (
                   <tr key={exam.id} className="border-t">
                     <td className="px-3 py-2">
-                      {exam.stage === "READY_TO_PUBLISH" ? (
+                      {exam.stage === "READY_TO_PUBLISH" && exam.verified ? (
                         <input
                           type="checkbox"
                           name="examIds"
@@ -109,6 +109,9 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams/te
                       <span className="flex flex-wrap gap-1">
                         <TimeStatusBadge status={exam.timeStatus} />
                         <StatusBadge status={exam.stage} label={EXAM_STAGE_LABEL[exam.stage]} tone={EXAM_STAGE_TONE[exam.stage]} />
+                        {exam.stage === "READY_TO_PUBLISH" ? (
+                          exam.verified ? <StatusBadge status="VERIFIED" label="Verified" tone="positive" /> : <StatusBadge status="REVIEW" label={exam.allSubmitted ? "Verify first" : "Papers to submit"} tone="warning" />
+                        ) : null}
                       </span>
                     </td>
                   </tr>
@@ -121,7 +124,7 @@ export default async function ExamsPage(props: PageProps<"/school-admin/exams/te
             <p className="text-muted-foreground text-xs">
               {ready
                 ? `${ready} exam${ready === 1 ? " is" : "s are"} ready to publish — tick the ones to release.`
-                : "Nothing is ready to publish yet. An exam is ready once every paper is held and every mark is in."}
+                : "Nothing is ready to publish yet. An exam is ready once every mark is in, every paper is submitted, and the results are verified (open the exam to verify)."}
             </p>
           </div>
         </ActionForm>

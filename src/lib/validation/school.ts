@@ -176,6 +176,8 @@ export const createStudentSchema = z
     relationship: optionalEnum(RELATIONSHIPS),
     /** Ticked after the office has seen the "a parent with this mobile exists" warning. */
     confirmNewParent: checkbox,
+    /** Sent by "Add anyway" after the office has seen the "this child may already be here" warning. */
+    confirmDuplicate: checkbox,
     /** Classes 6–12 only; the server refuses them for Nursery–5. */
     studentEmail: optionalEmail,
     studentPhone: optionalPhone,
@@ -384,15 +386,19 @@ const rupees = (label: string, { min = 0 } = {}) =>
       .max(100_000_000, "That amount is too large"),
   ).transform((value) => Math.round(value * 100));
 
+/** A teacher or a non-teaching staff member — exactly one. */
+const onePayee = <T extends { teacherId?: string | null; staffMemberId?: string | null }>(value: T) => !!value.teacherId !== !!value.staffMemberId;
+
 export const salarySchema = z.object({
-  teacherId: id,
+  teacherId: optionalId,
+  staffMemberId: optionalId,
   salaryType: z.enum(SALARY_TYPES),
   amountMinor: rupees("a salary", { min: 1 }),
   allowancesMinor: rupees("allowances").optional().default(0),
   deductionsMinor: rupees("deductions").optional().default(0),
   effectiveFrom: requiredDate("the date it takes effect"),
   notes: optionalText(500),
-});
+}).refine(onePayee, { message: "Choose a teacher or a staff member", path: ["teacherId"] });
 
 export type SalaryFormInput = z.infer<typeof salarySchema>;
 
@@ -401,12 +407,19 @@ export const feeHeadSchema = z.object({
   note: optionalText(200),
 });
 
+/** "In instalments": how many, and how many months apart (the first is due on `dueOn`). */
+const installmentFields = {
+  installmentCount: z.coerce.number().int().min(1, "At least 1").max(12, "At most 12 instalments").default(1),
+  installmentEveryMonths: z.coerce.number().int().min(1).max(12).default(1),
+};
+
 export const chargeStudentSchema = z.object({
   studentId: id,
   feeHeadId: id,
   amountMinor: rupees("an amount", { min: 1 }),
   dueOn: requiredDate("a due date"),
   notes: optionalText(200),
+  ...installmentFields,
 });
 
 export const chargeSectionSchema = z.object({
@@ -414,7 +427,17 @@ export const chargeSectionSchema = z.object({
   feeHeadId: id,
   amountMinor: rupees("an amount", { min: 1 }),
   dueOn: requiredDate("a due date"),
+  ...installmentFields,
 });
+
+/** The late-fee policy: an amount per overdue instalment (0 = off) and grace days. */
+export const lateFeePolicySchema = z.object({
+  amountMinor: z.preprocess((value) => (value === "" || value === undefined ? "0" : value), rupees("a late fee", { min: 0 })),
+  graceDays: z.coerce.number({ error: "Enter a number of days" }).int("Whole days").min(0).max(365).default(0),
+});
+
+/** Voiding a receipt: always with the reason, which goes on the receipt and the audit log. */
+export const voidPaymentSchema = z.object({ paymentId: id, reason: requiredText("why it is being voided", 200) });
 
 export const paymentSchema = z.object({
   studentId: id,
@@ -425,13 +448,14 @@ export const paymentSchema = z.object({
   /** Cheque number, UPI or bank transaction id. */
   referenceNo: optionalText(60),
   notes: optionalText(200),
+  /** One per payment form: a double submit finds the first payment. */
+  idempotencyKey: z.string().trim().max(64).optional().transform((value) => value || null),
 });
 
 /** What a school prints on its fee receipts, beyond its profile. */
 export const receiptSettingsSchema = z.object({
   receiptHeaderNote: optionalText(200),
   receiptFooterNote: optionalText(400),
-  showFeesToStudents: checkbox,
 });
 
 export type ReceiptSettingsInput = z.infer<typeof receiptSettingsSchema>;
@@ -459,7 +483,10 @@ export const expenseSchema = z.object({
 });
 
 export const salaryPaymentSchema = z.object({
-  teacherId: id,
+  /** From the "who" picker: "T:<teacherId>" or "S:<staffMemberId>". */
+  payee: z.string().regex(/^[TS]:.{1,64}$/, "Choose who was paid").optional(),
+  teacherId: optionalId,
+  staffMemberId: optionalId,
   amountMinor: rupees("an amount", { min: 1 }),
   paidOn: requiredDate("the date it was paid"),
   // An `<input type="month">` posts `YYYY-MM`; the first of that month is stored.
@@ -470,12 +497,8 @@ export const salaryPaymentSchema = z.object({
   method: z.enum(PAYMENT_METHODS),
   reference: optionalText(60),
   notes: optionalText(300),
-});
-
-/** Linking an existing parent to another child. */
-export const linkExistingParentSchema = z.object({
-  studentId: id,
-  parentId: id,
-  relationship: z.enum(RELATIONSHIPS),
-  isPrimary: z.coerce.boolean().optional().default(false),
-});
+})
+  .transform(({ payee, ...rest }) =>
+    payee ? { ...rest, teacherId: payee.startsWith("T:") ? payee.slice(2) : null, staffMemberId: payee.startsWith("S:") ? payee.slice(2) : null } : rest,
+  )
+  .refine(onePayee, { message: "Choose who was paid", path: ["payee"] });

@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Published results" };
 
 /** Exams & Results → Published results. */
 export default async function Page(props: PageProps<"/school-admin/exams/results">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   if (!(await getCurrentSession(ctx))) return <SetupNotice title="Exams & Results" need="session" />;
   const search = await props.searchParams;
   return (

@@ -156,7 +156,7 @@ export async function ExpensesScreen({
               <CardTitle id="add-expense" className="scroll-mt-24">Add expense</CardTitle>
             </CardHeader>
             <CardContent>
-              <ExpenseForm today={toDateInput(now)} />
+              <ExpenseForm today={toDateInput(now)} defaultCategory={category} />
             </CardContent>
           </Card>
         ) : null}

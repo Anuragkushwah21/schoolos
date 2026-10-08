@@ -1,10 +1,14 @@
 import type { Metadata, Route } from "next";
+import { attendedDays } from "@/lib/attendance";
 import Link from "next/link";
 
 import { ActionButton } from "@/components/forms/action-button";
 import { StudentAttentionCard } from "@/features/exams/student-attention";
 import { PageHeader } from "@/components/shared/page-header";
 import { LifecyclePanel } from "@/features/people/lifecycle-panel";
+import { rupees } from "@/features/finance/money";
+import { publishedExamsFor } from "@/server/exams/results";
+import { getStudentFees } from "@/server/finance/fees";
 import { supportForStudent } from "@/server/support/service";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +34,7 @@ import { listLoans } from "@/server/operations/library";
 import { getStudentProfile, searchParents } from "@/server/people/students";
 import { activationEmailStatuses } from "@/server/auth/account-links";
 import { groupLabel, seatOptionsFor } from "@/server/academics/streams";
+import { hasModule } from "@/server/platform/modules";
 
 export const metadata: Metadata = { title: "Student" };
 
@@ -43,7 +48,7 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
 }
 
 export default async function StudentPage(props: PageProps<"/school-admin/students/[studentId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { studentId } = await props.params;
 
   const [{ student, attendance }, sessions, parents] = await Promise.all([
@@ -52,7 +57,15 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
     searchParents(ctx),
   ]);
   // Every book ever issued to this student, newest first.
-  const loans = await listLoans(ctx, { studentId: student.id, view: "all" });
+  // Library history only where the school's plan has the library.
+  const libraryOn = await hasModule(ctx, "LIBRARY");
+  const loans = libraryOn ? await listLoans(ctx, { studentId: student.id, view: "all" }) : [];
+  // Published results across sessions, and — for the School Admin only, where the
+  // plan has fees — the fee position (the Principal sees no individual fees).
+  const [results, fees] = await Promise.all([
+    publishedExamsFor(ctx, student.id),
+    ctx.user.role === "SCHOOL_ADMIN" && (await hasModule(ctx, "FINANCE")) ? getStudentFees(ctx, student.id) : Promise.resolve(null),
+  ]);
 
   // Whether each pending login's activation email went, and if not, why.
   const invites = await activationEmailStatuses(ctx, [student.user?.id, ...student.parents.map((link) => link.parent.user?.id)]);
@@ -75,7 +88,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
   const seats = await seatOptionsFor(ctx.db, sectionsBySession.map((section) => section.id));
   const counts = Object.fromEntries(attendance.map((row) => [row.status, row._count._all]));
   const marked = attendance.reduce((sum, row) => sum + row._count._all, 0);
-  const attended = (counts.PRESENT ?? 0) + (counts.LATE ?? 0);
+  const attended = attendedDays({ PRESENT: counts.PRESENT ?? 0, LATE: counts.LATE ?? 0, HALF_DAY: counts.HALF_DAY ?? 0 });
   const support = await supportForStudent(ctx, student.id);
   const linkedParentIds = new Set(student.parents.map((link) => link.parent.id));
 
@@ -136,7 +149,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
             </CardHeader>
             <CardContent>
               <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {(["PRESENT", "LATE", "ABSENT", "EXCUSED"] as const).map((status) => (
+                {(["PRESENT", "LATE", "HALF_DAY", "ABSENT", "EXCUSED"] as const).map((status) => (
                   <div key={status} className="rounded-lg border p-3">
                     <dt className="text-muted-foreground text-xs">{humanize(status)}</dt>
                     <dd className="text-xl font-semibold tabular-nums">{counts[status] ?? 0}</dd>
@@ -148,6 +161,66 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
 
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+              <CardTitle>Results</CardTitle>
+              <span className="text-muted-foreground text-xs">Published exams, every session</span>
+            </CardHeader>
+            <CardContent>
+              {results.length ? (
+                <ul className="divide-y text-sm">
+                  {results.map((exam) => (
+                    <li key={exam.id} className="flex flex-wrap items-center gap-3 py-2">
+                      <span className="min-w-0 flex-1">
+                        <span className="font-medium">{exam.name}</span>
+                        <span className="text-muted-foreground block text-xs">{exam.session}</span>
+                      </span>
+                      <span className="tabular-nums">{`${exam.total}/${exam.maxTotal}${exam.percent === null ? "" : ` · ${exam.percent}%`}${exam.grade ? ` · ${exam.grade}` : ""}`}</span>
+                      <Link className="text-primary text-xs font-medium hover:underline" href={`/report-cards/${exam.id}/${student.id}` as Route} target="_blank">
+                        Report card
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-muted-foreground text-sm">No published results yet.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {fees ? (
+            <Card>
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+                <CardTitle>{`Fees${fees.session ? ` · ${fees.session.name}` : ""}`}</CardTitle>
+                <div className="flex gap-3 text-xs">
+                  <Link className="text-primary font-medium hover:underline" href={`/school-admin/finance/payments?student=${student.id}` as Route}>
+                    Collect / charges
+                  </Link>
+                  <Link className="text-primary font-medium hover:underline" href={`/school-admin/finance/ledger/${student.id}` as Route}>
+                    Ledger
+                  </Link>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <dl className="grid grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <dt className="text-muted-foreground text-xs">Net fees</dt>
+                    <dd className="font-semibold tabular-nums">{rupees(fees.summary.chargedMinor)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground text-xs">Paid</dt>
+                    <dd className="font-semibold tabular-nums">{rupees(fees.summary.paidMinor)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground text-xs">Pending</dt>
+                    <dd className={`font-semibold tabular-nums ${fees.summary.overdue ? "text-danger-strong" : ""}`}>{`${rupees(fees.summary.pendingMinor)}${fees.summary.overdue ? " · overdue" : ""}`}</dd>
+                  </div>
+                </dl>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {libraryOn ? (
+          <Card>
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
               <CardTitle>Library</CardTitle>
               <span className="text-muted-foreground text-xs">
                 {loans.filter((loan) => !loan.returnedOn).length} out now · {loans.length} issued in all
@@ -157,6 +230,7 @@ export default async function StudentPage(props: PageProps<"/school-admin/studen
               {loans.length ? <LoansList loans={loans} canManage={false} /> : <p className="text-muted-foreground text-sm">No books issued yet.</p>}
             </CardContent>
           </Card>
+          ) : null}
 
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">

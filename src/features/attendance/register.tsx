@@ -22,8 +22,11 @@ const STUDENT_OPTIONS: Option[] = [
   { value: "PRESENT", label: "Present", short: "P", tone: "peer-checked:bg-success peer-checked:text-white peer-checked:border-success" },
   { value: "ABSENT", label: "Absent", short: "A", tone: "peer-checked:bg-danger peer-checked:text-white peer-checked:border-danger" },
   { value: "LATE", label: "Late", short: "L", tone: "peer-checked:bg-warning peer-checked:text-white peer-checked:border-warning" },
-  { value: "EXCUSED", label: "Excused", short: "E", tone: "peer-checked:bg-info peer-checked:text-white peer-checked:border-info" },
+  { value: "EXCUSED", label: "Leave", short: "LV", tone: "peer-checked:bg-info peer-checked:text-white peer-checked:border-info" },
 ];
+
+/** Offered only while the school allows Half Day (Settings → Attendance); the server checks again. */
+const HALF_DAY_OPTION: Option = { value: "HALF_DAY", label: "Half day", short: "H", tone: "peer-checked:bg-primary peer-checked:text-primary-foreground peer-checked:border-primary" };
 
 const STAFF_OPTIONS: Option[] = [
   STUDENT_OPTIONS[0]!,
@@ -50,6 +53,7 @@ function RegisterForm({
   editable,
   submitLabel = "Save attendance",
   footer,
+  secondary,
   onEdit,
 }: {
   action: FormAction<undefined>;
@@ -60,6 +64,8 @@ function RegisterForm({
   submitLabel?: string;
   /** Shown above the button: draft status, correction window, reason field. */
   footer?: React.ReactNode;
+  /** A second button beside Submit (Save draft). */
+  secondary?: React.ReactNode;
   /** Called with the form after any change — used for auto-save. */
   onEdit?: (form: HTMLFormElement) => void;
 }) {
@@ -85,10 +91,21 @@ function RegisterForm({
       ))}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-muted-foreground text-sm">
-          {counts.map((c) => `${c.count} ${c.label.toLowerCase()}`).join(" · ")}
-          {unmarked ? ` · ${unmarked} not marked` : ""}
-        </p>
+        {/* The review: what will be submitted, at a glance. */}
+        <dl className="flex flex-wrap gap-2" aria-label="Summary">
+          {counts.map((c) => (
+            <div key={c.value} className="bg-muted/50 min-w-20 rounded-lg px-3 py-1.5 text-center">
+              <dt className="text-muted-foreground text-xs">{c.label}</dt>
+              <dd className="text-lg font-semibold tabular-nums">{c.count}</dd>
+            </div>
+          ))}
+          {unmarked ? (
+            <div className="bg-warning-soft min-w-20 rounded-lg px-3 py-1.5 text-center">
+              <dt className="text-muted-foreground text-xs">Not marked</dt>
+              <dd className="text-lg font-semibold tabular-nums">{unmarked}</dd>
+            </div>
+          ) : null}
+        </dl>
         {editable ? (
           <Button
             type="button"
@@ -169,6 +186,7 @@ function RegisterForm({
         <div className="bg-background/90 sticky bottom-0 -mx-1 flex flex-col gap-2 px-1 py-3 backdrop-blur">
           {footer}
           <div className="flex items-center gap-3">
+            {secondary}
             <SubmitButton pendingLabel="Saving…" className="h-10 px-6">
               {submitLabel}
             </SubmitButton>
@@ -200,9 +218,10 @@ export type RegisterPhase = "NOT_TAKEN" | "DRAFT" | "CORRECTABLE" | "LOCKED";
 
 /**
  * The student register. Before it is submitted, every tap is saved as a
- * draft (nothing reaches parents yet) and the footer says when it will be
- * submitted. After submission a correction needs a short reason and is only
- * possible until the deadline the server set — the server checks again.
+ * draft, and Save draft saves it at once — a draft reaches nobody. Only
+ * Submit Attendance makes it the record; nothing submits it by itself. After
+ * submission a correction needs a short reason and is only possible until the
+ * deadline the server set — the server checks again.
  */
 export function StudentRegister({
   sectionId,
@@ -211,10 +230,9 @@ export function StudentRegister({
   editable,
   phase = "NOT_TAKEN",
   deadline = null,
-  finalizeAt = null,
   draftSavedAt = null,
-  submission = "AUTO",
   isAdmin = false,
+  halfDay = false,
 }: {
   sectionId: string;
   date: string;
@@ -222,28 +240,28 @@ export function StudentRegister({
   editable: boolean;
   phase?: RegisterPhase;
   deadline?: string | null;
-  finalizeAt?: string | null;
   draftSavedAt?: string | null;
-  submission?: "AUTO" | "MANUAL";
   isAdmin?: boolean;
+  /** The school allows Half Day. A row already marked Half Day keeps the choice even if it was turned off since. */
+  halfDay?: boolean;
 }) {
+  const options = halfDay || rows.some((row) => row.status === "HALF_DAY") ? [...STUDENT_OPTIONS.slice(0, 3), HALF_DAY_OPTION, STUDENT_OPTIONS[3]!] : STUDENT_OPTIONS;
   const drafting = phase === "NOT_TAKEN" || phase === "DRAFT";
-  const [saved, setSaved] = useState<{ at: string | null; finalizeAt: string | null; failed: boolean }>({
-    at: draftSavedAt,
-    finalizeAt,
-    failed: false,
-  });
+  const [saved, setSaved] = useState<{ at: string | null; failed: boolean; saving: boolean }>({ at: draftSavedAt, failed: false, saving: false });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => (timer.current ? clearTimeout(timer.current) : undefined), []);
+
+  async function saveDraft(form: HTMLFormElement) {
+    setSaved((current) => ({ ...current, saving: true }));
+    const result = await saveRegisterDraftAction({ sectionId, date, entries: entriesFrom(form) }).catch(() => null);
+    if (result?.status === "success") setSaved({ at: result.data.savedAt, failed: false, saving: false });
+    else setSaved((current) => ({ ...current, failed: true, saving: false }));
+  }
 
   function autosave(form: HTMLFormElement) {
     if (!drafting || !editable) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(async () => {
-      const result = await saveRegisterDraftAction({ sectionId, date, entries: entriesFrom(form) }).catch(() => null);
-      if (result?.status === "success") setSaved({ at: result.data.savedAt, finalizeAt: result.data.finalizeAt, failed: false });
-      else setSaved((current) => ({ ...current, failed: true }));
-    }, 700);
+    timer.current = setTimeout(() => void saveDraft(form), 700);
   }
 
   const footer = drafting ? (
@@ -253,9 +271,7 @@ export function StudentRegister({
         : saved.at
           ? `Draft saved at ${clock(saved.at)}. `
           : "Marks are saved as a draft as you go. "}
-      {submission === "AUTO" && saved.finalizeAt
-        ? `It submits itself at ${clock(saved.finalizeAt)} — or submit now.`
-        : "Press Submit when you are done."}
+      A draft is not submitted: parents and reports see nothing until you press Submit Attendance.
     </p>
   ) : (
     <div className="flex flex-col gap-1.5">
@@ -280,10 +296,26 @@ export function StudentRegister({
       action={markAttendanceAction}
       hidden={{ sectionId, date }}
       rows={rows}
-      options={STUDENT_OPTIONS}
+      options={options}
       editable={editable}
-      submitLabel={drafting ? (submission === "AUTO" ? "Submit now" : "Submit attendance") : "Save correction"}
+      submitLabel={drafting ? "Submit Attendance" : "Save correction"}
       footer={footer}
+      secondary={
+        drafting ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10"
+            disabled={saved.saving}
+            onClick={(event) => {
+              const form = event.currentTarget.closest("form");
+              if (form) void saveDraft(form);
+            }}
+          >
+            {saved.saving ? "Saving…" : "Save Draft"}
+          </Button>
+        ) : null
+      }
       onEdit={autosave}
     />
   );

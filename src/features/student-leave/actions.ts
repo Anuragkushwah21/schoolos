@@ -19,7 +19,7 @@ export async function applyStudentLeaveAction(_p: Result, formData: FormData): P
     async () => {
       const ctx = await requireTenantForAction("PARENT", "STUDENT");
       await applyStudentLeave(ctx, parseFormData(studentLeaveSchema, formData));
-      return successResult("Leave request submitted. The class teacher will review it.");
+      return successResult("Leave request sent. The class teacher reviews it first, then the school gives the final approval.");
     },
     { revalidate: PAGES },
   );
@@ -39,10 +39,15 @@ export async function cancelStudentLeaveAction(_p: Result, formData: FormData): 
 export async function decideStudentLeaveAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
       const input = parseFormData(studentLeaveDecisionSchema, formData);
-      const { markedDays } = await decideStudentLeave(ctx, input);
-      const done = input.decision === "APPROVE" ? "Leave approved." : "Leave rejected.";
+      const { markedDays, status } = await decideStudentLeave(ctx, input);
+      const done =
+        status === "TEACHER_APPROVED"
+          ? "Approved and sent to the School Admin for final approval."
+          : status === "APPROVED"
+            ? "Leave given final approval."
+            : "Leave rejected.";
       return successResult(
         markedDays
           ? `${done} Attendance was already marked for ${markedDays} day${markedDays === 1 ? "" : "s"} in this period — it has not been changed. Correct it from the register if needed.`
@@ -56,7 +61,7 @@ export async function decideStudentLeaveAction(_p: Result, formData: FormData): 
 export async function saveStudentLeaveSettingsAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       await saveStudentLeaveSettings(ctx, parseFormData(studentLeaveSettingsSchema, formData));
       return successResult("Leave settings saved.");
     },

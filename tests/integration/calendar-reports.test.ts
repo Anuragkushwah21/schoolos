@@ -15,6 +15,7 @@ import { createExams, publishExams, saveMarks } from "@/server/exams/service";
 import { examPerformanceReport, teacherWorkloadReport } from "@/server/reports/exports";
 
 import { adminOf, contextFor, teacherOf } from "../helpers/context";
+import { submitAndVerify } from "../helpers/exams";
 import { type SeededSchool, createIsolationFixture, destroyIsolationFixture } from "../helpers/isolation-fixture";
 
 let schoolA: SeededSchool;
@@ -94,6 +95,7 @@ describe("academic and workload reports", () => {
       paper.id,
       schoolA.studentIds.map((studentId, index) => ({ studentId, marks: index === 0 ? 2 : 8, absent: false, remark: null })),
     );
+    await submitAndVerify(adminOf(schoolA), exam.id);
     await publishExams(adminOf(schoolA), [exam.id]);
     const { exams } = await examPerformanceReport(adminOf(schoolA));
     const row = exams.find((item) => item.id === exam.id)!;

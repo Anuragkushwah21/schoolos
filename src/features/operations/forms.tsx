@@ -57,6 +57,16 @@ export function StaffForm({
     joiningDate: string;
     status: string;
     notes: string | null;
+    dateOfBirth?: string;
+    gender?: string | null;
+    addressLine?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postalCode?: string | null;
+    experienceYears?: number | null;
+    employmentType?: string | null;
+    emergencyContactName?: string | null;
+    emergencyContactPhone?: string | null;
   };
   /** Role profiles: built-in and the school's own. */
   roles: Array<{ value: string; label: string }>;
@@ -70,15 +80,16 @@ export function StaffForm({
       </FieldRow>
       <FieldRow>
         <TextField name="employeeId" label="Employee ID" defaultValue={staff?.employeeId} required />
-        <SelectField
-          name="roleProfileId"
-          label="Role"
-          options={roles}
-          defaultValue={staff?.roleProfileId ?? undefined}
-          placeholder="Choose"
-          hint={staff ? "Changing role keeps their permissions, minus anything the new role can never have." : "They start with this role's default permissions."}
-          required
-        />
+        {staff ? (
+          // A role change has its own choice (keep custom permissions or reset) under Role & access.
+          <div className="flex flex-col gap-1 text-sm">
+            <input type="hidden" name="roleProfileId" value={staff.roleProfileId ?? ""} />
+            <span className="font-medium">Role</span>
+            <span className="text-muted-foreground">{roles.find((role) => role.value === staff.roleProfileId)?.label ?? "—"} · change it under Role &amp; access</span>
+          </div>
+        ) : (
+          <SelectField name="roleProfileId" label="Role" options={roles} placeholder="Choose" hint="They start with this role's default permissions." required />
+        )}
       </FieldRow>
       <FieldRow>
         <TextField name="designation" label="Job title" placeholder="Senior accountant" defaultValue={staff?.designation ?? ""} />
@@ -93,6 +104,50 @@ export function StaffForm({
         {/* New staff start Active; later changes use "Change status" on their page. */}
         <div />
       </FieldRow>
+      {staff ? (
+        <>
+          <FieldRow>
+            <TextField name="dateOfBirth" label="Date of birth" type="date" defaultValue={staff.dateOfBirth ?? ""} />
+            <SelectField
+              name="gender"
+              label="Gender"
+              options={[
+                { value: "MALE", label: "Male" },
+                { value: "FEMALE", label: "Female" },
+                { value: "OTHER", label: "Other" },
+              ]}
+              defaultValue={staff.gender ?? ""}
+              placeholder="—"
+            />
+          </FieldRow>
+          <TextField name="addressLine" label="Address" defaultValue={staff.addressLine ?? ""} />
+          <FieldRow>
+            <TextField name="city" label="City" defaultValue={staff.city ?? ""} />
+            <TextField name="state" label="State" defaultValue={staff.state ?? ""} />
+            <TextField name="postalCode" label="PIN code" defaultValue={staff.postalCode ?? ""} />
+          </FieldRow>
+          <FieldRow>
+            <SelectField
+              name="employmentType"
+              label="Employment type"
+              options={[
+                { value: "FULL_TIME", label: "Full time" },
+                { value: "PART_TIME", label: "Part time" },
+                { value: "CONTRACT", label: "Contract" },
+                { value: "TEMPORARY", label: "Temporary" },
+                { value: "VOLUNTEER", label: "Volunteer" },
+              ]}
+              defaultValue={staff.employmentType ?? ""}
+              placeholder="—"
+            />
+            <TextField name="experienceYears" label="Experience (years)" type="number" min={0} max={60} defaultValue={staff.experienceYears ?? ""} />
+          </FieldRow>
+          <FieldRow>
+            <TextField name="emergencyContactName" label="Emergency contact" defaultValue={staff.emergencyContactName ?? ""} />
+            <PhoneField name="emergencyContactPhone" label="Emergency contact mobile" defaultValue={staff.emergencyContactPhone ?? ""} />
+          </FieldRow>
+        </>
+      ) : null}
       <TextareaField name="notes" label="Notes" rows={2} defaultValue={staff?.notes ?? ""} />
       <div>
         <SubmitButton>{staff ? "Save" : "Add staff member"}</SubmitButton>

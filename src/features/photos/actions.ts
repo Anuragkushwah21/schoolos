@@ -8,7 +8,7 @@ import { requireTenantForAction } from "@/server/auth/current-user";
 import { type PhotoTarget, removePhoto, selfTarget, setPhoto } from "@/server/people/photos";
 import { revalidatePath } from "next/cache";
 
-const ROLES = ["SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"] as const;
+const ROLES = ["SCHOOL_ADMIN", "PRINCIPAL", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF"] as const;
 /** Only ever your own photo: nobody — the School Admin included — changes someone else's. */
 const targetSchema = z.object({ owner: z.literal("SELF") });
 

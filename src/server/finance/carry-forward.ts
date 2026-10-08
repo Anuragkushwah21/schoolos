@@ -5,7 +5,7 @@ import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { requireCurrentSession } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { isUniqueViolation } from "@/server/db/errors";
 import { readStudentFees } from "@/server/finance/fees";
@@ -50,7 +50,7 @@ export async function previousDues(ctx: TenantContext, studentId: string): Promi
  * so the parent reads exactly why it is owed.
  */
 export async function carryForward(ctx: TenantContext, studentId: string, fromSessionId: string): Promise<{ amountMinor: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
   const current = await requireCurrentSession(ctx);
   const [student, from] = await Promise.all([
     ctx.db.student.findFirst({ where: { id: studentId }, select: { id: true, firstName: true, lastName: true } }),
@@ -110,7 +110,7 @@ export async function carryForward(ctx: TenantContext, studentId: string, fromSe
  * one section.
  */
 export async function carryForwardCandidates(ctx: TenantContext, filters: { sectionId?: string } = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
   const current = await requireCurrentSession(ctx);
   const enrollments = await ctx.db.studentEnrollment.findMany({
     where: { academicSessionId: current.id, status: "ACTIVE", ...(filters.sectionId ? { sectionId: filters.sectionId } : {}) },
@@ -138,7 +138,7 @@ export async function carryForwardCandidates(ctx: TenantContext, filters: { sect
 
 /** Carry forward every listed balance for one section (or the school). Reports what was done. */
 export async function carryForwardAll(ctx: TenantContext, filters: { sectionId?: string } = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
   const candidates = await carryForwardCandidates(ctx, filters);
   let students = 0;
   let amountMinor = 0;

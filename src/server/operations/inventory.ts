@@ -12,6 +12,7 @@ import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { isUniqueViolation } from "@/server/db/errors";
 import type { ReportTable } from "@/server/reports/exports";
+import { assertModuleEnabled } from "@/server/platform/modules";
 
 /**
  * Assets and inventory: what the school owns, where it is, who has it, and
@@ -162,6 +163,7 @@ const pick = <T extends string>(values: readonly T[], raw: string): T | undefine
 /** Add assets from CSV. Codes must be new; every row is checked before anything is written. */
 export async function importAssets(ctx: TenantContext, text: string): Promise<{ created: number; errors: ImportError[] }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "INVENTORY");
   let records;
   try {
     records = readCsvRecords(text, { required: ["Code", "Name", "Category"], maxRows: 2000 });

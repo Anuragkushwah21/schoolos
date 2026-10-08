@@ -16,6 +16,9 @@ import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession } from "@/server/academics/structure";
 import { listFeePositions, listPayments } from "@/server/finance/fees";
 import { listSalaries } from "@/server/finance/salary";
+import { redirect } from "next/navigation";
+import { ModuleGate } from "@/features/platform/module-gate";
+import { schoolModules } from "@/server/platform/modules";
 
 export const metadata: Metadata = { title: "Finance" };
 
@@ -28,13 +31,21 @@ export const metadata: Metadata = { title: "Finance" };
  */
 export default async function FinancePage() {
   const ctx = await requireTenant("SCHOOL_ADMIN");
+  // Fees are this overview's subject. Without them, the money module the plan
+  // does include opens instead; with none, the "not in your plan" notice.
+  const modules = await schoolModules(ctx.schoolId);
+  if (!modules.includes("FINANCE")) {
+    if (modules.includes("EXPENSES")) redirect("/school-admin/finance/expenses");
+    if (modules.includes("PAYROLL")) redirect("/school-admin/finance/payroll");
+    return <ModuleGate module="FINANCE">{null}</ModuleGate>;
+  }
   const session = await getCurrentSession(ctx);
   if (!session) return <SetupNotice title="Finance" need="session" />;
 
   const [fees, payments, salaries] = await Promise.all([
     listFeePositions(ctx),
     listPayments(ctx, { academicSessionId: session.id, take: 8 }),
-    listSalaries(ctx),
+    modules.includes("PAYROLL") ? listSalaries(ctx) : Promise.resolve(null),
   ]);
 
   const totals = fees.totals;
@@ -65,12 +76,14 @@ export default async function FinancePage() {
           value={rupees(totals?.pendingMinor ?? 0)}
           hint={totals?.overdue ? `${totals.overdue} overdue` : "none overdue"}
         />
-        <StatCard
-          label="Salary bill"
-          value={rupees(salaries.totals.monthlyMinor)}
-          hint="per month, configured staff"
-          href="/school-admin/finance/salaries"
-        />
+        {salaries ? (
+          <StatCard
+            label="Salary bill"
+            value={rupees(salaries.totals.monthlyMinor)}
+            hint="per month, configured staff"
+            href="/school-admin/finance/salaries"
+          />
+        ) : null}
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">

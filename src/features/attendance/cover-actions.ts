@@ -3,7 +3,7 @@
 import { z } from "zod";
 
 import { type ActionResult, parseFormData, successResult } from "@/lib/action-result";
-import { id, optionalText, requiredDate, requiredText } from "@/lib/validation/common";
+import { checkbox, id, optionalText, requiredDate, requiredText } from "@/lib/validation/common";
 import {
   assignRegisterCover,
   assignWorkCover,
@@ -15,7 +15,7 @@ import { requireTenantForAction } from "@/server/auth/current-user";
 import { performAction } from "@/server/perform-action";
 
 type Result = ActionResult<undefined>;
-const admin = () => requireTenantForAction("SCHOOL_ADMIN");
+const admin = () => requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
 const PAGES = ["/school-admin", "/teacher", "/staff"];
 
 const registerCoverSchema = z.object({ sectionId: id, date: requiredDate("the date"), teacherId: id, reason: optionalText(200) });
@@ -57,7 +57,7 @@ export async function removeWorkCoverAction(_p: Result, formData: FormData): Pro
 
 const settingsSchema = z.object({
   timing: z.enum(["FIRST_PERIOD", "LAST_PERIOD"]),
-  submission: z.enum(["AUTO", "MANUAL"]),
+  halfDay: checkbox,
 });
 
 export async function saveAttendanceSettingsAction(_p: Result, formData: FormData): Promise<Result> {

@@ -5,12 +5,12 @@ import type { Gender } from "@/generated/prisma/enums";
 import { CsvFormatError, readCsvRecords } from "@/lib/csv";
 import { parseDateInput } from "@/lib/dates";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { type LoginInvite, provisionAccount, sendActivation, unusablePasswordHash } from "@/server/auth/account-links";
 import { prisma } from "@/server/db/prisma";
 import type { StudentImportReport } from "@/server/people/bulk-students";
 import { remainingTeacherCapacity } from "@/server/platform/limits";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Teachers from a CSV, the same way students come in: check first (nothing
@@ -30,7 +30,7 @@ export async function importTeachers(
   text: string,
   options: { mode?: "check" | "import"; validOnly?: boolean } = {},
 ): Promise<TeacherImportReport> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   const mode = options.mode ?? "import";
   const empty = { total: 0, valid: 0, created: 0, warnings: [], invites: [] };
 

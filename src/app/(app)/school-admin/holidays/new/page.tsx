@@ -14,7 +14,7 @@ export const metadata: Metadata = { title: "New holiday" };
  * since the server would refuse it anyway.
  */
 export default async function NewHolidayPage(props: PageProps<"/school-admin/holidays/new">) {
-  await requireTenant("SCHOOL_ADMIN");
+  await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const now = today();
   const picked = parseDateInput(param(search.date));

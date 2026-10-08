@@ -24,7 +24,7 @@ export const metadata: Metadata = { title: "Convert to student" };
  * by name is offered but never chosen for the office.
  */
 export default async function ConvertPage(props: PageProps<"/school-admin/admissions/[applicationId]/convert">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { applicationId } = await props.params;
   const plan = await orNotFound(conversionPlan(ctx, applicationId));
   const session = await getCurrentSession(ctx);
@@ -46,7 +46,9 @@ export default async function ConvertPage(props: PageProps<"/school-admin/admiss
   }
 
   const [sections, parents, seats] = await Promise.all([studentFormSections(ctx, session.id), parentOptions(ctx), admissionSeatOptions(ctx, session.id)]);
-  const requested = sections.find((section) => section.classId === prefill.requestedClassId);
+  // A drive application names its section when the teacher's assignment was for one.
+  const requested =
+    sections.find((section) => section.value === application.assignment?.sectionId) ?? sections.find((section) => section.classId === prefill.requestedClassId);
   const match = plan.matchingParents[0];
   // A parent already here is offered first, so the family is linked, not duplicated.
   const parentChoices = [

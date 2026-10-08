@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useMemo } from "react";
 
-import { INTL_LOCALE, type Locale } from "@/lib/i18n/config";
+import type { Locale } from "@/lib/i18n/config";
 import type { Messages } from "@/lib/i18n/messages";
 import { type Translator, createTranslator, translateDynamic } from "@/lib/i18n/translate";
 
@@ -32,10 +32,6 @@ export function useT(): Translator {
 
 export function useLocale(): Locale {
   return useI18n().locale;
-}
-
-export function useIntlLocale(): string {
-  return INTL_LOCALE[useI18n().locale];
 }
 
 /** Translate a runtime value such as a status, falling back to `fallback`. */

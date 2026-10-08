@@ -190,7 +190,10 @@ const HOMEWORK_STATUS_OPTIONS = [
 ];
 
 /** A class the teacher may set work for, with the subjects they teach it. */
-export type HomeworkSectionOption = SlotOption & { subjects: SlotOption[] };
+export type HomeworkSectionOption = SlotOption & {
+  /** Per subject: whether the whole section may be chosen, and which of its streams. */
+  subjects: Array<SlotOption & { whole?: boolean; streams?: SlotOption[] }>;
+};
 
 export function HomeworkForm({
   sections,
@@ -206,6 +209,7 @@ export function HomeworkForm({
     id: string;
     sectionId: string;
     subjectId: string;
+    streamId?: string | null;
     title: string;
     description: string | null;
     instructions?: string | null;
@@ -219,6 +223,9 @@ export function HomeworkForm({
   // Work cannot be due before it is set; the server enforces the same rule.
   const [assignedOn, setAssignedOn] = useState(homework?.assignedOn ?? today);
   const subjects = sections.find((section) => section.value === sectionId)?.subjects ?? [];
+  const [subjectId, setSubjectId] = useState(homework?.sectionId === sectionId ? homework.subjectId : "");
+  const subject = subjects.find((item) => item.value === subjectId);
+  const streamOptions = subject?.streams ?? [];
 
   return (
     <ActionForm action={saveHomeworkAction} className="max-w-3xl">
@@ -239,7 +246,8 @@ export function HomeworkForm({
           key={sectionId}
           name="subjectId"
           label="Subject"
-          defaultValue={homework?.sectionId === sectionId ? homework.subjectId : undefined}
+          value={subjects.some((item) => item.value === subjectId) ? subjectId : ""}
+          onChange={(event) => setSubjectId(event.target.value)}
           options={subjects}
           placeholder={subjects.length ? "Choose a subject" : "You teach no subject here"}
           disabled={subjects.length === 0}
@@ -247,6 +255,18 @@ export function HomeworkForm({
           required
         />
       </FieldRow>
+      {streamOptions.length ? (
+        <SelectField
+          key={`${sectionId}-${subjectId}`}
+          name="streamId"
+          label="Stream"
+          options={streamOptions}
+          placeholder={subject?.whole ? "Whole section" : undefined}
+          defaultValue={homework?.subjectId === subjectId ? (homework?.streamId ?? "") : subject?.whole ? "" : streamOptions[0]?.value}
+          hint={subject?.whole ? "Choose a stream for work only that stream should do." : "You teach this subject to these streams only."}
+          required={!subject?.whole}
+        />
+      ) : null}
       <TextField
         name="title"
         label="Title"

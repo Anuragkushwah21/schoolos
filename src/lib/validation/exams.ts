@@ -131,7 +131,7 @@ export const reopenMarksSchema = z.object({
   reason: requiredText("why the marks need correcting", 300),
 });
 
-export type MarkEntry = { studentId: string; marks: number | null; absent: boolean; remark: string | null };
+export type MarkEntry = { studentId: string; marks: number | null; absent: boolean; remark: string | null; /** Excused from this paper: no mark, left out of totals. */ exempt?: boolean };
 
 /** The API's marks body. Range checks against the paper happen in the service. */
 export const marksBodySchema = z.object({
@@ -141,6 +141,7 @@ export const marksBodySchema = z.object({
         studentId: id,
         marks: z.number().int("Marks are whole numbers").min(0).nullable().optional(),
         absent: z.boolean().optional(),
+        exempt: z.boolean().optional(),
         remark: optionalText(300),
       }),
     )
@@ -153,4 +154,29 @@ export const examIdsSchema = z.object({
     (value) => (value === undefined || value === "" ? [] : Array.isArray(value) ? value : [value]),
     z.array(id).min(1, "Choose at least one exam").max(100),
   ),
+});
+
+/** Withdrawing published results always says why (it is on the audit log). */
+export const unpublishExamSchema = z.object({ examId: id, reason: requiredText("why the results are being withdrawn", 300) });
+
+/** Correcting one published mark: the new value and the reason. */
+export const correctResultSchema = z.object({
+  assessmentId: id,
+  studentId: id,
+  marks: z.preprocess((value) => (value === "" || value === undefined || value === null ? null : value), z.coerce.number().int("Marks are whole numbers").min(0).nullable()),
+  status: z.enum(["MARKS", "ABSENT", "EXEMPT"]).default("MARKS"),
+  reason: requiredText("why the mark is being corrected", 300),
+});
+
+/** The school's grading scale: one "grade:min" pair per line ("A1:91"), highest first. */
+export const gradingRulesSchema = z.object({
+  useDefault: z.preprocess((value) => value === "on" || value === "true" || value === true, z.boolean()).default(false),
+  bands: z.string().max(1000).optional().default(""),
+  passPercent: z.coerce.number({ error: "Enter a pass percentage" }).int("Whole percent").min(1).max(100),
+});
+
+/** The final-result scheme: one "exam name:weight" pair per line. */
+export const resultSchemeSchema = z.object({
+  name: requiredText("a name for the final result", 80),
+  components: requiredText("the exams and their weights", 2000),
 });

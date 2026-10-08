@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: "Events" };
  * notices and meetings on their own pages.
  */
 export default async function AdminEventsPage(props: PageProps<"/school-admin/events">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
 
   return (

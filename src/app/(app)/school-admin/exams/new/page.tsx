@@ -9,7 +9,7 @@ import { getCurrentSession, sectionLabel } from "@/server/academics/structure";
 export const metadata: Metadata = { title: "New exam" };
 
 export default async function NewExamPage() {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const session = await getCurrentSession(ctx);
   if (!session) return <SetupNotice title="New exam" need="session" />;
 

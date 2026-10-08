@@ -18,7 +18,7 @@ const TONE_DOT = { critical: "bg-danger", warning: "bg-warning", info: "bg-info"
 
 /** Every current notification for the signed-in person, read and unread. */
 export default async function NotificationsPage() {
-  const ctx = await requireTenant("SCHOOL_ADMIN", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER", "STUDENT", "PARENT", "NON_TEACHING_STAFF");
   const [t, { alerts, unread }] = await Promise.all([getT(), notificationCenter(ctx)]);
 
   return (

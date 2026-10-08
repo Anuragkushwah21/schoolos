@@ -46,7 +46,7 @@ export const metadata: Metadata = { title: "Section" };
 export default async function SectionPage(
   props: PageProps<"/school-admin/academics/sections/[sectionId]">,
 ) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { sectionId } = await props.params;
 
   const [section, allStreams, teachers, plan] = await Promise.all([

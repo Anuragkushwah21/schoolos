@@ -14,7 +14,8 @@ import { prisma } from "@/server/db/prisma";
 import { bulkAssetStatus, getAsset, importAssets, listAssets, saveAsset } from "@/server/operations/inventory";
 import { importBooks, issueBook, listBooks, myLoans, returnBook, saveBook } from "@/server/operations/library";
 import { importStaff, listStaff, saveStaff } from "@/server/operations/staff";
-import { addStop, assignTransport, childTransport, importTransport, listRoutes, saveRoute, saveVehicle } from "@/server/operations/transport";
+import { addStop, assignTransport, importTransport, listRoutes, saveRoute, saveVehicle } from "@/server/operations/transport";
+import { childTransportToday } from "@/server/transport/parent-status";
 
 import { adminOf, contextFor, teacherOf } from "../helpers/context";
 import { type SeededSchool, createIsolationFixture, destroyIsolationFixture } from "../helpers/isolation-fixture";
@@ -90,10 +91,10 @@ describe("transport", () => {
     const [route] = await listRoutes(adminOf(schoolA));
     expect(route?.riders).toBe(2);
 
-    const seen = await childTransport(parentOf(schoolA), schoolA.studentIds[0]!);
+    const seen = await childTransportToday(parentOf(schoolA), schoolA.studentIds[0]!);
     expect(seen).toMatchObject({ route: "Route 1", stop: "Main gate", driver: { name: "Ramesh Yadav" } });
-    // Scoped reads: school B's context cannot see A's child's transport.
-    expect(await childTransport(parentOf(schoolB), schoolA.studentIds[0]!)).toBeNull();
+    // Scoped reads: school B's parent cannot reach A's child at all.
+    await expect(childTransportToday(parentOf(schoolB), schoolA.studentIds[0]!)).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it("imports assignments only when every row is valid", async () => {

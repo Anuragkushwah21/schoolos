@@ -43,7 +43,7 @@ export const EXPENSE_CATEGORY_OPTIONS = [
   { value: "MAINTENANCE", label: "Maintenance" },
   { value: "TRANSPORT", label: "Transport" },
   { value: "EVENTS", label: "Events" },
-  { value: "EQUIPMENT", label: "Equipment" },
+  { value: "EQUIPMENT", label: "Equipment & gadgets" },
   { value: "INTERNET", label: "Internet" },
   { value: "OTHER", label: "Other" },
 ];

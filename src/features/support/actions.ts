@@ -21,7 +21,7 @@ export async function createSupportAction(
 ): Promise<ActionResult<{ id: string; base: string } | undefined>> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
       const id = await createSupport(ctx, parseFormData(supportSchema, formData));
       const base = ctx.user.role === "TEACHER" ? "/teacher/support" : "/school-admin/support";
       return successResult((await getT())("support.created"), { id, base });
@@ -33,7 +33,7 @@ export async function createSupportAction(
 export async function followUpSupportAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
       await followUpSupport(ctx, parseFormData(supportFollowUpSchema, formData));
       return successResult((await getT())("support.followUpSaved"));
     },
@@ -44,7 +44,7 @@ export async function followUpSupportAction(_p: Result, formData: FormData): Pro
 export async function scheduleExtraClassAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("TEACHER", "SCHOOL_ADMIN", "PRINCIPAL");
       await scheduleExtraClass(ctx, parseFormData(extraClassSchema, formData));
       return successResult("Extra class booked. The student, their parents and the teacher see it under Meetings.");
     },

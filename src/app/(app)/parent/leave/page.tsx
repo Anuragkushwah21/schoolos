@@ -20,7 +20,7 @@ export default async function ParentLeavePage(props: PageProps<"/parent/leave">)
 
   return (
     <>
-      <PageHeader icon={CalendarOffIcon} tone="blue" title="Leave" description="Tell the school when your child will be away. The class teacher approves it." />
+      <PageHeader icon={CalendarOffIcon} tone="blue" title="Leave" description="Tell the school when your child will be away. The class teacher checks it first, then the school approves it." />
       <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
         <section aria-labelledby="my-leave" className="order-2 flex flex-col gap-4 xl:order-1">
           <h2 id="my-leave" className="text-base font-semibold">

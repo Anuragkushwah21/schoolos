@@ -12,7 +12,8 @@ import { orNotFound } from "@/server/page-helpers";
  * A fee receipt on its own page: no sidebar, no header, nothing but the
  * receipt, so the browser's print (or "Save as PDF") produces a clean copy.
  *
- * Outside the role areas on purpose, because three roles open it. `getReceipt`
+ * Outside the role areas on purpose, because several roles open it — never a
+ * student (fees are for parents and the office only). `getReceipt`
  * decides who may see which payment; the school on the receipt is always the
  * session's own.
  *
@@ -21,7 +22,7 @@ import { orNotFound } from "@/server/page-helpers";
  */
 
 const loadReceipt = cache(async (paymentId: string) => {
-  const ctx = await requireTenant("SCHOOL_ADMIN", "PARENT", "STUDENT", "NON_TEACHING_STAFF");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PARENT", "NON_TEACHING_STAFF");
   return { ctx, receipt: await orNotFound(getReceipt(ctx, paymentId)) };
 });
 
@@ -55,7 +56,7 @@ export default async function ReceiptPage(props: PageProps<"/receipts/[paymentId
       ? { href: `/school-admin/finance/payments?student=${receipt.payment.studentId}`, label: "Payments" }
       : ctx.user.role === "PARENT"
         ? { href: `/parent/children/${receipt.payment.studentId}/fees`, label: "Fees" }
-        : { href: "/student/dashboard", label: "Dashboard" };
+        : { href: "/staff/fees", label: "Fees" };
 
   return (
     <main className="receipt-page min-h-screen bg-neutral-100 px-4 py-6 text-neutral-900 sm:py-10">

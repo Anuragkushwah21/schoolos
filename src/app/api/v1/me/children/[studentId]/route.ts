@@ -17,7 +17,7 @@ export const GET = apiRoute<{ studentId: string }>({ roles: ["PARENT"] }, async 
 
   const [history, timetable] = await Promise.all([
     studentHistory(ctx, child.id, current.academicSession.id),
-    getSectionWeek(ctx, current.section.id, current.academicSession.id),
+    getSectionWeek(ctx, current.section.id, current.academicSession.id, { streamId: current.streamId ?? current.section.streamId }),
   ]);
 
   return apiSuccess({

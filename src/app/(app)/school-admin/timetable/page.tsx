@@ -29,6 +29,7 @@ import {
 } from "@/server/academics/structure";
 import { teacherOptions } from "@/server/people/teachers";
 import { roomFilterOptions, roomOptions } from "@/server/academics/rooms";
+import { sectionStreamChoices } from "@/server/academics/stream-scope";
 import { orNotFound } from "@/server/page-helpers";
 import {
   getRoomTimetable,
@@ -42,7 +43,7 @@ export const metadata: Metadata = { title: "Timetable" };
 export default async function AdminTimetablePage(
   props: PageProps<"/school-admin/timetable">,
 ) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const session = await getCurrentSession(ctx);
 
@@ -82,6 +83,7 @@ export default async function AdminTimetablePage(
       ? undefined
       : (param(search.section) ?? sections[0]?.value);
   const section = sections.find((s) => s.value === sectionId);
+  const streamChoices = section ? await sectionStreamChoices(ctx, section.value) : [];
 
   const slots = teacher
     ? await getTeacherTimetable(ctx, teacher.value, session.id)
@@ -161,7 +163,7 @@ export default async function AdminTimetablePage(
                 dayOfWeek: slot.dayOfWeek,
                 startMinute: slot.startMinute,
                 endMinute: slot.endMinute,
-                title: slot.subject.name,
+                title: slot.stream ? `${slot.subject.name} · ${slot.stream.name}` : slot.subject.name,
                 subtitle:
                   teacher || room
                     ? `${slot.section.class.name} – ${slot.section.name}`
@@ -233,6 +235,7 @@ export default async function AdminTimetablePage(
                   }))}
                   teachers={teachers}
                   rooms={roomChoices}
+                  streams={streamChoices.map((stream) => ({ value: stream.id, label: stream.name }))}
                   slot={
                     editing
                       ? {
@@ -243,6 +246,7 @@ export default async function AdminTimetablePage(
                           subjectId: editing.subjectId,
                           teacherId: editing.teacherId,
                           roomId: editing.roomId,
+                          streamId: editing.streamId,
                           locked: editing.hasRecords,
                         }
                       : undefined

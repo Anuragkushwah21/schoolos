@@ -21,7 +21,7 @@ import { listAcademicSessions, listStreams, listSubjects } from "@/server/academ
 export const metadata: Metadata = { title: "Academics" };
 
 export default async function AcademicsPage() {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
 
   const [sessions, streams, subjects] = await Promise.all([
     listAcademicSessions(ctx),

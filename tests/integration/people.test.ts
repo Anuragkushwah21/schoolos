@@ -126,7 +126,7 @@ describe("students", () => {
   it("rejects a duplicate roll number in the same section", async () => {
     const ctx = adminOf(schoolA);
     await expect(
-      createStudent(ctx, studentInput({ sectionId: schoolA.sectionId, rollNumber: "1" })),
+      createStudent(ctx, studentInput({ sectionId: schoolA.sectionId, rollNumber: "1", confirmDuplicate: "on" })),
     ).rejects.toBeInstanceOf(ConflictError);
   });
 

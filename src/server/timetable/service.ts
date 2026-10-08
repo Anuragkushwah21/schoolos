@@ -5,10 +5,11 @@ import { DAY_LABEL, formatMinutes } from "@/lib/dates";
 import { ConflictError, NotFoundError } from "@/lib/errors";
 import type { SlotInput, SlotUpdateInput } from "@/lib/validation/timetable";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireCurrentSession, sectionLabel } from "@/server/academics/structure";
+import { clashesWithStream, resolveSectionStream } from "@/server/academics/stream-scope";
 import { isUniqueViolation } from "@/server/db/errors";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * The weekly timetable.
@@ -16,6 +17,11 @@ import { isUniqueViolation } from "@/server/db/errors";
  * The schema forbids two periods starting at the same minute for one section
  * or one teacher. That catches exact collisions only, so partial overlaps
  * (9:00–9:55 against 9:30–10:25) are checked here before anything is written.
+ *
+ * A section split into streams (11-A: Science, Commerce, Arts) may run one
+ * period per stream side by side; a period with no stream is for the whole
+ * section and clashes with every stream's. A section that is one group never
+ * gets a stream.
  *
  * Rooms come from School Setup → Rooms. A room is checked by id, and its row
  * is locked while a period is written, so two admins cannot book one room
@@ -29,6 +35,8 @@ const SLOT_SELECT = {
   endMinute: true,
   room: true,
   roomId: true,
+  streamId: true,
+  stream: { select: { id: true, name: true } },
   subject: { select: { id: true, name: true, code: true } },
   teacher: { select: { id: true, firstName: true, lastName: true } },
   section: {
@@ -71,7 +79,7 @@ function overlapMessage(
 }
 
 /** A period as the service takes it; `roomId` may be left out for no room. */
-type PeriodInput = Omit<SlotInput, "roomId" | "sectionId"> & { roomId?: string | null };
+type PeriodInput = Omit<SlotInput, "roomId" | "sectionId" | "streamId"> & { roomId?: string | null; streamId?: string | null };
 
 type SectionRef = { id: string; name: string; class: { name: string }; stream: { name: string } | null };
 
@@ -91,6 +99,7 @@ async function checkPeriod(
   existing?: { id: string; roomId: string | null },
 ) {
   const roomId = input.roomId ?? null;
+  const streamId = await resolveSectionStream(ctx, section.id, input.streamId, sectionLabel(section));
   const [subject, teacher, room] = await Promise.all([
     ctx.db.subject.findFirst({ where: { id: input.subjectId, isActive: true }, select: { id: true, name: true } }),
     ctx.db.teacher.findFirst({
@@ -114,14 +123,31 @@ async function checkPeriod(
     ...(existing ? { id: { not: existing.id } } : {}),
   };
   const [sectionClash, teacherClash] = await Promise.all([
-    ctx.db.timetableSlot.findFirst({ where: { ...overlapping, sectionId: section.id } }),
+    ctx.db.timetableSlot.findFirst({ where: { ...overlapping, sectionId: section.id, ...clashesWithStream(streamId) }, select: CLASH_SELECT }),
     ctx.db.timetableSlot.findFirst({ where: { ...overlapping, teacherId: teacher.id } }),
   ]);
-  if (sectionClash) throw new ConflictError(overlapMessage(sectionLabel(section), sectionClash));
+  if (sectionClash) throw new ConflictError(sectionClashMessage(section, sectionClash));
   if (teacherClash) {
     throw new ConflictError(overlapMessage(`${teacher.firstName} ${teacher.lastName}`, teacherClash));
   }
-  return { subject, teacher, room, overlapping };
+  return { subject, teacher, room, overlapping, streamId };
+}
+
+const CLASH_SELECT = { dayOfWeek: true, startMinute: true, endMinute: true, stream: { select: { name: true } } } as const;
+
+function sectionClashMessage(section: SectionRef, clash: { dayOfWeek: DayOfWeek; startMinute: number; endMinute: number; stream: { name: string } | null }) {
+  return overlapMessage(clash.stream ? `${sectionLabel(section)} (${clash.stream.name})` : sectionLabel(section), clash);
+}
+
+/**
+ * Lock the section and check its periods again inside the write: two admins
+ * adding a whole-section period and a stream period at the same time cannot
+ * both get in (the unique index only sees periods of the same stream).
+ */
+async function claimSection(tx: Tx, schoolId: string, section: SectionRef, overlapping: Record<string, unknown>, streamId: string | null) {
+  await tx.section.updateMany({ where: { schoolId, id: section.id }, data: { updatedAt: new Date() } });
+  const clash = await tx.timetableSlot.findFirst({ where: { schoolId, ...overlapping, sectionId: section.id, ...clashesWithStream(streamId) }, select: CLASH_SELECT });
+  if (clash) throw new ConflictError(sectionClashMessage(section, clash));
 }
 
 type Tx = Parameters<Parameters<TenantContext["db"]["$transaction"]>[0]>[0];
@@ -156,24 +182,26 @@ async function claimRoom(
 }
 
 /**
- * Teaching a period implies teaching the subject to that section, which is
- * also what lets the teacher mark its attendance. An assignment the admin
- * already made — for the whole section or one stream — is kept as it is;
- * only a teacher with none gets a whole-section one.
+ * Teaching a period implies teaching the subject to that section (or that
+ * stream), which is also what lets the teacher mark its attendance. An
+ * assignment the admin already made is kept as it is; a teacher with none
+ * gets one for the period's scope.
  */
-async function ensureAssignment(tx: Tx, schoolId: string, sessionId: string, sectionId: string, teacherId: string, subjectId: string) {
+async function ensureAssignment(tx: Tx, schoolId: string, sessionId: string, sectionId: string, teacherId: string, subjectId: string, streamId: string | null) {
+  // A whole-section assignment covers every stream; a stream period needs
+  // that, or an assignment for its own stream.
   const assigned = await tx.teacherSubjectAssignment.count({
-    where: { schoolId, academicSessionId: sessionId, teacherId, subjectId, sectionId },
+    where: { schoolId, academicSessionId: sessionId, teacherId, subjectId, sectionId, ...(streamId ? { OR: [{ streamId: null }, { streamId }] } : {}) },
   });
   if (!assigned) {
     await tx.teacherSubjectAssignment.create({
-      data: { schoolId, academicSessionId: sessionId, teacherId, subjectId, sectionId },
+      data: { schoolId, academicSessionId: sessionId, teacherId, subjectId, sectionId, streamId },
     });
   }
 }
 
 export async function createSlot(ctx: TenantContext, input: PeriodInput & { sectionId: string }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const session = await requireCurrentSession(ctx);
 
   const section = await ctx.db.section.findFirst({
@@ -181,16 +209,19 @@ export async function createSlot(ctx: TenantContext, input: PeriodInput & { sect
     select: SECTION_LABEL_SELECT,
   });
   if (!section) throw new NotFoundError();
-  const { subject, teacher, room, overlapping } = await checkPeriod(ctx, session.id, section, input);
+  const { subject, teacher, room, overlapping, streamId } = await checkPeriod(ctx, session.id, section, input);
+  const stream = streamId ? await ctx.db.stream.findFirst({ where: { id: streamId }, select: { name: true } }) : null;
 
   try {
     await ctx.db.$transaction(async (tx) => {
+      await claimSection(tx, ctx.schoolId, section, overlapping, streamId);
       if (room) await claimRoom(tx, ctx.schoolId, room, overlapping);
       await tx.timetableSlot.create({
         data: {
           schoolId: ctx.schoolId,
           academicSessionId: session.id,
           sectionId: section.id,
+          streamId,
           subjectId: subject.id,
           teacherId: teacher.id,
           dayOfWeek: input.dayOfWeek,
@@ -200,7 +231,7 @@ export async function createSlot(ctx: TenantContext, input: PeriodInput & { sect
           room: room?.name ?? null,
         },
       });
-      await ensureAssignment(tx, ctx.schoolId, session.id, section.id, teacher.id, subject.id);
+      await ensureAssignment(tx, ctx.schoolId, session.id, section.id, teacher.id, subject.id, streamId);
     });
   } catch (error) {
     // Two admins saving the same slot at once: the unique index wins.
@@ -214,13 +245,13 @@ export async function createSlot(ctx: TenantContext, input: PeriodInput & { sect
     entityId: section.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${subject.name} with ${teacher.firstName} ${teacher.lastName} added to ${sectionLabel(section)} on ${DAY_LABEL[input.dayOfWeek]} at ${formatMinutes(input.startMinute)}${room ? ` in ${room.name}` : ""}.`,
+    summary: `${subject.name} with ${teacher.firstName} ${teacher.lastName} added to ${sectionLabel(section)}${stream ? ` (${stream.name})` : ""} on ${DAY_LABEL[input.dayOfWeek]} at ${formatMinutes(input.startMinute)}${room ? ` in ${room.name}` : ""}.`,
   });
 }
 
 /** One period of this session's timetable, for the edit form. */
 export async function getSlot(ctx: TenantContext, slotId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "VIEW");
   const session = await requireCurrentSession(ctx);
   const slot = await ctx.db.timetableSlot.findFirst({
     where: { id: slotId, academicSessionId: session.id },
@@ -237,7 +268,7 @@ export async function getSlot(ctx: TenantContext, slotId: string) {
  * are what those records describe.
  */
 export async function updateSlot(ctx: TenantContext, input: Omit<SlotUpdateInput, "roomId"> & { roomId?: string | null }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const session = await requireCurrentSession(ctx);
   const slot = await ctx.db.timetableSlot.findFirst({
     where: { id: input.slotId, academicSessionId: session.id },
@@ -249,6 +280,7 @@ export async function updateSlot(ctx: TenantContext, input: Omit<SlotUpdateInput
       subjectId: true,
       teacherId: true,
       roomId: true,
+      streamId: true,
       section: { select: SECTION_LABEL_SELECT },
       _count: { select: { classSessions: true } },
     },
@@ -260,23 +292,26 @@ export async function updateSlot(ctx: TenantContext, input: Omit<SlotUpdateInput
     slot.startMinute !== input.startMinute ||
     slot.endMinute !== input.endMinute ||
     slot.subjectId !== input.subjectId ||
-    slot.teacherId !== input.teacherId;
+    slot.teacherId !== input.teacherId ||
+    slot.streamId !== (input.streamId ?? null);
   if (lessonChanged && slot._count.classSessions) {
     throw new ConflictError(
-      "Lessons have already been recorded for this period, so only its room can change. To change the day, time, subject or teacher, add a new period.",
+      "Lessons have already been recorded for this period, so only its room can change. To change the day, time, subject, teacher or stream, add a new period.",
     );
   }
 
-  const { subject, teacher, room, overlapping } = await checkPeriod(ctx, session.id, slot.section, input, slot);
+  const { subject, teacher, room, overlapping, streamId } = await checkPeriod(ctx, session.id, slot.section, input, slot);
 
   try {
     await ctx.db.$transaction(async (tx) => {
+      await claimSection(tx, ctx.schoolId, slot.section, overlapping, streamId);
       if (room) await claimRoom(tx, ctx.schoolId, room, overlapping);
       await tx.timetableSlot.updateMany({
         where: { schoolId: ctx.schoolId, id: slot.id },
         data: {
           subjectId: subject.id,
           teacherId: teacher.id,
+          streamId,
           dayOfWeek: input.dayOfWeek,
           startMinute: input.startMinute,
           endMinute: input.endMinute,
@@ -284,7 +319,7 @@ export async function updateSlot(ctx: TenantContext, input: Omit<SlotUpdateInput
           room: room?.name ?? null,
         },
       });
-      await ensureAssignment(tx, ctx.schoolId, session.id, slot.section.id, teacher.id, subject.id);
+      await ensureAssignment(tx, ctx.schoolId, session.id, slot.section.id, teacher.id, subject.id, streamId);
     });
   } catch (error) {
     if (isUniqueViolation(error)) throw new ConflictError("That time is already taken.");
@@ -302,7 +337,7 @@ export async function updateSlot(ctx: TenantContext, input: Omit<SlotUpdateInput
 }
 
 export async function deleteSlot(ctx: TenantContext, slotId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "DELETE");
 
   const slot = await ctx.db.timetableSlot.findFirst({
     where: { id: slotId },

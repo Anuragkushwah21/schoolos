@@ -9,7 +9,11 @@ import {
   examPerformanceTable,
   expensesTable,
   feePaymentsTable,
+  feeClassSummaryTable,
+  feeLedgerTable,
+  feeOverdueTable,
   feePositionsTable,
+  feeSessionSummaryTable,
   homeworkTable,
   salaryPaymentsTable,
   staffAttendanceTable,
@@ -24,6 +28,9 @@ import { booksTable, loansTable } from "@/server/operations/library";
 import { STAFF_IMPORT_COLUMNS, staffTable } from "@/server/operations/staff";
 import { transportTable } from "@/server/operations/transport";
 import { forSchool } from "@/server/tenancy/scope";
+import { hasModule } from "@/server/platform/modules";
+import { can } from "@/lib/permissions";
+import type { OptionalModule } from "@/lib/school-modules";
 
 /**
  * CSV exports for the School Admin.
@@ -56,6 +63,10 @@ const KINDS = [
   "exam-performance",
   "teacher-workload",
   "fee-payments",
+  "fees-class",
+  "fees-sessions",
+  "fees-overdue",
+  "fees-ledger",
   "expenses",
   "salary-payments",
   "substitutes",
@@ -64,9 +75,33 @@ const KINDS = [
 ] as const;
 type Kind = (typeof KINDS)[number];
 
+/** What the Principal may download (attendance by section included, as the default). */
+const PRINCIPAL_EXPORTS = new Set<string>(["attendance", "students", "teachers", "class-strength", "staff-attendance", "exam-performance", "teacher-workload", "substitutes", "homework", "support"]);
+
+const EXPORT_MODULE: Partial<Record<string, OptionalModule>> = {
+  fees: "FINANCE",
+  "fees-pending": "FINANCE",
+  "fee-payments": "FINANCE",
+  "fees-class": "FINANCE",
+  "fees-sessions": "FINANCE",
+  "fees-overdue": "FINANCE",
+  "fees-ledger": "FINANCE",
+  expenses: "EXPENSES",
+  "salary-payments": "PAYROLL",
+  transport: "TRANSPORT",
+  "template-transport": "TRANSPORT",
+  books: "LIBRARY",
+  "loans-overdue": "LIBRARY",
+  "loans-fines": "LIBRARY",
+  "template-books": "LIBRARY",
+  assets: "INVENTORY",
+  "template-assets": "INVENTORY",
+};
+
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
-  if (!user || user.role !== "SCHOOL_ADMIN" || !user.schoolId) {
+  // The School Admin, or the Principal (reports EXPORT), and only inside their own school.
+  if (!user || !user.schoolId || !can(user.role, "reports", "EXPORT") || user.mustChangePassword) {
     return new NextResponse("Not found", { status: 404 });
   }
 
@@ -80,6 +115,11 @@ export async function GET(request: NextRequest) {
 
   const params = request.nextUrl.searchParams;
   const kind = (KINDS as readonly string[]).includes(params.get("kind") ?? "") ? (params.get("kind") as Kind) : "attendance";
+  // The Principal oversees: no fee, expense or salary files.
+  if (user.role === "PRINCIPAL" && !PRINCIPAL_EXPORTS.has(kind) && params.has("kind")) return new NextResponse("Not found", { status: 404 });
+  // A download from a module the school's plan does not include is refused.
+  const owner = EXPORT_MODULE[kind];
+  if (owner && !(await hasModule(ctx, owner))) return new NextResponse("Not part of your school's plan", { status: 403 });
   const from = parseDateInput(params.get("from"));
   const to = parseDateInput(params.get("to"));
   const stamp = toDateInput(new Date());
@@ -87,7 +127,7 @@ export async function GET(request: NextRequest) {
 
   switch (kind) {
     case "students":
-      return csvResponse(`${school}-students-${stamp}.csv`, await studentListReport(ctx));
+      return csvResponse(`${school}-students-${stamp}.csv`, await studentListReport(ctx, { sectionId: params.get("section"), classId: params.get("class"), status: params.get("status"), q: params.get("q") }));
     case "teachers":
       return csvResponse(`${school}-teachers-${stamp}.csv`, await teacherListReport(ctx));
     case "class-strength":
@@ -96,6 +136,17 @@ export async function GET(request: NextRequest) {
       return csvResponse(`${school}-fees-${stamp}.csv`, await feePositionsTable(ctx));
     case "fees-pending":
       return csvResponse(`${school}-fees-pending-${stamp}.csv`, await feePositionsTable(ctx, { pendingOnly: true }));
+    case "fees-class":
+      return csvResponse(`${school}-fees-by-class-${stamp}.csv`, await feeClassSummaryTable(ctx));
+    case "fees-sessions":
+      return csvResponse(`${school}-fees-by-session-${stamp}.csv`, await feeSessionSummaryTable(ctx));
+    case "fees-overdue":
+      return csvResponse(`${school}-fees-overdue-${stamp}.csv`, await feeOverdueTable(ctx));
+    case "fees-ledger": {
+      const studentId = params.get("student");
+      if (!studentId) return new NextResponse("Choose a student.", { status: 400 });
+      return csvResponse(`${school}-fee-ledger-${stamp}.csv`, await feeLedgerTable(ctx, studentId));
+    }
     case "exam-performance":
       return csvResponse(`${school}-exam-performance-${stamp}.csv`, await examPerformanceTable(ctx));
     case "teacher-workload": {
@@ -160,13 +211,14 @@ export async function GET(request: NextRequest) {
       return csvResponse(
         `attendance-${report.section.label}-${toDateInput(from)}-to-${toDateInput(to)}.csv`,
         {
-          head: ["Roll", "Student", "Admission no.", "Present", "Late", "Absent", "Excused", "Marked", "Attended %"],
+          head: ["Roll", "Student", "Admission no.", "Present", "Late", "Half day", "Absent", "Leave", "Marked", "Attended %"],
           rows: report.students.map((s) => [
             s.rollNumber ?? "",
             s.name,
             s.admissionNumber,
             s.counts.PRESENT,
             s.counts.LATE,
+            s.counts.HALF_DAY,
             s.counts.ABSENT,
             s.counts.EXCUSED,
             s.counts.total,

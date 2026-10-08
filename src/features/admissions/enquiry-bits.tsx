@@ -73,6 +73,8 @@ export const FEE_STATUS_LABEL: Record<string, string> = {
 };
 
 export const APPLICATION_STATUS_LABEL: Record<string, string> = {
+  DRAFT: "Draft (with teacher)",
+  CORRECTION_REQUESTED: "Correction requested",
   SUBMITTED: "Submitted",
   UNDER_REVIEW: "Under review",
   SHORTLISTED: "Shortlisted",

@@ -37,6 +37,13 @@ export default async function AccountPage() {
     <>
       <PageHeader title="Account" description="Your profile and sign-in settings." />
 
+      {user.mustChangePassword ? (
+        <div role="alert" className="border-warning bg-warning-soft mb-6 rounded-2xl border-2 px-4 py-3 text-sm">
+          <p className="font-semibold">Choose your own password to continue</p>
+          <p className="text-muted-foreground">You signed in with a default password. Change it below; then open your dashboard from the menu.</p>
+        </div>
+      ) : null}
+
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>

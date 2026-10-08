@@ -11,6 +11,7 @@ import { fullName, humanize } from "@/lib/format";
 import { STAFF_ROLES, type StaffInput } from "@/lib/validation/operations";
 import { type BaseStaffRole, STAFF_ROLE_NAMES, type StaffGrant, allowedGrants, cleanGrants, grantDef } from "@/lib/staff-access";
 import { resolveRoleProfile } from "@/server/staff/roles";
+import { assertRoleAvailable, assertWithinLimit } from "@/server/platform/entitlements";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import { type LoginInvite, sendActivation } from "@/server/auth/account-links";
@@ -71,11 +72,37 @@ export async function listStaff(ctx: TenantContext, filters: { q?: string; role?
   return ctx.db.staffMember.findMany({ where, orderBy: [{ firstName: "asc" }, { lastName: "asc" }], select: CARD });
 }
 
+export const STAFF_PAGE_SIZE = 30;
+
+/** One page of the staff list, counted and sliced in the database. */
+export async function listStaffPage(ctx: TenantContext, filters: { q?: string; role?: StaffRole; status?: TeacherStatus | "CURRENT" } = {}, page = 1) {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const where: Prisma.StaffMemberWhereInput = {
+    ...(filters.role ? { role: filters.role } : {}),
+    ...(filters.status === "CURRENT" ? { status: { in: [...CURRENT_EMPLOYEE] } } : filters.status ? { status: filters.status } : {}),
+    ...(filters.q
+      ? {
+          OR: [
+            { firstName: { contains: filters.q, mode: "insensitive" } },
+            { lastName: { contains: filters.q, mode: "insensitive" } },
+            { employeeId: { contains: filters.q, mode: "insensitive" } },
+            { phone: { contains: filters.q } },
+          ],
+        }
+      : {}),
+  };
+  const total = await ctx.db.staffMember.count({ where });
+  const pageCount = Math.max(1, Math.ceil(total / STAFF_PAGE_SIZE));
+  const current = Math.min(Math.max(1, page), pageCount);
+  const rows = await ctx.db.staffMember.findMany({ where, orderBy: [{ firstName: "asc" }, { lastName: "asc" }, { id: "asc" }], skip: (current - 1) * STAFF_PAGE_SIZE, take: STAFF_PAGE_SIZE, select: CARD });
+  return { rows, total, page: current, pageCount };
+}
+
 export async function getStaff(ctx: TenantContext, staffId: string) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const row = await ctx.db.staffMember.findFirst({
     where: { id: staffId },
-    select: { ...CARD, user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, activatedAt: true } } },
+    select: { ...CARD, ...AUDITED_SELECT, user: { select: { id: true, email: true, isActive: true, lastLoginAt: true, activatedAt: true } } },
   });
   if (!row) throw new NotFoundError("That staff member was not found.");
   return row;
@@ -94,12 +121,19 @@ export async function saveStaffDetails(ctx: TenantContext, input: StaffInput): P
   // The role profile decides the designation underneath.
   const profile = await resolveRoleProfile(ctx, { roleProfileId: askedProfile, role: askedRole });
   const role = profile.baseRole;
-  const existingRow = staffId ? await ctx.db.staffMember.findFirst({ where: { id: staffId }, select: { grants: true } }) : null;
+  const existingRow = staffId ? await ctx.db.staffMember.findFirst({ where: { id: staffId }, select: { grants: true, role: true, ...AUDITED_SELECT } }) : null;
+  // The plan decides which designations this campus may have, and how many.
+  if (!existingRow || existingRow.role !== role) {
+    await assertRoleAvailable(ctx, role);
+    await assertWithinLimit(ctx, role);
+    if (!existingRow) await assertWithinLimit(ctx, "STAFF");
+  }
   // Grants asked for; otherwise a new person starts with the role's defaults
   // and an existing one keeps theirs. Anything the designation can never hold
   // (Students or Transport for a Librarian) is never stored.
   const grants = asked ? allowedGrants(role, asked) : staffId ? (existingRow ? allowedGrants(role, existingRow.grants) : undefined) : allowedGrants(role, profile.defaultGrants);
-  const data = { ...fields, role, roleProfileId: profile.id, ...(grants ? { grants } : {}) };
+  // Grants sent with the details are the admin's own choice.
+  const data = { ...fields, role, roleProfileId: profile.id, ...(grants ? { grants } : {}), ...(asked ? { grantsCustomized: true } : {}) };
   try {
     let id: string;
     if (staffId) {
@@ -128,18 +162,25 @@ export async function saveStaffDetails(ctx: TenantContext, input: StaffInput): P
       if (status && status !== existing.status) {
         await changeEmployeeStatus(ctx, "STAFF", staffId, status, { effectiveDate: today(), reason: "Changed on the staff details", remarks: null, confirmReturn: true });
       }
-      if (grants && !sameSet(grants, existing.grants)) await auditGrants(ctx, id, `${fields.firstName} ${fields.lastName}`, grants);
+      if (grants && !sameSet(grants, existing.grants)) await auditGrants(ctx, id, `${fields.firstName} ${fields.lastName}`, grants, existing.grants);
     } else {
       id = (await ctx.db.staffMember.create({ data: { ...data, status: status ?? "ACTIVE", schoolId: ctx.schoolId }, select: { id: true } })).id;
     }
-    await recordAudit({
-      action: "STAFF_SAVED",
-      entityType: "StaffMember",
-      entityId: id,
-      schoolId: ctx.schoolId,
-      actorId: ctx.user.id,
-      summary: `${profile.name} ${data.firstName} ${data.lastName} ${staffId ? "updated" : "added"}.`,
-    });
+    const changes = existingRow ? fieldChanges(existingRow, { ...data, roleProfileName: profile.name }) : [];
+    if (!staffId || changes.length) {
+      await recordAudit({
+        action: staffId ? "STAFF_UPDATED" : "STAFF_CREATED",
+        entityType: "StaffMember",
+        entityId: id,
+        schoolId: ctx.schoolId,
+        actorId: ctx.user.id,
+        summary: staffId
+          ? `${data.firstName} ${data.lastName}'s record updated: ${changes.map((change) => change.label).join(", ")}.`
+          : `${profile.name} ${data.firstName} ${data.lastName} added.`,
+        // Old and new values, for the expandable detail on the audit log.
+        metadata: staffId ? { changes } : { role: profile.name },
+      });
+    }
     return { id, emailMove };
   } catch (error) {
     if (isUniqueViolation(error)) throw new ConflictError("That employee ID is already in use.");
@@ -147,16 +188,71 @@ export async function saveStaffDetails(ctx: TenantContext, input: StaffInput): P
   }
 }
 
-/** Record what someone may now do, in words, for their Access history. */
-async function auditGrants(ctx: TenantContext, staffId: string, name: string, grants: readonly string[]) {
-  await recordAudit({
-    action: "STAFF_PERMISSIONS_CHANGED",
-    entityType: "StaffMember",
-    entityId: staffId,
-    schoolId: ctx.schoolId,
-    actorId: ctx.user.id,
-    summary: `${name} may now: ${grants.length ? grants.map((key) => grantDef(key)?.label ?? key).join(", ") : "nothing beyond the common staff pages"}.`,
-  });
+/** The staff fields whose changes are audited, with how they read. */
+const AUDITED_FIELDS = {
+  firstName: "First name",
+  lastName: "Last name",
+  employeeId: "Employee ID",
+  designation: "Job title",
+  department: "Department",
+  phone: "Mobile",
+  email: "Email",
+  joiningDate: "Joining date",
+  dateOfBirth: "Date of birth",
+  gender: "Gender",
+  addressLine: "Address",
+  city: "City",
+  state: "State",
+  postalCode: "PIN code",
+  experienceYears: "Experience (years)",
+  employmentType: "Employment type",
+  emergencyContactName: "Emergency contact",
+  emergencyContactPhone: "Emergency contact phone",
+  notes: "Notes",
+} as const;
+
+const AUDITED_SELECT = Object.fromEntries(Object.keys(AUDITED_FIELDS).map((key) => [key, true])) as { [K in keyof typeof AUDITED_FIELDS]: true };
+
+function shown(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value);
+}
+
+/** What changed between the stored record and the save, field by field. Fields the save did not send are unchanged. */
+function fieldChanges(before: Record<string, unknown>, after: Record<string, unknown>) {
+  return (Object.keys(AUDITED_FIELDS) as Array<keyof typeof AUDITED_FIELDS>)
+    .filter((key) => after[key] !== undefined && shown(before[key]) !== shown(after[key]))
+    .map((key) => ({ field: key, label: AUDITED_FIELDS[key], old: shown(before[key]), new: shown(after[key]) }));
+}
+
+/** Record what was added and taken away, in words, for the Access history and the audit log. */
+export async function auditGrants(ctx: TenantContext, staffId: string, name: string, grants: readonly string[], previous: readonly string[] = []) {
+  const label = (key: string) => grantDef(key)?.label ?? key;
+  const added = grants.filter((key) => !previous.includes(key));
+  const removed = previous.filter((key) => !grants.includes(key));
+  if (added.length) {
+    await recordAudit({
+      action: "STAFF_PERMISSION_ADDED",
+      entityType: "StaffMember",
+      entityId: staffId,
+      schoolId: ctx.schoolId,
+      actorId: ctx.user.id,
+      summary: `${name} given: ${added.map(label).join(", ")}.`,
+      metadata: { added, grants },
+    });
+  }
+  if (removed.length) {
+    await recordAudit({
+      action: "STAFF_PERMISSION_REMOVED",
+      entityType: "StaffMember",
+      entityId: staffId,
+      schoolId: ctx.schoolId,
+      actorId: ctx.user.id,
+      summary: `${name} no longer has: ${removed.map(label).join(", ")}.`,
+      metadata: { removed, grants },
+    });
+  }
 }
 
 /**
@@ -176,8 +272,9 @@ export async function setStaffGrants(ctx: TenantContext, staffId: string, asked:
     });
   }
   if (!sameSet(grants, staff.grants)) {
-    await ctx.db.staffMember.updateMany({ where: { id: staff.id }, data: { grants } });
-    await auditGrants(ctx, staff.id, fullName(staff), grants);
+    // Set by hand: from now on the admin's choice, never widened by role updates.
+    await ctx.db.staffMember.updateMany({ where: { id: staff.id }, data: { grants, grantsCustomized: true } });
+    await auditGrants(ctx, staff.id, fullName(staff), grants, staff.grants);
   }
   return grants;
 }
@@ -186,7 +283,7 @@ export async function setStaffGrants(ctx: TenantContext, staffId: string, asked:
 export async function staffAccessHistory(ctx: TenantContext, staffId: string) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   return ctx.db.auditLog.findMany({
-    where: { schoolId: ctx.schoolId, entityType: "StaffMember", entityId: staffId, action: { in: ["STAFF_PERMISSIONS_CHANGED", "STAFF_SAVED", "PORTAL_ACCESS_GRANTED", "STAFF_SUBSTITUTION_SAVED", "STAFF_SUBSTITUTION_ENDED"] } },
+    where: { schoolId: ctx.schoolId, entityType: "StaffMember", entityId: staffId, action: { in: ["STAFF_PERMISSIONS_CHANGED", "STAFF_PERMISSION_ADDED", "STAFF_PERMISSION_REMOVED", "STAFF_PERMISSIONS_RESET", "STAFF_ROLE_CHANGED", "STAFF_SAVED", "STAFF_CREATED", "STAFF_UPDATED", "PORTAL_ACCESS_GRANTED", "STAFF_SUBSTITUTION_SAVED", "STAFF_SUBSTITUTION_ENDED"] } },
     orderBy: { createdAt: "desc" },
     take: 30,
     select: { id: true, action: true, summary: true, createdAt: true, actor: { select: { firstName: true, lastName: true, email: true } } },
@@ -438,4 +535,14 @@ export async function staffAssignments(ctx: TenantContext, staffId: string) {
     loansIssued,
     paymentsTaken,
   };
+}
+
+/** How many current people each role has — teachers under "TEACHER" — for the workspace cards. */
+export async function staffCountsByRole(ctx: TenantContext): Promise<Record<string, number>> {
+  assertRole(ctx.user, "SCHOOL_ADMIN");
+  const [staff, teachers] = await Promise.all([
+    ctx.db.staffMember.groupBy({ by: ["role"], where: { status: { in: ["ACTIVE", "ON_LEAVE"] } }, _count: { _all: true } }),
+    ctx.db.teacher.count({ where: { status: { in: ["ACTIVE", "ON_LEAVE"] } } }),
+  ]);
+  return { ...Object.fromEntries(staff.map((row) => [row.role, row._count._all])), TEACHER: teachers };
 }

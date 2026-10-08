@@ -3,6 +3,7 @@ import "server-only";
 import { assertRole } from "@/server/auth/assert";
 import type { SessionUser } from "@/server/auth/session";
 import { prisma } from "@/server/db/prisma";
+import { cleanModules } from "@/lib/school-modules";
 
 /**
  * Platform-wide aggregates for the Super Admin dashboard.
@@ -262,3 +263,45 @@ export async function schoolTracker(actor: SessionUser, filters: { q?: string | 
 }
 
 export type TrackedSchool = Awaited<ReturnType<typeof schoolTracker>>["rows"][number];
+
+/** How many active schools have each optional module. */
+export async function moduleAdoption(actor: SessionUser) {
+  assertRole(actor, "SUPER_ADMIN");
+  const schools = await prisma.school.findMany({ where: { status: "ACTIVE" }, select: { optionalModules: true } });
+  const byModule: Record<string, number> = {};
+  for (const school of schools) for (const key of cleanModules(school.optionalModules)) byModule[key] = (byModule[key] ?? 0) + 1;
+  return { activeSchools: schools.length, byModule };
+}
+
+/** Academic sessions marked current in active schools. */
+export async function activeSessionCount(actor: SessionUser): Promise<number> {
+  assertRole(actor, "SUPER_ADMIN");
+  return prisma.academicSession.count({ where: { isCurrent: true, school: { status: "ACTIVE" } } });
+}
+
+/** The most recent registrations, newest first, with their admin and requested plan. */
+export async function recentRegistrations(actor: SessionUser, take = 8) {
+  assertRole(actor, "SUPER_ADMIN");
+  const schools = await prisma.school.findMany({
+    orderBy: { createdAt: "desc" },
+    take,
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      city: true,
+      state: true,
+      status: true,
+      createdAt: true,
+      contactName: true,
+      contactEmailVerifiedAt: true,
+      users: { where: { role: "SCHOOL_ADMIN" }, orderBy: { createdAt: "asc" }, take: 1, select: { firstName: true, lastName: true } },
+      subscriptions: { orderBy: { createdAt: "desc" }, take: 1, select: { plan: { select: { name: true } } } },
+    },
+  });
+  return schools.map((school) => ({
+    ...school,
+    adminName: school.users[0] ? `${school.users[0].firstName} ${school.users[0].lastName}` : null,
+    plan: school.subscriptions[0]?.plan.name ?? null,
+  }));
+}

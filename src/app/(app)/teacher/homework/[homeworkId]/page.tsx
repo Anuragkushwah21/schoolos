@@ -78,12 +78,18 @@ export default async function EditHomeworkPage(
         sections={teaching.map((option) => ({
           value: option.sectionId,
           label: option.label,
-          subjects: option.subjects.map((subject) => ({ value: subject.id, label: subject.name })),
+          subjects: option.subjects.map((subject) => ({
+            value: subject.id,
+            label: subject.name,
+            whole: subject.whole,
+            streams: subject.streams.map((stream) => ({ value: stream.id, label: stream.name })),
+          })),
         }))}
         homework={{
           id: homework.id,
           sectionId: homework.sectionId,
           subjectId: homework.subjectId,
+          streamId: homework.streamId,
           title: homework.title,
           description: homework.description,
           instructions: homework.instructions,

@@ -26,7 +26,7 @@ export const metadata: Metadata = { title: "Cover" };
  * free at that time.
  */
 export default async function SubstitutesPage(props: PageProps<"/school-admin/substitutes">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const now = today();
   const date = parseDateInput(param(search.date)) ?? now;

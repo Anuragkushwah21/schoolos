@@ -30,11 +30,21 @@ import { sendVerificationCode } from "@/server/platform/verification";
  */
 
 /** Slugs that would shadow a route or read as official. */
-const RESERVED_SLUGS = new Set(["admin", "api", "platform", "schoolos", "www", "new"]);
+const RESERVED_SLUGS = new Set([
+  "admin",
+  "api",
+  "platform",
+  "schoolos",
+  "www",
+  "new",
+]);
 
-async function uniqueSlug(name: string): Promise<string> {
+export async function uniqueSlug(name: string): Promise<string> {
   const base = slugify(name) || "school";
-  const candidates = [base, ...Array.from({ length: 20 }, (_, i) => `${base}-${i + 2}`)];
+  const candidates = [
+    base,
+    ...Array.from({ length: 20 }, (_, i) => `${base}-${i + 2}`),
+  ];
 
   const taken = new Set(
     (
@@ -45,7 +55,9 @@ async function uniqueSlug(name: string): Promise<string> {
     ).map((row) => row.slug),
   );
 
-  const free = candidates.find((slug) => !taken.has(slug) && !RESERVED_SLUGS.has(slug));
+  const free = candidates.find(
+    (slug) => !taken.has(slug) && !RESERVED_SLUGS.has(slug),
+  );
   // Twenty namesakes is implausible, but never fail a registration over it.
   return free ?? `${base}-${Date.now().toString(36)}`;
 }
@@ -75,7 +87,9 @@ export async function registerSchool(
 
   // Checked before writing anything, so the message can be useful rather than
   // a unique-constraint failure. The race is still caught below.
-  const emailTaken = await prisma.user.count({ where: { email: input.contactEmail } });
+  const emailTaken = await prisma.user.count({
+    where: { email: input.contactEmail },
+  });
   if (emailTaken) {
     throw new ConflictError(
       "An account with that email address already exists. Sign in instead, or register with another address.",
@@ -83,7 +97,9 @@ export async function registerSchool(
   }
 
   if (input.udiseCode) {
-    const udiseTaken = await prisma.school.count({ where: { udiseCode: input.udiseCode } });
+    const udiseTaken = await prisma.school.count({
+      where: { udiseCode: input.udiseCode },
+    });
     if (udiseTaken) {
       throw new ConflictError(
         "A school with that UDISE code is already registered. Contact us if you think this is a mistake.",
@@ -106,43 +122,63 @@ export async function registerSchool(
     const slug = await uniqueSlug(input.name);
 
     try {
-      const school = await prisma.school.create({
-        data: {
-          slug,
-          status: "PENDING",
-          name: input.name,
-          city: input.city,
-          state: input.state,
-          affiliationBoard: input.affiliationBoard,
-          establishedYear: input.establishedYear,
-          udiseCode: input.udiseCode ?? null,
-          contactName: input.contactName,
-          contactEmail: input.contactEmail,
-          contactPhone: input.contactPhone,
-          users: {
-            create: {
-              email: input.contactEmail,
-              passwordHash,
-              role: "SCHOOL_ADMIN",
-              firstName: firstName || "School",
-              lastName: rest.join(" ") || "Admin",
-              phone: input.contactPhone,
+      // The school, its first admin and its organization (the school being
+      // the organization's first campus) are written together: a failed or
+      // retried registration leaves none of them behind, never half.
+      const school = await prisma.$transaction(async (tx) => {
+        const created = await tx.school.create({
+          data: {
+            slug,
+            status: "PENDING",
+            name: input.name,
+            city: input.city,
+            state: input.state,
+            affiliationBoard: input.affiliationBoard,
+            establishedYear: input.establishedYear,
+            udiseCode: input.udiseCode ?? null,
+            contactName: input.contactName,
+            contactEmail: input.contactEmail,
+            contactPhone: input.contactPhone,
+            users: {
+              create: {
+                email: input.contactEmail,
+                passwordHash,
+                role: "SCHOOL_ADMIN",
+                firstName: firstName || "School",
+                lastName: rest.join(" ") || "Admin",
+                phone: input.contactPhone,
+              },
             },
-          },
-          ...(plan
-            ? {
-                subscriptions: {
-                  create: {
-                    planId: plan.id,
-                    status: "TRIALING",
-                    startsAt: new Date(),
-                    notes: "Plan requested at registration.",
+            ...(plan
+              ? {
+                  subscriptions: {
+                    create: {
+                      planId: plan.id,
+                      status: "TRIALING",
+                      startsAt: new Date(),
+                      notes: "Plan requested at registration.",
+                    },
                   },
-                },
-              }
-            : {}),
-        },
-        select: { id: true, slug: true, name: true },
+                }
+              : {}),
+          },
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            users: { select: { id: true }, take: 1 },
+          },
+        });
+        // The first campus is the school itself (same id, name and approval
+        // lifecycle); the person who registered it owns the organization.
+        await tx.organization.create({
+          data: {
+            name: created.name,
+            ownerId: created.users[0]?.id ?? null,
+            schools: { connect: { id: created.id } },
+          },
+        });
+        return created;
       });
 
       await recordAudit({
@@ -158,7 +194,9 @@ export async function registerSchool(
       // The code is part of registering, not a separate step the visitor has
       // to ask for. A failure here must not lose the registration itself —
       // they can ask for another code on the next screen.
-      await sendVerificationCode(school.slug, { ipAddress: meta.ipAddress }).catch((error) => {
+      await sendVerificationCode(school.slug, {
+        ipAddress: meta.ipAddress,
+      }).catch((error) => {
         console.error("[registration] could not send the first code", error);
       });
 
@@ -168,7 +206,10 @@ export async function registerSchool(
         // The email is the only other unique column in this write, and it was
         // already checked — so a collision here is the slug, unless someone
         // registered the same address in the last few milliseconds.
-        const stillFree = (await prisma.user.count({ where: { email: input.contactEmail } })) === 0;
+        const stillFree =
+          (await prisma.user.count({
+            where: { email: input.contactEmail },
+          })) === 0;
         if (stillFree && attempt === 0) continue;
 
         throw new ConflictError(

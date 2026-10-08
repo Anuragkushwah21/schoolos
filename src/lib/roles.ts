@@ -13,6 +13,7 @@ import type { UserRole } from "@/generated/prisma/enums";
 export const ROLE_HOME: Record<UserRole, Route> = {
   SUPER_ADMIN: "/super-admin/dashboard",
   SCHOOL_ADMIN: "/school-admin/dashboard",
+  PRINCIPAL: "/principal/dashboard",
   TEACHER: "/teacher/dashboard",
   STUDENT: "/student/dashboard",
   PARENT: "/parent/dashboard",
@@ -22,6 +23,7 @@ export const ROLE_HOME: Record<UserRole, Route> = {
 export const ROLE_LABEL: Record<UserRole, string> = {
   SUPER_ADMIN: "Super Admin",
   SCHOOL_ADMIN: "School Admin",
+  PRINCIPAL: "Principal",
   TEACHER: "Teacher",
   STUDENT: "Student",
   PARENT: "Parent",
@@ -46,6 +48,7 @@ export function roleHomePath(role: UserRole): Route {
 export const ROLE_PROFILE: Record<UserRole, Route> = {
   SUPER_ADMIN: "/account",
   SCHOOL_ADMIN: "/account",
+  PRINCIPAL: "/account",
   TEACHER: "/teacher/profile",
   STUDENT: "/student/profile",
   PARENT: "/parent/profile",
@@ -59,6 +62,7 @@ export function roleProfilePath(role: UserRole): Route {
 /** Roles that belong to a school. SUPER_ADMIN governs the platform instead. */
 export const TENANT_ROLES: readonly UserRole[] = [
   "SCHOOL_ADMIN",
+  "PRINCIPAL",
   "TEACHER",
   "STUDENT",
   "PARENT",
@@ -82,6 +86,7 @@ export function isTenantRole(role: UserRole): boolean {
 export const ROLE_PATH_PREFIX: Record<UserRole, string> = {
   SUPER_ADMIN: "/super-admin",
   SCHOOL_ADMIN: "/school-admin",
+  PRINCIPAL: "/principal",
   TEACHER: "/teacher",
   STUDENT: "/student",
   PARENT: "/parent",

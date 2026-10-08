@@ -5,9 +5,9 @@ import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { ACTIVITY_WINDOW_DAYS } from "@/server/classwork/activities";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Covering an absent teacher's period.
@@ -36,7 +36,7 @@ export async function assignSubstitute(
   ctx: TenantContext,
   input: SubstituteInput,
 ): Promise<{ id: string }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
 
   const now = today();
   if (input.date < addDays(now, -ACTIVITY_WINDOW_DAYS)) {
@@ -155,7 +155,7 @@ export async function assignSubstitute(
 
 /** Hand the period back to the teacher it belongs to. */
 export async function clearSubstitute(ctx: TenantContext, classSessionId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
 
   const record = await ctx.db.classSession.findFirst({
     where: { id: classSessionId },
@@ -197,7 +197,7 @@ export const COVER_AHEAD_DAYS = LOOKAHEAD_DAYS;
  * their own periods then, and not already covering another class then.
  */
 export async function getCoverPlan(ctx: TenantContext, date: Date) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   const now = today();
   const inWindow = date >= addDays(now, -COVER_BACK_DAYS) && date <= addDays(now, COVER_AHEAD_DAYS);
 

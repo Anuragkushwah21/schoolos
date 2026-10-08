@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import type { SchoolStatus, UserRole } from "@/generated/prisma/enums";
 import { employeeMaySignIn, studentMaySignIn } from "@/lib/validation/lifecycle";
@@ -45,8 +45,15 @@ export type SessionUser = {
   schoolSlug: string | null;
   schoolName: string | null;
   schoolStatus: SchoolStatus | null;
+  /**
+   * The school the login belongs to. Differs from `schoolId` only for an
+   * Owner who switched to another of their campuses (server-checked).
+   */
+  homeSchoolId?: string | null;
   /** The person's own interface language, if they chose one. */
   preferredLanguage?: string | null;
+  /** Signed in with a seeded or issued default password: must choose their own first. */
+  mustChangePassword?: boolean;
 };
 
 export type SessionMetadata = {
@@ -98,6 +105,7 @@ export async function validateSessionToken(
     select: {
       id: true,
       expiresAt: true,
+      activeSchoolId: true,
       user: {
         select: {
           id: true,
@@ -107,6 +115,7 @@ export async function validateSessionToken(
           lastName: true,
           isActive: true,
           preferredLanguage: true,
+          mustChangePassword: true,
           schoolId: true,
           school: { select: { slug: true, name: true, status: true } },
           student: { select: { status: true } },
@@ -136,17 +145,31 @@ export async function validateSessionToken(
     if (!user.schoolId || user.school?.status !== "ACTIVE") return null;
   }
 
+  // An Owner working in another of their campuses: honoured only while that
+  // campus is live and belongs to the organization this login owns. Anything
+  // else (a campus of someone else, a suspended one) falls back to home.
+  let school = { id: user.schoolId, slug: user.school?.slug ?? null, name: user.school?.name ?? null, status: user.school?.status ?? null };
+  if (session.activeSchoolId && session.activeSchoolId !== user.schoolId && user.role === "SCHOOL_ADMIN") {
+    const campus = await prisma.school.findFirst({
+      where: { id: session.activeSchoolId, status: "ACTIVE", organization: { ownerId: user.id } },
+      select: { id: true, slug: true, name: true, status: true },
+    });
+    if (campus) school = campus;
+  }
+
   return {
     id: user.id,
     email: user.email,
     role: user.role,
     firstName: user.firstName,
     lastName: user.lastName,
-    schoolId: user.schoolId,
-    schoolSlug: user.school?.slug ?? null,
-    schoolName: user.school?.name ?? null,
-    schoolStatus: user.school?.status ?? null,
+    schoolId: school.id,
+    schoolSlug: school.slug,
+    schoolName: school.name,
+    schoolStatus: school.status,
+    homeSchoolId: user.schoolId,
     preferredLanguage: user.preferredLanguage,
+    mustChangePassword: user.mustChangePassword,
   };
 }
 
@@ -209,12 +232,4 @@ export async function deleteExpiredSessions(): Promise<number> {
     where: { expiresAt: { lte: new Date() } },
   });
   return count;
-}
-
-/** Constant-time comparison, for callers comparing tokens directly. */
-export function tokensMatch(a: string, b: string): boolean {
-  const bufferA = Buffer.from(a);
-  const bufferB = Buffer.from(b);
-  if (bufferA.length !== bufferB.length) return false;
-  return timingSafeEqual(bufferA, bufferB);
 }

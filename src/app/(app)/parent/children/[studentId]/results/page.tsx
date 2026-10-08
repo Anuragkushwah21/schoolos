@@ -15,7 +15,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { FinalResultCard } from "@/features/exams/final-result-card";
 import { PublishedExams } from "@/features/exams/published-exams";
+import { finalResultFor } from "@/server/exams/final-results";
 import { ChildTabs } from "@/features/parent/child-nav";
 import { formatDate } from "@/lib/dates";
 import { pluralize } from "@/lib/format";
@@ -49,7 +51,7 @@ export default async function ChildResultsPage(
     getChildResults(ctx, studentId),
   );
   // After the guardian check above; `publishedExamsFor` repeats it anyway.
-  const exams = await publishedExamsFor(ctx, studentId);
+  const [exams, finalResult] = await Promise.all([publishedExamsFor(ctx, studentId), finalResultFor(ctx, studentId).catch(() => null)]);
 
   const missed = entries.filter((entry) => !entry.sat).length;
 
@@ -61,6 +63,7 @@ export default async function ChildResultsPage(
         description={`${child.placement.sectionLabel} · ${child.placement.sessionName}`}
       />
       <ChildTabs studentId={studentId} active="results" />
+      {finalResult ? <FinalResultCard result={finalResult} /> : null}
       <PublishedExams exams={exams} studentId={studentId} />
 
       {entries.length === 0 ? (

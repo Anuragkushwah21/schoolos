@@ -21,7 +21,7 @@ export const metadata: Metadata = { title: "Bulk student actions" };
  * status. Everything is re-checked on the server and applied all-or-nothing.
  */
 export default async function BulkStudentsPage(props: PageProps<"/school-admin/students/bulk">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
 
   const sessions = await ctx.db.academicSession.findMany({

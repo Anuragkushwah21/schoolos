@@ -16,7 +16,7 @@ import { promotionHistory, promotionSessions, promotionSourceClasses } from "@/s
 export const metadata: Metadata = { title: "Student promotion" };
 
 export default async function PromotionPage(props: PageProps<"/school-admin/academics/promotion">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
 
   const { sessions, from, to, later } = await promotionSessions(ctx, { from: param(search.from), to: param(search.to) });

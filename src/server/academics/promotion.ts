@@ -8,11 +8,11 @@ import { OPEN_SUPPORT } from "@/lib/validation/support";
 import { claimSeatsForGroup } from "@/server/academics/streams";
 import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { prisma } from "@/server/db/prisma";
 import { isUniqueViolation } from "@/server/db/errors";
 import { changeStudentStatus } from "@/server/people/lifecycle";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Whole-school promotion from one academic session to a later one.
@@ -54,7 +54,7 @@ type SessionRow = { id: string; name: string; startDate: Date; isCurrent: boolea
  * session (or the one asked for) to the session straight after it.
  */
 export async function promotionSessions(ctx: TenantContext, requested: { from?: string; to?: string } = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const sessions: SessionRow[] = await ctx.db.academicSession.findMany({
     orderBy: { startDate: "asc" },
     select: { id: true, name: true, startDate: true, isCurrent: true },
@@ -194,7 +194,7 @@ function rollOrder(a: string | null, b: string | null): number {
 
 /** The school's classes and this session's sections, for choosing what to promote. */
 export async function promotionSourceClasses(ctx: TenantContext, fromSessionId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const classes = await ctx.db.class.findMany({
     orderBy: { level: "asc" },
     select: {
@@ -248,7 +248,7 @@ export async function previewPromotion(
   ctx: TenantContext,
   input: { fromSessionId: string; toSessionId: string; sectionIds: string[] },
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   const { from, to } = await requireSessionPair(ctx, input.fromSessionId, input.toSessionId);
 
   const [sources, classes, targets] = await Promise.all([
@@ -381,7 +381,7 @@ async function resolveSection(
 }
 
 export async function runPromotionBatch(ctx: TenantContext, input: PromotionBatchInput): Promise<PromotionBatchResult> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   if (!input.students.length) return { promoted: 0, repeated: 0, graduated: 0, skipped: [] };
   if (input.students.length > PROMOTION_BATCH_SIZE) {
     throw new AppError("VALIDATION", `Send at most ${PROMOTION_BATCH_SIZE} students at a time.`);
@@ -528,7 +528,7 @@ export async function runPromotionBatch(ctx: TenantContext, input: PromotionBatc
  * their own run.
  */
 export async function promotionHistory(ctx: TenantContext, limit = 12) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   const rows = await prisma.auditLog.findMany({
     where: { schoolId: ctx.schoolId, action: "STUDENTS_PROMOTED" },
     orderBy: { createdAt: "desc" },
@@ -637,7 +637,7 @@ async function runStudents(ctx: TenantContext, runId: string) {
  * their new placement — those records are history and are never destroyed.
  */
 export async function previewPromotionReversal(ctx: TenantContext, runId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "VIEW");
   const run = await runStudents(ctx, runId);
   if (!run.fromSessionId || !run.toSessionId) throw new AppError("VALIDATION", "This run was recorded without its sessions, so it cannot be undone automatically.");
   const to = run.toSessionId;
@@ -704,7 +704,7 @@ export async function previewPromotionReversal(ctx: TenantContext, runId: string
  * with records in the new session are left as they are and listed.
  */
 export async function reversePromotionRun(ctx: TenantContext, runId: string, reason: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "students", "EDIT");
   const preview = await previewPromotionReversal(ctx, runId);
   const run = await runStudents(ctx, runId);
   const eligible = preview.students.filter((row) => !row.blocker);

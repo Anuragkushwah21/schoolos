@@ -20,11 +20,18 @@ import { prisma } from "@/server/db/prisma";
 
 /** Models that carry a `schoolId` and must always be filtered by it. */
 export const TENANT_MODELS = new Set([
+  "StaffDocument",
+  "Visitor",
+  "Responsibility",
+  "ResultScheme",
   "AcademicSession",
   "AdmissionCounter",
   "AttendanceRegister",
   "ApiToken",
   "AdmissionApplication",
+  "AdmissionAssignment",
+  "AdmissionDocument",
+  "AdmissionDrive",
   "AdmissionPortal",
   "Enquiry",
   "EnquiryChild",

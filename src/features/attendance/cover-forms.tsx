@@ -41,8 +41,8 @@ export function WorkCoverForm({ date, staff, absentDefault }: { date: string; st
   );
 }
 
-/** When the daily register is taken, and whether it submits itself. */
-export function AttendanceSettingsForm({ timing, submission }: { timing: string; submission: string }) {
+/** When the daily register is taken, and whether Half Day is offered. */
+export function AttendanceSettingsForm({ timing, halfDay }: { timing: string; halfDay: boolean }) {
   return (
     <ActionForm action={saveAttendanceSettingsAction} className="gap-5">
       <fieldset className="flex flex-col gap-2">
@@ -51,33 +51,31 @@ export function AttendanceSettingsForm({ timing, submission }: { timing: string;
           <input type="radio" name="timing" value="FIRST_PERIOD" defaultChecked={timing === "FIRST_PERIOD"} className="accent-primary mt-1" />
           <span>
             First period
-            <span className="text-muted-foreground block text-xs">Take attendance when the school day starts. It submits itself when the first period ends.</span>
+            <span className="text-muted-foreground block text-xs">Take attendance when the school day starts.</span>
           </span>
         </label>
         <label className="flex items-start gap-2 text-sm">
           <input type="radio" name="timing" value="LAST_PERIOD" defaultChecked={timing === "LAST_PERIOD"} className="accent-primary mt-1" />
           <span>
             Last period
-            <span className="text-muted-foreground block text-xs">Take attendance during the final period. It submits itself when the last period ends.</span>
+            <span className="text-muted-foreground block text-xs">Take attendance during the final period.</span>
           </span>
         </label>
       </fieldset>
+      <p className="bg-muted/50 rounded-lg p-3 text-sm">
+        Attendance is final only when the teacher presses <strong>Submit Attendance</strong>. Marks are kept as a draft until then — nothing submits by itself,
+        and parents and reports see only submitted attendance.
+      </p>
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium">Attendance submission</legend>
+        <legend className="mb-1 text-sm font-medium">Statuses</legend>
         <label className="flex items-start gap-2 text-sm">
-          <input type="radio" name="submission" value="AUTO" defaultChecked={submission === "AUTO"} className="accent-primary mt-1" />
+          <input type="checkbox" name="halfDay" defaultChecked={halfDay} className="accent-primary mt-1" />
           <span>
-            Automatic (recommended)
+            Allow Half Day
             <span className="text-muted-foreground block text-xs">
-              Teachers just mark students — it is saved as they go and submitted for them at the end of the period. They can still submit early.
+              Present, Absent, Late and Leave are always available. A half day counts as half a day attended in every summary and report. Turning it off keeps the
+              half days already marked.
             </span>
-          </span>
-        </label>
-        <label className="flex items-start gap-2 text-sm">
-          <input type="radio" name="submission" value="MANUAL" defaultChecked={submission === "MANUAL"} className="accent-primary mt-1" />
-          <span>
-            Teacher submits
-            <span className="text-muted-foreground block text-xs">Marks are saved as a draft until the teacher presses Submit.</span>
           </span>
         </label>
       </fieldset>

@@ -11,7 +11,7 @@ import { extraClassPrefill } from "@/server/support/service";
 export const metadata: Metadata = { title: "Schedule meeting" };
 
 export default async function NewMeetingPage(props: PageProps<"/school-admin/meetings/new">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const supportId = param(search.support);
   const [options, extra] = await Promise.all([meetingTargetOptions(ctx), supportId ? extraClassPrefill(ctx, supportId) : Promise.resolve(null)]);

@@ -21,18 +21,6 @@ export const TONE_ICON: Record<AccentTone, string> = {
   neutral: "bg-muted text-muted-foreground",
 };
 
-/** A thin accent bar along the top of a card. */
-export const TONE_BAR: Record<AccentTone, string> = {
-  blue: "bg-primary",
-  purple: "bg-purple",
-  green: "bg-success",
-  orange: "bg-orange",
-  amber: "bg-warning",
-  red: "bg-danger",
-  cyan: "bg-info",
-  neutral: "bg-border",
-};
-
 /**
  * A filled, gradient icon tile with a white icon — the colourful version of
  * `TONE_ICON`, for stat cards, quick actions and page headers. Built only

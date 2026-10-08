@@ -1,0 +1,81 @@
+/**
+ * Which area of the school an audit action belongs to, from its name — so
+ * every entry, old or new, files under a module without each caller saying so.
+ * Longest prefix wins ("STAFF_ATTENDANCE" is Attendance, "STAFF_" is Staff).
+ */
+const PREFIXES: Array<[string, string]> = [
+  ["STAFF_ATTENDANCE", "Attendance"],
+  ["STAFF_SALARY", "Payroll"],
+  ["STAFF_", "Staff"],
+  ["TEACHER_SALARY", "Payroll"],
+  ["TEACHER", "Teachers"],
+  ["CLASS_TEACHER", "Teachers"],
+  ["CLASS_SUBSTITUTE", "Teachers"],
+  ["SUBJECT", "Academics"],
+  ["LEAVE", "Leave"],
+  ["STUDENT_LEAVE", "Leave"],
+  ["STUDENT", "Students"],
+  ["ENROLLMENT", "Students"],
+  ["GUARDIAN", "Students"],
+  ["PARENT", "Students"],
+  ["ADMISSION", "Admissions"],
+  ["ENQUIRY", "Admissions"],
+  ["PERSON_STATUS", "People & logins"],
+  ["LOGIN_ACCESS", "People & logins"],
+  ["PORTAL_ACCESS", "People & logins"],
+  ["PASSWORD", "People & logins"],
+  ["ACCOUNT", "People & logins"],
+  ["SUPPORT", "Student support"],
+  ["CONCERN", "Student support"],
+  ["ATTENDANCE", "Attendance"],
+  ["HOLIDAY", "Attendance"],
+  ["WEEKLY_OFFS", "Attendance"],
+  ["EXAM", "Exams"],
+  ["MARKS", "Exams"],
+  ["RESULTS", "Exams"],
+  ["RESULT_", "Exams"],
+  ["GRADING", "Exams"],
+  ["CLASS_TEST", "Exams"],
+  ["HOMEWORK", "Classwork"],
+  ["LESSON", "Classwork"],
+  ["CLASS_ACTIVITY", "Classwork"],
+  ["TIMETABLE", "Academics"],
+  ["SECTION", "Academics"],
+  ["CLASS", "Academics"],
+  ["ACADEMIC", "Academics"],
+  ["STREAM", "Academics"],
+  ["ROOM", "Academics"],
+  ["FEE", "Fees"],
+  ["CONCESSION", "Fees"],
+  ["RECEIPT", "Fees"],
+  ["PAYROLL", "Payroll"],
+  ["SALARY", "Payroll"],
+  ["EXPENSE", "Expenses"],
+  ["BOOK", "Library"],
+  ["LIBRARY", "Library"],
+  ["INVENTORY", "Inventory"],
+  ["ASSET", "Inventory"],
+  ["TRANSPORT", "Transport"],
+  ["ROUTE", "Transport"],
+  ["VEHICLE", "Transport"],
+  ["VISITOR", "Visitors"],
+  ["RESPONSIBILITY", "Responsibilities"],
+  ["NOTICE", "Communication"],
+  ["EVENT", "Communication"],
+  ["MEETING", "Communication"],
+  ["PTM", "Communication"],
+  ["COMPLAINT", "Communication"],
+  ["WEBSITE", "Website"],
+  ["SCHOOL", "School"],
+  ["CAMPUS", "Campuses"],
+  ["PLAN_", "Plans"],
+  ["ORGANIZATION", "Campuses"],
+];
+
+const SORTED = [...PREFIXES].sort((a, b) => b[0].length - a[0].length);
+
+export function auditModuleFor(action: string): string {
+  return SORTED.find(([prefix]) => action.startsWith(prefix))?.[1] ?? "Other";
+}
+
+export const AUDIT_MODULES = [...new Set(PREFIXES.map(([, module]) => module)), "Other"].sort();

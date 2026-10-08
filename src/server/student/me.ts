@@ -3,6 +3,7 @@ import "server-only";
 import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
+import { visibleToStream } from "@/server/academics/stream-scope";
 import { monthlyAttendance } from "@/server/analytics/student";
 import { homeworkStatus, schoolNow } from "@/lib/time-status";
 import { schoolClosureOn } from "@/server/calendar/holidays";
@@ -63,6 +64,7 @@ export async function getMyDay(ctx: TenantContext, date: Date = today()) {
     ctx.db.timetableSlot.findMany({
       where: {
         sectionId: placement.sectionId,
+        AND: [visibleToStream(placement.streamId)],
         academicSessionId: placement.sessionId,
         dayOfWeek: dayOfWeek(date),
       },
@@ -72,12 +74,13 @@ export async function getMyDay(ctx: TenantContext, date: Date = today()) {
         startMinute: true,
         endMinute: true,
         room: true,
+        stream: { select: { name: true } },
         subject: { select: { id: true, name: true } },
         teacher: { select: { firstName: true, lastName: true } },
       },
     }),
     ctx.db.classSession.findMany({
-      where: { date, timetableSlot: { sectionId: placement.sectionId } },
+      where: { date, timetableSlot: { sectionId: placement.sectionId, AND: [visibleToStream(placement.streamId)] } },
       select: {
         id: true,
         timetableSlotId: true,
@@ -172,6 +175,7 @@ export async function getMyCompletedLessons(
       status: { not: "SCHEDULED" },
       timetableSlot: {
         sectionId: me.placement.sectionId,
+        AND: [visibleToStream(me.placement.streamId)],
         academicSessionId: me.placement.sessionId,
         ...(options.subjectId ? { subjectId: options.subjectId } : {}),
       },
@@ -238,6 +242,7 @@ export async function getMyUpcomingLessons(ctx: TenantContext, options: { days?:
       OR: [{ plannedTopic: { not: null } }, { preparation: { not: null } }],
       timetableSlot: {
         sectionId: me.placement.sectionId,
+        AND: [visibleToStream(me.placement.streamId)],
         academicSessionId: me.placement.sessionId,
       },
     },
@@ -293,6 +298,7 @@ export async function getMyLesson(ctx: TenantContext, classSessionId: string) {
       // section in the current session.
       timetableSlot: {
         sectionId: me.placement.sectionId,
+        AND: [visibleToStream(me.placement.streamId)],
         academicSessionId: me.placement.sessionId,
       },
     },
@@ -310,6 +316,7 @@ export async function getMyLesson(ctx: TenantContext, classSessionId: string) {
           startMinute: true,
           endMinute: true,
           room: true,
+          stream: { select: { name: true } },
           subject: { select: { id: true, name: true } },
         },
       },
@@ -326,6 +333,7 @@ export async function getMyLesson(ctx: TenantContext, classSessionId: string) {
   const homework = await ctx.db.homework.findMany({
     where: {
       sectionId: me.placement.sectionId,
+      AND: [visibleToStream(me.placement.streamId)],
       status: "PUBLISHED",
       OR: [
         // Set from this very class record…
@@ -386,6 +394,7 @@ export async function getMyMaterials(
       classSession: {
         timetableSlot: {
           sectionId: me.placement.sectionId,
+          AND: [visibleToStream(me.placement.streamId)],
           academicSessionId: me.placement.sessionId,
           ...(options.subjectId ? { subjectId: options.subjectId } : {}),
         },
@@ -456,6 +465,7 @@ export async function getMyHomework(ctx: TenantContext) {
   const rows = await ctx.db.homework.findMany({
     where: {
       sectionId: me.placement.sectionId,
+      AND: [visibleToStream(me.placement.streamId)],
       academicSessionId: me.placement.sessionId,
       status: "PUBLISHED",
     },
@@ -511,6 +521,7 @@ export async function getMyHomeworkItem(ctx: TenantContext, homeworkId: string) 
     where: {
       id: homeworkId,
       sectionId: me.placement.sectionId,
+      AND: [visibleToStream(me.placement.streamId)],
       academicSessionId: me.placement.sessionId,
       status: "PUBLISHED",
     },
@@ -553,6 +564,7 @@ export async function getMyTimetable(ctx: TenantContext) {
   const slots = await ctx.db.timetableSlot.findMany({
     where: {
       sectionId: me.placement.sectionId,
+      AND: [visibleToStream(me.placement.streamId)],
       academicSessionId: me.placement.sessionId,
     },
     orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
@@ -562,6 +574,7 @@ export async function getMyTimetable(ctx: TenantContext) {
       startMinute: true,
       endMinute: true,
       room: true,
+      stream: { select: { name: true } },
       subject: { select: { name: true } },
       teacher: { select: { firstName: true, lastName: true } },
     },
@@ -647,7 +660,12 @@ export async function getMyResults(ctx: TenantContext) {
     };
   };
 
-  const upcoming = assessments.filter((row) => row.date > now).map(shape).reverse();
+  // An upcoming test never carries marks: a draft mark entered before its date
+  // was moved must not reach the student.
+  const upcoming = assessments
+    .filter((row) => row.date > now)
+    .map((row) => ({ ...shape({ ...row, results: [] }), sat: false }))
+    .reverse();
   const past = assessments.filter((row) => row.date <= now).map(shape);
 
   return { me, upcoming, past, progress: subjectProgress(past) };
@@ -747,6 +765,7 @@ async function mySubjects(ctx: TenantContext, me: StudentContext) {
   const rows = await ctx.db.timetableSlot.findMany({
     where: {
       sectionId: me.placement.sectionId,
+      AND: [visibleToStream(me.placement.streamId)],
       academicSessionId: me.placement.sessionId,
     },
     distinct: ["subjectId"],

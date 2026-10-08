@@ -3,17 +3,19 @@ import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import type { MeetingAudience, MeetingType, UserRole } from "@/generated/prisma/enums";
 import { addDays, formatDate, formatMinutes, today } from "@/lib/dates";
-import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName, humanize } from "@/lib/format";
 import { type MeetingTimeStatus, countdownLabel, lifecycle, meetingStatus, schoolNow } from "@/lib/time-status";
 import { CURRENT_EMPLOYEE, CURRENT_STUDENT } from "@/lib/validation/lifecycle";
 import { MEETING_AUDIENCE_LABEL, type MeetingGroup, type MeetingInput } from "@/lib/validation/meetings";
 import { getCurrentSession, sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import { accessibleSectionIds } from "@/server/auth/teacher-access";
 import { linkExtraClass } from "@/server/support/service";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Meetings the school office calls: parent-teacher meetings, staff meetings,
@@ -74,7 +76,8 @@ export function meetingTimeWhere(status: MeetingTimeStatus, clock: Clock = schoo
  * school's; any role without a group sees none.
  */
 export async function visibleMeetingWhere(ctx: TenantContext): Promise<Prisma.MeetingWhereInput> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return {};
+  // The Principal sees every meeting (PTMs included) to oversee; only the office changes them.
+  if (isSchoolLeader(ctx.user.role)) return {};
   const group = GROUP_FOR_ROLE[ctx.user.role];
   if (!group) return { id: { in: [] } };
 
@@ -198,14 +201,31 @@ function present(row: MeetingRow, clock: Clock) {
 export type MeetingView = ReturnType<typeof present>;
 
 // -----------------------------------------------------------------------------
-// School Admin
+// School Admin — and staff the admin allowed to schedule meetings
 // -----------------------------------------------------------------------------
+
+/**
+ * Scheduling is the School Admin's, and staff's only with "Schedule meetings"
+ * (a receptionist booking a PTM, say). Staff change or cancel only the
+ * meetings they scheduled; deleting, and extra classes from a student's
+ * support record, stay with the School Admin.
+ */
+async function assertScheduler(ctx: TenantContext): Promise<void> {
+  await assertAdminOrStaffPermission(ctx, "meetings.schedule");
+}
+
+async function assertMayChange(ctx: TenantContext, meetingId: string): Promise<void> {
+  if (isSchoolLeader(ctx.user.role)) return;
+  const row = await ctx.db.meeting.findFirst({ where: { id: meetingId }, select: { createdById: true } });
+  if (!row) throw new NotFoundError("That meeting was not found.");
+  if (row.createdById !== ctx.user.id) throw new ForbiddenError("You can change only the meetings you scheduled. Ask the School Admin about this one.");
+}
 
 export async function listMeetingsForAdmin(
   ctx: TenantContext,
   filters: { q?: string; status?: MeetingTimeStatus; type?: MeetingType; page?: number } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertScheduler(ctx);
   const clock = schoolNow();
   const page = Math.max(1, filters.page ?? 1);
   const where: Prisma.MeetingWhereInput = {
@@ -247,7 +267,7 @@ export async function listMeetingsForAdmin(
 
 /** One meeting with everyone it names, for the admin's detail and edit screens. */
 export async function getMeetingForAdmin(ctx: TenantContext, meetingId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertScheduler(ctx);
   const row = await ctx.db.meeting.findFirst({
     where: { id: meetingId },
     select: {
@@ -270,8 +290,15 @@ export async function getMeetingForAdmin(ctx: TenantContext, meetingId: string) 
     },
   });
   if (!row) throw new NotFoundError("That meeting was not found.");
+  const view = present(row, schoolNow());
+  // Staff with "Schedule meetings" change only their own; deleting is the School Admin's.
+  const admin = isSchoolLeader(ctx.user.role);
+  const mine = admin || (await ctx.db.meeting.count({ where: { id: row.id, createdById: ctx.user.id } })) > 0;
   return {
-    ...present(row, schoolNow()),
+    ...view,
+    canEdit: view.canEdit && mine,
+    canCancel: view.canCancel && mine,
+    canDelete: admin,
     sectionIds: row.sections.map((item) => item.sectionId),
     teacherIds: row.recipients.flatMap((item) => (item.user.teacher ? [item.user.teacher.id] : [])),
     staffIds: row.recipients.flatMap((item) => (item.user.staffMember ? [item.user.staffMember.id] : [])),
@@ -352,7 +379,9 @@ async function resolveTargets(ctx: TenantContext, input: MeetingInput) {
  * past, and never once it has started.
  */
 export async function saveMeeting(ctx: TenantContext, input: MeetingInput): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertScheduler(ctx);
+  if (input.meetingId) await assertMayChange(ctx, input.meetingId);
+  if (input.supportId && !isSchoolLeader(ctx.user.role)) throw new ForbiddenError("Extra classes are arranged by the School Admin.");
   const clock = schoolNow();
 
   let existing: { id: string; title: string; cancelled: boolean } | null = null;
@@ -437,7 +466,8 @@ export async function saveMeeting(ctx: TenantContext, input: MeetingInput): Prom
 
 /** Call a meeting off. It stays visible to invitees, marked cancelled. */
 export async function cancelMeeting(ctx: TenantContext, input: { meetingId: string; reason: string | null }): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertScheduler(ctx);
+  await assertMayChange(ctx, input.meetingId);
   const row = await ctx.db.meeting.findFirst({
     where: { id: input.meetingId },
     select: { id: true, title: true, status: true, date: true, startMinute: true, endMinute: true },
@@ -470,7 +500,7 @@ export async function cancelMeeting(ctx: TenantContext, input: { meetingId: stri
  * unlinked, with a note, rather than blocking the delete.
  */
 export async function deleteMeeting(ctx: TenantContext, meetingId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "DELETE");
   const row = await ctx.db.meeting.findFirst({ where: { id: meetingId }, select: { id: true, title: true, date: true, startMinute: true, endMinute: true, status: true } });
   if (!row) throw new NotFoundError("That meeting was not found.");
   const status = meetingStatus(row);
@@ -496,7 +526,7 @@ export async function deleteMeeting(ctx: TenantContext, meetingId: string): Prom
 
 /** Sections, teachers and staff with logins, for choosing who a meeting reaches. */
 export async function meetingTargetOptions(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertScheduler(ctx);
   const [sections, teachers, staff] = await Promise.all([
     ctx.db.section.findMany({ where: { academicSession: { isCurrent: true } }, select: { id: true, ...SECTION_SELECT } }),
     ctx.db.teacher.findMany({

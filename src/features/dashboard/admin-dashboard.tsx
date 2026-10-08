@@ -10,6 +10,7 @@ import {
   FilePenLineIcon,
   GraduationCapIcon,
   HeartPulseIcon,
+  HourglassIcon,
   IdCardIcon,
   ListTodoIcon,
   ReceiptTextIcon,
@@ -28,7 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/shared/stat-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { rupees } from "@/features/finance/money";
-import { formatDate, today } from "@/lib/dates";
+import { formatDate, formatMonth, today } from "@/lib/dates";
 import { formatMoney, formatNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/i18n/translate";
 import { academicSnapshot, admissionsToday, financeSnapshot, staffToday, studentBands } from "@/server/analytics/admin-dashboard";
@@ -37,6 +38,11 @@ import { needsAttention } from "@/server/analytics/today";
 import { todayOverview } from "@/server/attendance/service";
 import type { TenantContext } from "@/server/auth/current-user";
 import { getIntlLocale, getT } from "@/server/i18n";
+import { attendedDays } from "@/lib/attendance";
+import { cn } from "@/lib/utils";
+import { WorkspaceCards } from "@/features/staff/workspace-cards";
+import { getPayroll } from "@/server/finance/payroll";
+import { staffCountsByRole } from "@/server/operations/staff";
 
 /**
  * The School Admin dashboard, as sections that each answer one question and
@@ -87,7 +93,7 @@ export function SectionSkeleton({ tiles = 4, chart = false }: { tiles?: number; 
 // Today
 // -----------------------------------------------------------------------------
 
-export async function TodaySection({ ctx, sessionId }: { ctx: TenantContext; sessionId: string | null }) {
+export async function TodaySection({ ctx, sessionId, modules }: { ctx: TenantContext; sessionId: string | null; /** The school's optional modules: fee and expense tiles only when it has them. */ modules: readonly string[] }) {
   const [admissions, money, overview, registers] = await Promise.all([
     admissionsToday(ctx),
     sessionId ? financeSnapshotLite(ctx) : Promise.resolve({ collected: 0, expenses: 0 }),
@@ -101,16 +107,16 @@ export async function TodaySection({ ctx, sessionId }: { ctx: TenantContext; ses
     staffMarked: overview?.staffMarked ?? 0,
     closedToday: Boolean(closed),
   });
-  const attended = overview ? overview.counts.PRESENT + overview.counts.LATE : 0;
+  const attended = overview ? attendedDays(overview.counts) : 0;
   const share = overview && overview.counts.total ? Math.round((attended / overview.counts.total) * 100) : null;
 
   return (
     <section aria-labelledby="today" className="mb-10">
       <SectionHeading id="today" title="Today" />
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+      <div className={cn("grid grid-cols-2 gap-3 sm:gap-4", modules.includes("FINANCE") && modules.includes("EXPENSES") ? "lg:grid-cols-5" : "lg:grid-cols-3")}>
         <StatCard tone="blue" icon={UserPlusIcon} label="New admissions" value={admissions.admitted} hint={`${admissions.enquiries} new enquir${admissions.enquiries === 1 ? "y" : "ies"} · ${admissions.applications} application${admissions.applications === 1 ? "" : "s"}`} href="/school-admin/admissions/enquiries" />
-        <StatCard tone="green" icon={WalletIcon} label="Fee collection" value={rupees(money.collected)} hint="received today" href="/school-admin/finance/payments" />
-        <StatCard tone="orange" icon={ReceiptTextIcon} label="Expenses" value={rupees(money.expenses)} hint="spent today" href="/school-admin/finance/expenses" />
+        {modules.includes("FINANCE") ? <StatCard tone="green" icon={WalletIcon} label="Fee collection" value={rupees(money.collected)} hint="received today" href="/school-admin/finance/payments" /> : null}
+        {modules.includes("EXPENSES") ? <StatCard tone="orange" icon={ReceiptTextIcon} label="Expenses" value={rupees(money.expenses)} hint="spent today" href="/school-admin/finance/expenses" /> : null}
         <StatCard
           tone="cyan"
           icon={ClipboardCheckIcon}
@@ -119,7 +125,7 @@ export async function TodaySection({ ctx, sessionId }: { ctx: TenantContext; ses
           hint={closed ? closed.label : overview && overview.counts.total ? `${attended} of ${overview.counts.total} present` : "not marked yet"}
           href="/school-admin/attendance"
         />
-        <StatCard tone={pending.length ? "red" : "green"} icon={ListTodoIcon} label="Pending actions" value={pending.length} hint={pending.length ? "see Needs action below" : "all clear"} href="#needs-action" />
+        <StatCard tone={pending.length ? "red" : "green"} icon={ListTodoIcon} label="Pending actions" value={pending.length} hint={pending.length ? "see Needs action" : "all clear"} href="#needs-action" />
       </div>
     </section>
   );
@@ -193,6 +199,21 @@ export async function StaffSection({ ctx, sessionId }: { ctx: TenantContext; ses
   );
 }
 
+/**
+ * Staff by kind — Teaching and Non-teaching — as role cards. Each opens that
+ * role's workspace, where the admin does the work directly, as admin.
+ */
+export async function StaffWorkspacesSection({ ctx }: { ctx: TenantContext }) {
+  const counts = await staffCountsByRole(ctx);
+  return (
+    <section aria-labelledby="staff-workspaces" className="mb-10">
+      <SectionHeading id="staff-workspaces" title="Staff workspaces" href="/school-admin/staff/workspaces" linkLabel="All roles" />
+      <p className="text-muted-foreground mb-3 text-sm">Do any role&apos;s work yourself — no staff account needed — or add people to a role when you hire.</p>
+      <WorkspaceCards counts={counts} />
+    </section>
+  );
+}
+
 // -----------------------------------------------------------------------------
 // Academics
 // -----------------------------------------------------------------------------
@@ -202,7 +223,7 @@ export async function AcademicSection({ ctx, sessionId }: { ctx: TenantContext; 
   return (
     <section aria-labelledby="academics" className="mb-10">
       <SectionHeading id="academics" title="Academics" href="/school-admin/exams" linkLabel="Exams & results" />
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-2 2xl:grid-cols-4">
         <StatCard tone="orange" icon={HeartPulseIcon} label="Students needing attention" value={academic.needsAttention} hint="by the school's rule" href="/school-admin/exams/performance" />
         <StatCard tone="amber" icon={FilePenLineIcon} label="Tests pending marks" value={academic.pendingMarks} hint="held, not submitted" href="/school-admin/exams/pending" />
         <StatCard tone="blue" icon={SendIcon} label="Results to publish" value={academic.readyToPublish} hint="term exams ready" href="/school-admin/exams/term?status=READY_TO_PUBLISH" />
@@ -234,7 +255,7 @@ export async function AcademicSection({ ctx, sessionId }: { ctx: TenantContext; 
                 key: point.key,
                 label: point.label,
                 value: point.share === null ? null : Math.round(point.share * 100),
-                detail: point.counts.total > 0 ? `${point.counts.PRESENT + point.counts.LATE} of ${point.counts.total} students` : undefined,
+                detail: point.counts.total > 0 ? `${attendedDays(point.counts)} of ${point.counts.total} students` : undefined,
               }))}
               emptyMessage="Mark a few registers and the trend will appear here."
             />
@@ -255,7 +276,7 @@ export async function FinanceSection({ ctx, sessionId }: { ctx: TenantContext; s
   return (
     <section aria-labelledby="money" className="mb-10">
       <SectionHeading id="money" title="Money" href="/school-admin/finance" linkLabel="Finance overview" />
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-5 xl:grid-cols-3 2xl:grid-cols-5">
         <StatCard tone="green" icon={WalletIcon} label="Collected today" value={rupees(money.collectedTodayMinor)} href="/school-admin/finance/payments" />
         <StatCard tone="orange" icon={ReceiptTextIcon} label="Expenses today" value={rupees(money.expensesTodayMinor)} href="/school-admin/finance/expenses" />
         <StatCard tone="blue" icon={BanknoteIcon} label="Collected this session" value={rupees(money.collectedSessionMinor)} />
@@ -300,10 +321,82 @@ export async function FinanceSection({ ctx, sessionId }: { ctx: TenantContext; s
 }
 
 // -----------------------------------------------------------------------------
+// Salaries
+// -----------------------------------------------------------------------------
+
+/**
+ * This month's salaries, whoever paid them — the accountant or the admin:
+ * how much has gone out, how much is still to pay, and each payment with
+ * who recorded it. Every payment is also on the audit log, by name.
+ */
+export async function SalariesSection({ ctx }: { ctx: TenantContext }) {
+  const payroll = await getPayroll(ctx, today());
+  const paid = payroll.rows
+    .filter((row) => row.payment)
+    .sort((a, b) => b.payment!.createdAt.getTime() - a.payment!.createdAt.getTime());
+  const unpaid = payroll.rows.filter((row) => !row.payment && row.dueMinor !== null);
+  const month = formatMonth(payroll.month);
+  return (
+    <section aria-labelledby="salaries" className="mb-10">
+      <SectionHeading id="salaries" title={`Salaries — ${month}`} href="/school-admin/finance/payroll" linkLabel="Payroll" />
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
+        <StatCard tone="green" icon={BanknoteIcon} label="Paid this month" value={rupees(payroll.totals.paidMinor)} hint={`${payroll.totals.paid} ${payroll.totals.paid === 1 ? "person" : "people"}`} href="/school-admin/finance/payroll" />
+        <StatCard
+          tone={payroll.totals.remainingMinor ? "amber" : "green"}
+          icon={HourglassIcon}
+          label="Still to pay"
+          value={rupees(payroll.totals.remainingMinor)}
+          hint={unpaid.length ? `${unpaid.length} ${unpaid.length === 1 ? "person" : "people"}` : "everyone paid"}
+          href="/school-admin/finance/payroll"
+        />
+        <StatCard tone="blue" icon={WalletIcon} label="Salary bill" value={rupees(payroll.totals.dueMinor)} hint="due this month" />
+      </div>
+      <Card>
+        <CardContent className="flex flex-col gap-4">
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">Paid this month</h3>
+            {paid.length ? (
+              <ul className="divide-y text-sm">
+                {paid.slice(0, 8).map((row) => (
+                  <li key={row.key} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-2">
+                    <span className="min-w-0">
+                      <span className="font-medium">{row.name}</span>
+                      <span className="text-muted-foreground"> · {row.role}</span>
+                      <span className="text-muted-foreground block text-xs">
+                        {`Paid ${formatDate(row.payment!.paidOn)}${row.payment!.paidBy ? ` by ${row.payment!.paidBy}` : ""}`}
+                      </span>
+                    </span>
+                    <span className="font-semibold tabular-nums">{rupees(row.payment!.amountMinor)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-muted-foreground text-sm">No salary paid yet this month.</p>
+            )}
+          </div>
+          {unpaid.length ? (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Not paid yet</h3>
+              <ul className="flex flex-wrap gap-2 text-xs">
+                {unpaid.slice(0, 12).map((row) => (
+                  <li key={row.key} className="bg-warning-soft rounded-full px-2.5 py-1">
+                    {`${row.name} · ${row.role} · ${rupees(row.dueMinor ?? 0)}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+// -----------------------------------------------------------------------------
 // Needs action
 // -----------------------------------------------------------------------------
 
-export async function NeedsActionSection({ ctx, sessionId }: { ctx: TenantContext; sessionId: string | null }) {
+export async function NeedsActionSection({ ctx, sessionId, stacked = false }: { ctx: TenantContext; sessionId: string | null; stacked?: boolean }) {
   const [t, intl, overview, registers] = await Promise.all([
     getT(),
     getIntlLocale(),
@@ -321,6 +414,7 @@ export async function NeedsActionSection({ ctx, sessionId }: { ctx: TenantContex
     <div id="needs-action" className="scroll-mt-24">
       <NeedsAttention
         title="Needs action"
+        stacked={stacked}
         allClear={t("dashboard.attention.allClear")}
         rows={todo.map((item) => ({
           key: item.key,

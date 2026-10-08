@@ -1,8 +1,9 @@
 /**
  * The daily register workflow and cover for absent people.
  *
- *   * Draft → submitted: drafts never reach StudentAttendance; an AUTO draft
- *     submits itself on the server when its period ends.
+ *   * Draft → submitted: drafts never reach StudentAttendance, parents or
+ *     students; nothing submits a draft by itself (not opening it, not saving
+ *     it, not the period ending) — only the explicit Submit.
  *   * Correction window: min(submitted + 2 h, 23:59:59 that day), IST —
  *     a teacher corrects inside it with a reason, never after; the School
  *     Admin at any time.
@@ -27,7 +28,6 @@ import {
 } from "@/server/attendance/cover";
 import {
   correctionDeadlineFor,
-  finalizeDueRegisters,
   getRegister,
   markAttendance,
   registerPhase,
@@ -91,30 +91,35 @@ describe("the correction deadline", () => {
   });
 });
 
-describe("draft and automatic submission", () => {
-  it("keeps a draft out of the record, then submits it on the server when the period ends", async () => {
+describe("draft and explicit submission", () => {
+  it("keeps a draft a draft — opening, saving and the period ending submit nothing; only Submit does", async () => {
     const date = today();
     const teacher = teacherOf(schoolA);
-    await saveRegisterDraft(teacher, { sectionId: schoolA.sectionId, date, entries: mark(schoolA, "ABSENT") });
+    await getRegister(teacher, schoolA.sectionId, date);
+    expect(await prisma.attendanceRegister.count({ where: { sectionId: schoolA.sectionId, date } })).toBe(0);
 
+    await saveRegisterDraft(teacher, { sectionId: schoolA.sectionId, date, entries: mark(schoolA, "ABSENT") });
+    await saveRegisterDraft(teacher, { sectionId: schoolA.sectionId, date, entries: mark(schoolA, "ABSENT") });
     expect(await prisma.studentAttendance.count({ where: { sectionId: schoolA.sectionId, date } })).toBe(0);
     const draft = await getRegister(teacher, schoolA.sectionId, date);
     expect(draft.phase).toBe("DRAFT");
     expect(draft.rows.every((row) => row.status === "ABSENT")).toBe(true);
+    expect((await prisma.attendanceRegister.findFirstOrThrow({ where: { sectionId: schoolA.sectionId, date } })).finalizeAt).toBeNull();
 
-    // The period ended ten minutes ago — nobody has the page open.
-    const ended = new Date(Date.now() - 10 * 60_000);
-    await prisma.attendanceRegister.updateMany({ where: { sectionId: schoolA.sectionId, date }, data: { finalizeAt: ended } });
-    // Another school's run touches nothing here.
-    expect(await finalizeDueRegisters({ db: adminOf(schoolB).db, schoolId: schoolB.schoolId })).toBe(0);
-    expect(await finalizeDueRegisters(adminOf(schoolA))).toBe(1);
+    // Even with an old finalize time on the row and the register read again, it stays a draft.
+    await prisma.attendanceRegister.updateMany({ where: { sectionId: schoolA.sectionId, date }, data: { finalizeAt: new Date(Date.now() - 10 * 60_000) } });
+    await getRegister(teacher, schoolA.sectionId, date);
+    await myRegistersToday(teacher);
+    expect((await prisma.attendanceRegister.findFirstOrThrow({ where: { sectionId: schoolA.sectionId, date } })).status).toBe("DRAFT");
+    expect(await prisma.studentAttendance.count({ where: { sectionId: schoolA.sectionId, date } })).toBe(0);
 
+    // The explicit Submit makes it the record, as the teacher.
+    await markAttendance(teacher, { sectionId: schoolA.sectionId, date, entries: mark(schoolA, "ABSENT") });
     const register = await prisma.attendanceRegister.findFirstOrThrow({ where: { sectionId: schoolA.sectionId, date } });
-    expect(register).toMatchObject({ status: "SUBMITTED", autoSubmitted: true, submittedAt: ended });
-    expect(register.correctionDeadline).toEqual(correctionDeadlineFor(ended, date));
+    expect(register).toMatchObject({ status: "SUBMITTED", autoSubmitted: false, submittedById: schoolA.teacherUserId });
+    expect(register.correctionDeadline).toEqual(correctionDeadlineFor(register.submittedAt!, date));
     expect(await prisma.studentAttendance.count({ where: { sectionId: schoolA.sectionId, date, status: "ABSENT" } })).toBe(schoolA.studentIds.length);
-    // A second run does not submit it twice.
-    expect(await finalizeDueRegisters(adminOf(schoolA))).toBe(0);
+    expect((await getRegister(teacher, schoolA.sectionId, date)).submittedBy).toBeTruthy();
     await expect(saveRegisterDraft(teacher, { sectionId: schoolA.sectionId, date, entries: mark(schoolA) })).rejects.toBeInstanceOf(ConflictError);
   });
 });

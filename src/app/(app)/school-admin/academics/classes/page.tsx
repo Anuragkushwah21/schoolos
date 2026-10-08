@@ -24,7 +24,7 @@ import { teacherOptions } from "@/server/people/teachers";
 export const metadata: Metadata = { title: "Classes & sections" };
 
 export default async function ClassesPage(props: PageProps<"/school-admin/academics/classes">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
 
   const session = await resolveSession(ctx, param(search.session));

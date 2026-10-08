@@ -9,6 +9,7 @@ import { cancelMeetingSchema, meetingSchema } from "@/lib/validation/meetings";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import { cancelMeeting, deleteMeeting, saveMeeting } from "@/server/communication/meetings";
 import { performAction } from "@/server/perform-action";
+import { isSchoolLeader } from "@/lib/permissions";
 
 type Result = ActionResult<undefined>;
 
@@ -16,24 +17,26 @@ type Result = ActionResult<undefined>;
 const PAGES = ["/school-admin", "/teacher", "/student", "/parent", "/staff"];
 
 export async function saveMeetingAction(
-  _p: ActionResult<{ id: string } | undefined>,
+  _p: ActionResult<{ id: string; href: Route } | undefined>,
   formData: FormData,
-): Promise<ActionResult<{ id: string } | undefined>> {
+): Promise<ActionResult<{ id: string; href: Route } | undefined>> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      // Staff with "Schedule meetings" too; the service checks it (and that they scheduled it).
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "NON_TEACHING_STAFF");
       const input = parseFormData(meetingSchema, formData);
       const meetingId = await saveMeeting(ctx, input);
-      return successResult(input.meetingId ? "Meeting updated." : "Meeting created successfully. Everyone invited can see it now.", { id: meetingId });
+      const base = isSchoolLeader(ctx.user.role) ? "/school-admin/meetings" : "/staff/meetings/manage";
+      return successResult(input.meetingId ? "Meeting updated." : "Meeting created successfully. Everyone invited can see it now.", { id: meetingId, href: `${base}/${meetingId}` as Route });
     },
-    { revalidate: PAGES, redirectTo: (data) => (data ? (`/school-admin/meetings/${data.id}` as Route) : null) },
+    { revalidate: PAGES, redirectTo: (data) => (data ? data.href : null) },
   );
 }
 
 export async function cancelMeetingAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "NON_TEACHING_STAFF");
       await cancelMeeting(ctx, parseFormData(cancelMeetingSchema, formData));
       return successResult("Meeting cancelled. Invitees will see it marked as cancelled.");
     },
@@ -44,7 +47,7 @@ export async function cancelMeetingAction(_p: Result, formData: FormData): Promi
 export async function deleteMeetingAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(
     async () => {
-      const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL");
       const { meetingId } = parseFormData(z.object({ meetingId: id }), formData);
       await deleteMeeting(ctx, meetingId);
       return successResult("Meeting deleted.");

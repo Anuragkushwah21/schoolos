@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 
 import { EmptyState } from "@/components/shared/empty-state";
@@ -18,6 +18,8 @@ import { formatDate } from "@/lib/dates";
 import { enumParam, pageParam, param } from "@/lib/search-params";
 import { requireSuperAdmin } from "@/server/auth/current-user";
 import { listSchools } from "@/server/platform/schools";
+import { schoolsByStatus } from "@/server/analytics/platform";
+import { ViewTabs } from "@/components/shared/view-tabs";
 
 export const metadata: Metadata = { title: "Schools" };
 
@@ -31,44 +33,44 @@ const STATUS_FILTERS = [
   "INACTIVE",
 ] as const;
 
-const STATUS_LABEL: Record<(typeof STATUS_FILTERS)[number], string> = {
-  REVIEW: "Awaiting review",
-  PENDING: "Pending",
-  UNDER_REVIEW: "Under review",
-  ACTIVE: "Active",
-  REJECTED: "Rejected",
-  SUSPENDED: "Suspended",
-  INACTIVE: "Inactive",
-};
-
 export default async function SchoolsPage(props: PageProps<"/super-admin/schools">) {
   const user = await requireSuperAdmin();
   const search = await props.searchParams;
 
   const status = enumParam(search.status, STATUS_FILTERS);
   const q = param(search.q);
-  const { rows, total, page, pageCount } = await listSchools(user, {
-    status,
-    q,
-    page: pageParam(search.page),
+  const [{ rows, total, page, pageCount }, counts] = await Promise.all([
+    listSchools(user, { status, q, page: pageParam(search.page) }),
+    schoolsByStatus(user),
+  ]);
+  const tab = (value: (typeof STATUS_FILTERS)[number] | null, label: string, count: number) => ({
+    href: (value ? `/super-admin/schools?status=${value}` : "/super-admin/schools") as Route,
+    label,
+    count,
+    active: (status ?? null) === value,
   });
 
   return (
     <>
       <PageHeader title="Schools" description="Registrations and every school on the platform." />
 
+      <div className="mb-4">
+        <ViewTabs
+          label="Schools by status"
+          tabs={[
+            tab(null, "All schools", counts.total),
+            tab("REVIEW", "Pending approval", counts.awaitingReview),
+            tab("ACTIVE", "Active", counts.active),
+            tab("SUSPENDED", "Suspended", counts.suspended),
+            tab("REJECTED", "Rejected", counts.rejected),
+          ]}
+        />
+      </div>
+
       <FilterBar
         action="/super-admin/schools"
         search={{ defaultValue: q, placeholder: "Search name, city or email" }}
-        selects={[
-          {
-            name: "status",
-            label: "Status",
-            defaultValue: status,
-            allLabel: "All statuses",
-            options: STATUS_FILTERS.map((value) => ({ value, label: STATUS_LABEL[value] })),
-          },
-        ]}
+        hidden={{ status }}
       />
 
       {rows.length ? (

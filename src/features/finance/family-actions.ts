@@ -15,6 +15,8 @@ import { performAction } from "@/server/perform-action";
 type Result = ActionResult<undefined>;
 const PAGES = ["/school-admin", "/staff", "/parent"];
 const admin = () => requireTenantForAction("SCHOOL_ADMIN");
+/** The School Admin, or the accountant whose responsibility it is — the service checks which. */
+const accounts = () => requireTenantForAction("SCHOOL_ADMIN", "NON_TEACHING_STAFF");
 const rupeesText = (minor: number) => `₹${(minor / 100).toLocaleString("en-IN")}`;
 
 const concessionSchema = z.object({
@@ -27,7 +29,7 @@ const concessionSchema = z.object({
 
 export async function grantConcessionAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
-    const { discountMinor, netMinor } = await grantConcession(await admin(), parseFormData(concessionSchema, formData));
+    const { discountMinor, netMinor } = await grantConcession(await accounts(), parseFormData(concessionSchema, formData));
     return successResult(`Concession of ${rupeesText(discountMinor)} given. Net payable ${rupeesText(netMinor)}.`);
   }, { revalidate: PAGES });
 }
@@ -35,7 +37,7 @@ export async function grantConcessionAction(_p: Result, formData: FormData): Pro
 export async function revokeConcessionAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
     const { concessionId } = parseFormData(z.object({ concessionId: id }), formData);
-    await revokeConcession(await admin(), concessionId, "Withdrawn by the office");
+    await revokeConcession(await accounts(), concessionId, "Withdrawn by the office");
     return successResult("Concession withdrawn. The full fee applies again.");
   }, { revalidate: PAGES });
 }
@@ -43,7 +45,7 @@ export async function revokeConcessionAction(_p: Result, formData: FormData): Pr
 export async function carryForwardAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
     const { studentId, fromSessionId } = parseFormData(z.object({ studentId: id, fromSessionId: id }), formData);
-    const { amountMinor } = await carryForward(await admin(), studentId, fromSessionId);
+    const { amountMinor } = await carryForward(await accounts(), studentId, fromSessionId);
     return successResult(`${rupeesText(amountMinor)} carried forward as "Previous outstanding".`);
   }, { revalidate: PAGES });
 }
@@ -51,7 +53,7 @@ export async function carryForwardAction(_p: Result, formData: FormData): Promis
 export async function carryForwardAllAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
     const { sectionId } = parseFormData(z.object({ sectionId: optionalId }), formData);
-    const result = await carryForwardAll(await admin(), { sectionId: sectionId ?? undefined });
+    const result = await carryForwardAll(await accounts(), { sectionId: sectionId ?? undefined });
     return successResult(`${rupeesText(result.amountMinor)} carried forward for ${result.students} student${result.students === 1 ? "" : "s"}.${result.skipped.length ? ` Skipped: ${result.skipped.join(", ")}.` : ""}`);
   }, { revalidate: PAGES });
 }
@@ -90,7 +92,8 @@ export async function recordFamilyPaymentAction(_p: ActionResult<{ id: string; b
         else allocations.push({ studentId: key.slice("amount:".length), amountMinor: Math.round(rupees * 100) });
       }
       if (Object.keys(errors).length) throw new ValidationError("Some amounts need correcting.", errors);
-      const result = await recordFamilyPayment(ctx, { ...input, allocations });
+      const idempotencyKey = String(formData.get("idempotencyKey") ?? "").trim().slice(0, 64) || null;
+      const result = await recordFamilyPayment(ctx, { ...input, allocations, idempotencyKey });
       return successResult(`Family payment ${result.receiptNo} recorded: ${rupeesText(result.totalMinor)}.`, { id: result.id, back: input.back });
     },
     { revalidate: PAGES, redirectTo: (data) => (data ? (`${data.back}/${data.id}` as Route) : null) },
@@ -100,7 +103,7 @@ export async function recordFamilyPaymentAction(_p: ActionResult<{ id: string; b
 export async function voidFamilyPaymentAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
     const { familyPaymentId, reason } = parseFormData(z.object({ familyPaymentId: id, reason: requiredText("the reason", 200) }), formData);
-    await voidFamilyPayment(await admin(), familyPaymentId, reason);
+    await voidFamilyPayment(await accounts(), familyPaymentId, reason);
     return successResult("Family payment voided — every child's share with it.");
   }, { revalidate: PAGES });
 }

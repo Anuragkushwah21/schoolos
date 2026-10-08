@@ -69,9 +69,9 @@ export async function RegisterScreen({
         </h2>
         <p className="text-muted-foreground text-sm">
           {register.phase === "DRAFT"
-            ? "Draft — not submitted yet"
+            ? "Draft — not submitted yet. Parents and reports see nothing until you submit."
             : register.submittedAt
-              ? `Submitted ${formatDateTime(register.submittedAt)}${register.autoSubmitted ? " (automatically)" : register.lastMarked?.by ? ` · last saved by ${register.lastMarked.by}` : ""}`
+              ? `✓ Attendance submitted${register.submittedBy ? ` by ${register.submittedBy}` : register.autoSubmitted ? " automatically (before 6 Oct 2026)" : register.lastMarked?.by ? ` by ${register.lastMarked.by}` : ""} · ${formatDateTime(register.submittedAt)}`
               : "Not taken yet"}
         </p>
       </div>
@@ -95,10 +95,9 @@ export async function RegisterScreen({
           editable={register.editable}
           phase={register.phase}
           deadline={register.deadline?.toISOString() ?? null}
-          finalizeAt={register.finalizeAt?.toISOString() ?? null}
           draftSavedAt={register.draftSavedAt?.toISOString() ?? null}
-          submission={register.submission}
           isAdmin={register.isAdmin}
+          halfDay={register.halfDay}
           rows={register.rows.map((row) => ({
             id: row.studentId,
             name: row.name,

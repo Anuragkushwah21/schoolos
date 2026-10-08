@@ -1,6 +1,7 @@
 import { today } from "@/lib/dates";
 import type { TenantContext } from "@/server/auth/current-user";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /** The signed-in teacher's own staff record, found by session — never by id. */
 export type TeacherSelf = {
@@ -57,7 +58,7 @@ export async function canAccessSection(
   // An admin reaches every section of their own school — and only that: the
   // lookup is through the tenant-scoped client, so another school's section id
   // is "no access" rather than a pass that later queries happen to empty out.
-  if (ctx.user.role === "SCHOOL_ADMIN") {
+  if (isSchoolLeader(ctx.user.role)) {
     return (await ctx.db.section.count({ where: { id: sectionId } })) > 0;
   }
   if (ctx.user.role !== "TEACHER") return false;
@@ -136,7 +137,7 @@ export async function accessibleSectionIds(
   ctx: TenantContext,
   academicSessionId?: string,
 ): Promise<string[] | "ALL"> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return "ALL";
+  if (isSchoolLeader(ctx.user.role)) return "ALL";
   if (ctx.user.role !== "TEACHER") return [];
 
   const teacher = await ctx.db.teacher.findFirst({
@@ -186,7 +187,7 @@ export async function accessibleSectionIds(
  * client; nothing in the request decides it.
  */
 export async function canMarkAttendance(ctx: TenantContext, sectionId: string, date: Date = today()): Promise<boolean> {
-  if (ctx.user.role === "SCHOOL_ADMIN") {
+  if (isSchoolLeader(ctx.user.role)) {
     return (await ctx.db.section.count({ where: { id: sectionId } })) > 0;
   }
   if (ctx.user.role !== "TEACHER") return false;
@@ -218,7 +219,7 @@ export async function requireAttendanceAccess(ctx: TenantContext, sectionId: str
  * for that day.
  */
 export async function attendanceSectionIds(ctx: TenantContext, academicSessionId: string, date: Date = today()): Promise<string[] | "ALL"> {
-  if (ctx.user.role === "SCHOOL_ADMIN") return "ALL";
+  if (isSchoolLeader(ctx.user.role)) return "ALL";
   if (ctx.user.role !== "TEACHER") return [];
   const teacher = await ctx.db.teacher.findFirst({ where: { userId: ctx.user.id }, select: { id: true } });
   if (!teacher) return [];

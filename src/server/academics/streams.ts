@@ -3,9 +3,9 @@ import "server-only";
 import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import { CURRENT_EMPLOYEE } from "@/lib/validation/lifecycle";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import type { TenantDb } from "@/server/tenancy/scope";
+import { assertCan } from "@/server/auth/permissions";
 
 /** The client inside `ctx.db.$transaction(async (tx) => …)`. */
 export type TenantTx = Parameters<Parameters<TenantDb["$transaction"]>[0]>[0];
@@ -144,7 +144,7 @@ export async function saveStreamAllocations(
   sectionId: string,
   rows: Array<{ streamId: string; capacity: number }>,
 ): Promise<{ warnings: string[] }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "academics", "EDIT");
   const section = await ctx.db.section.findFirst({
     where: { id: sectionId },
     select: { id: true, name: true, capacity: true, streamId: true, class: { select: { name: true } }, streamAllocations: { select: { streamId: true } } },

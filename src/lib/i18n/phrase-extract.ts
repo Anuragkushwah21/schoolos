@@ -96,6 +96,9 @@ export function extractPhrases(root: string): { phrases: string[]; templates: st
 
   for (const file of files) {
     const text = fs.readFileSync(path.join(root, file), "utf8");
+    // Files that hold sample data, not interface text (a spreadsheet template's
+    // example row of names), opt out — a person's name is never translated.
+    if (text.includes("i18n-ignore-file")) continue;
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
     const visit = (node: ts.Node): void => {
       if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node) || ts.isTypeNode(node)) return;

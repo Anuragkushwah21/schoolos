@@ -24,7 +24,7 @@ export const metadata: Metadata = { title: "Students needing attention" };
  * class, subject, teacher, priority, status and source.
  */
 export default async function AdminSupportPage(props: PageProps<"/school-admin/support">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const statusParam = param(search.status);
   const filters = {

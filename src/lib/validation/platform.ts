@@ -4,16 +4,20 @@ import { passwordSchema } from "@/lib/validation/auth";
 import {
   checkbox,
   id,
+  optionalId,
   optionalDate,
   optionalEnum,
   optionalInt,
   optionalPhone,
   optionalText,
   requiredDate,
+  requiredInt,
   requiredEmail,
   requiredPhone,
   requiredText,
 } from "@/lib/validation/common";
+import { cleanModules } from "@/lib/school-modules";
+import { cleanRoles } from "@/lib/school-roles";
 
 export const PLAN_TIERS = ["STARTER", "STANDARD", "PRO"] as const;
 
@@ -114,6 +118,12 @@ export const offerSchema = z
     path: ["endsAt"],
   });
 
+/** A list of module keys from checkboxes (one value or many); unknown keys are dropped. */
+const moduleList = z.preprocess(
+  (value) => (value === undefined || value === "" ? [] : Array.isArray(value) ? value : [value]),
+  z.array(z.string().max(40)).max(50),
+).transform((values) => cleanModules(values));
+
 export const planSchema = z.object({
   planId: id,
   name: requiredText("a name", 60),
@@ -128,6 +138,31 @@ export const planSchema = z.object({
   maxAdmins: optionalInt(1, 1_000),
   storageMb: optionalInt(1, 10_000_000),
   isActive: checkbox,
+  /** Ticked optional modules; checked against the catalogue on the server. */
+  optionalModules: moduleList,
+  /** Campuses one organization may run (1 = multi-campus off). */
+  campusLimit: requiredInt(1, 500).default(1),
+  /** Ticked optional roles; checked against the catalogue on the server. */
+  availableRoles: z.preprocess(
+    (value) => (value === undefined || value === "" ? [] : Array.isArray(value) ? value : [value]),
+    z.array(z.string().max(40)).max(50),
+  ).transform((values) => cleanRoles(values)),
+});
+
+/** One school's optional modules: follow the plan, or the ticked set. */
+export const schoolModulesSchema = z.object({
+  schoolId: id,
+  followPlan: checkbox,
+  optionalModules: moduleList,
+});
+
+/** Approving a school: the plan it starts on, and its modules if adjusted. */
+export const approveSchoolSchema = z.object({
+  schoolId: id,
+  planId: optionalId,
+  /** "plan" to use the plan's modules; "custom" to use the ticked ones. */
+  moduleChoice: z.enum(["plan", "custom"]).default("plan"),
+  optionalModules: moduleList,
 });
 
 // -----------------------------------------------------------------------------
@@ -163,3 +198,13 @@ export const inquirySchema = z.object({
 });
 
 export type InquiryFormInput = z.infer<typeof inquirySchema>;
+
+/** One school's roles and limits (Super Admin). */
+export const schoolRolesSchema = z.object({
+  schoolId: id,
+  followPlan: checkbox,
+  roles: z.preprocess(
+    (value) => (value === undefined || value === "" ? [] : Array.isArray(value) ? value : [value]),
+    z.array(z.string().max(40)).max(50),
+  ).transform((values) => cleanRoles(values)),
+});

@@ -25,7 +25,7 @@ export const metadata: Metadata = { title: "Admit from enquiry" };
  * name is offered but never chosen for the office. Fees are not touched.
  */
 export default async function ConvertEnquiryChildPage(props: PageProps<"/school-admin/admissions/enquiries/[enquiryId]/convert/[childId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { enquiryId, childId } = await props.params;
   const plan = await orNotFound(childConversionPlan(ctx, enquiryId, childId));
   const session = await getCurrentSession(ctx);

@@ -6,8 +6,8 @@ import { DAY_LABEL, formatDate, isAllowedScheduleDate, today } from "@/lib/dates
 import { AppError, ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import type { HolidayInput, WeeklyOffsInput } from "@/lib/validation/calendar";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * School holidays and weekly offs.
@@ -173,7 +173,7 @@ export function holidayHasEnded(holiday: { endDate: Date }, now: Date = today())
  * case the marks are removed and the holiday written in one transaction.
  */
 export async function saveHoliday(ctx: TenantContext, input: HolidayInput): Promise<string> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "EDIT");
   return withCalendarWrite(() => writeHoliday(ctx, input));
 }
 
@@ -247,7 +247,7 @@ async function writeHoliday(ctx: TenantContext, input: HolidayInput): Promise<st
 }
 
 export async function deleteHoliday(ctx: TenantContext, holidayId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "DELETE");
   const holiday = await getHoliday(ctx, holidayId);
   if (holidayHasEnded(holiday)) {
     throw new AppError("VALIDATION", `"${holiday.title}" has already ended and can no longer be removed.`);
@@ -265,7 +265,7 @@ export async function deleteHoliday(ctx: TenantContext, holidayId: string): Prom
 }
 
 export async function setWeeklyOffDays(ctx: TenantContext, input: WeeklyOffsInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "EDIT");
   await withCalendarWrite(() =>
     ctx.db.school.updateMany({ where: { id: ctx.schoolId }, data: { weeklyOffDays: input.weeklyOffDays } }),
   );

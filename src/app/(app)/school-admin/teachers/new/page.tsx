@@ -7,7 +7,7 @@ import { requireTenant } from "@/server/auth/current-user";
 export const metadata: Metadata = { title: "Add teacher" };
 
 export default async function NewTeacherPage() {
-  await requireTenant("SCHOOL_ADMIN");
+  await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   return (
     <>
       <PageHeader

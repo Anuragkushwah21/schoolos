@@ -1,9 +1,11 @@
 "use client";
 
+import type { Route } from "next";
 import { useState } from "react";
 
 import { ActionForm } from "@/components/forms/action-form";
 import { FormSteps } from "@/components/forms/form-steps";
+import { DuplicateStudentWarning } from "@/features/school/duplicate-student-warning";
 import { useT } from "@/components/i18n/i18n-provider";
 import { CheckboxField, FieldRow, PhoneField, SelectField, SubmitButton, TextField, type SelectOption } from "@/components/forms/fields";
 import { nativeSelectClass } from "@/components/forms/styles";
@@ -310,6 +312,21 @@ export function CreateStudentForm({
           <input type="hidden" name="childId" value={convert.enquiry.childId} />
         </>
       ) : null}
+      {/* "This child may already be here" — the office decides: add anyway, or don't. */}
+      <DuplicateStudentWarning
+        cancelHref={
+          (convert?.enquiry
+            ? `/school-admin/admissions/enquiries/${convert.enquiry.enquiryId}`
+            : convert?.applicationId
+              ? `/school-admin/admissions/${convert.applicationId}`
+              : "/school-admin/students") as Route
+        }
+      />
+      {convert?.duplicates.length ? (
+        <p className="border-warning/40 bg-warning-soft rounded-xl border px-3 py-2 text-sm">
+          {`Heads up: a student with this name is already at the school — ${convert.duplicates.join(", ")}. You will be asked to confirm before the child is added.`}
+        </p>
+      ) : null}
       <FormSteps
         steps={[
           {
@@ -330,13 +347,6 @@ export function CreateStudentForm({
                       ]}
                       required
                     />
-                    {convert.duplicates.length ? (
-                      <CheckboxField
-                        name="confirmNotDuplicate"
-                        label="This is a different child"
-                        hint={`Already at the school with this name: ${convert.duplicates.join(", ")}. Tick only if this is someone else.`}
-                      />
-                    ) : null}
                   </>
                 ) : null}
               </>

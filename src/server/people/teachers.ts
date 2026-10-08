@@ -9,7 +9,6 @@ import type { TeacherStatus } from "@/generated/prisma/enums";
 import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import type { CreateTeacherInput, UpdateTeacherInput } from "@/lib/validation/school";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { type LoginInvite, provisionAccount, sendActivation, unusablePasswordHash } from "@/server/auth/account-links";
 import { assertLoginEmailFree, type EmailMove, moveLoginEmail } from "@/server/people/accounts";
@@ -17,6 +16,7 @@ import { requireCurrentSession } from "@/server/academics/structure";
 import { isUniqueViolation } from "@/server/db/errors";
 import { changeEmployeeStatus } from "@/server/people/lifecycle";
 import { assertWithinPlanLimit } from "@/server/platform/limits";
+import { assertCan } from "@/server/auth/permissions";
 
 /**
  * Teaching staff. Every teacher has a login — they need one to see their
@@ -31,7 +31,7 @@ export async function listTeachers(
   /** CURRENT = active or on leave — the default list; a single status or none (all) otherwise. */
   filters: { q?: string; status?: TeacherStatus | "CURRENT"; page?: number },
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   const page = Math.max(1, filters.page ?? 1);
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
 
@@ -89,7 +89,7 @@ export async function teacherOptions(ctx: TenantContext) {
 }
 
 export async function getTeacherProfile(ctx: TenantContext, teacherId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "VIEW");
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true, name: true } });
 
   const teacher = await ctx.db.teacher.findFirst({
@@ -137,7 +137,7 @@ export async function createTeacher(
   ctx: TenantContext,
   input: CreateTeacherInput,
 ): Promise<{ teacherId: string; invite: LoginInvite }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   await assertWithinPlanLimit(ctx, "teachers");
 
   const employeeId = input.employeeId ?? (await nextEmployeeId(ctx));
@@ -197,7 +197,7 @@ export async function createTeacher(
 }
 
 export async function updateTeacher(ctx: TenantContext, input: UpdateTeacherInput): Promise<EmailMove> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   const { teacherId, status, ...data } = input;
 
   const existing = await ctx.db.teacher.findFirst({
@@ -293,7 +293,7 @@ async function deletionBlockers(ctx: TenantContext, teacherId: string) {
  * turns that into a sentence an admin can act on.
  */
 export async function deleteTeacher(ctx: TenantContext, teacherId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "DELETE");
 
   const teacher = await ctx.db.teacher.findFirst({
     where: { id: teacherId },
@@ -346,7 +346,7 @@ export async function assignSubject(
   ctx: TenantContext,
   input: { teacherId: string; subjectId: string; sectionId: string; streamId?: string | null },
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   const session = await requireCurrentSession(ctx);
 
   const [teacher, subject, section] = await Promise.all([
@@ -401,7 +401,7 @@ export async function assignSubject(
 }
 
 export async function unassignSubject(ctx: TenantContext, assignmentId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "staff", "EDIT");
   const assignment = await ctx.db.teacherSubjectAssignment.findFirst({
     where: { id: assignmentId },
     select: { id: true, teacherId: true },

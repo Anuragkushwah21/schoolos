@@ -13,7 +13,7 @@ import { TEACHER_IMPORT_COLUMNS } from "@/server/people/teacher-import";
 export const metadata: Metadata = { title: "Import teachers" };
 
 export default async function ImportTeachersPage() {
-  await requireTenant("SCHOOL_ADMIN");
+  await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   return (
     <>
       <PageHeader back={{ href: "/school-admin/teachers", label: "Teachers" }} title="Import teachers" />

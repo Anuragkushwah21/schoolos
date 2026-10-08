@@ -27,12 +27,12 @@ import { photoUrlsFor } from "@/server/people/photos";
 import { leavingDates } from "@/server/people/lifecycle";
 import { getCurrentSession, sectionLabel, sectionOptions } from "@/server/academics/structure";
 import { ParentDetailsDialog } from "@/features/school/parent-dialog";
-import { listStudents } from "@/server/people/students";
+import { admissionYears, listStudents } from "@/server/people/students";
 
 export const metadata: Metadata = { title: "Students" };
 
 export default async function StudentsPage(props: PageProps<"/school-admin/students">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
 
   const q = param(search.q);
@@ -43,12 +43,16 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
   // one filter away, so old records stay findable without cluttering the list.
   const status = enumParam(search.status, STUDENT_STATUSES) ?? (param(search.status) === "ALL" ? undefined : "CURRENT");
   const statusParam = param(search.status);
+  // "Admitted": new this session, or a calendar year.
+  const admittedParam = param(search.admitted);
+  const admitted = admittedParam === "NEW" ? "NEW" : admittedParam && /^\d{4}$/.test(admittedParam) ? Number(admittedParam) : undefined;
 
   const session = await getCurrentSession(ctx);
-  const [{ rows, total, page, pageCount }, sections, classes] = await Promise.all([
-    listStudents(ctx, { q, sectionId, classId, gender, status, page: pageParam(search.page) }),
+  const [{ rows, total, page, pageCount }, sections, classes, years] = await Promise.all([
+    listStudents(ctx, { q, sectionId, classId, gender, status, admitted, page: pageParam(search.page) }),
     session ? sectionOptions(ctx, session.id) : Promise.resolve([]),
     ctx.db.class.findMany({ where: { isActive: true }, orderBy: { level: "asc" }, select: { id: true, name: true } }),
+    admissionYears(ctx),
   ]);
 
   const [leftOn, photos] = await Promise.all([leavingDates(ctx, "STUDENT", rows), photoUrlsFor(ctx, "STUDENT", rows.map((row) => row.id))]);
@@ -64,7 +68,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
               items={[
                 { href: "/school-admin/students/import", label: "Import from a spreadsheet" },
                 { href: "/school-admin/students/bulk", label: "Promote / move / change many" },
-                { href: "/school-admin/reports/export?kind=students", label: "Download list (CSV)", download: true },
+                { href: `/school-admin/reports/export?${new URLSearchParams({ kind: "students", ...(sectionId ? { section: sectionId } : {}), ...(classId ? { class: classId } : {}), ...(statusParam ? { status: statusParam } : {}), ...(q ? { q } : {}) }).toString()}`, label: sectionId || classId || q || statusParam ? "Download this list (CSV)" : "Download list (CSV)", download: true },
               ]}
             />
             <Button asChild>
@@ -100,6 +104,13 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
             ],
           },
           {
+            name: "admitted",
+            label: "Admitted",
+            defaultValue: admittedParam,
+            allLabel: "Old and new",
+            options: [{ value: "NEW", label: "New this session" }, ...years.map((year) => ({ value: String(year), label: `Admitted in ${year}` }))],
+          },
+          {
             name: "gender",
             label: "Gender",
             defaultValue: gender,
@@ -128,6 +139,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-semibold">
                       {student.firstName} {student.lastName}
+                      {student.isNew ? <NewBadge /> : null}
                     </p>
                     <p className="text-muted-foreground text-xs">
                       {student.admissionNumber}
@@ -175,6 +187,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
                         <div className="min-w-0">
                           <Link href={`/school-admin/students/${student.id}`} className="font-medium hover:underline">
                             {student.firstName} {student.lastName}
+                      {student.isNew ? <NewBadge /> : null}
                           </Link>
                           <p className="text-muted-foreground text-xs">
                             {student.admissionNumber}
@@ -264,8 +277,13 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
         pageCount={pageCount}
         total={total}
         basePath="/school-admin/students"
-        params={{ q, section: sectionId, status: statusParam }}
+        params={{ q, section: sectionId, class: classId, status: statusParam, admitted: admittedParam, gender }}
       />
     </>
   );
+}
+
+/** Marks a student admitted since the current session began. */
+function NewBadge() {
+  return <span className="bg-success-soft text-success-strong ml-2 inline-block rounded-full px-2 py-0.5 align-middle text-[11px] font-semibold">New</span>;
 }

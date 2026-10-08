@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: "Add support" };
 
 /** The office adds support and, if it wishes, names the teacher who looks after it. */
 export default async function NewAdminSupportPage(props: PageProps<"/school-admin/support/new">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const search = await props.searchParams;
   const [t, options] = await Promise.all([getT(), supportFormOptions(ctx)]);
   const concernId = param(search.concern);

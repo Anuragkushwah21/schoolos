@@ -127,7 +127,7 @@ describe("accountant", () => {
   });
 
   it("is not pre-ticked for the student directory when added", () => {
-    expect(STAFF_ROLE_DEFAULT_GRANTS.ACCOUNTANT).toEqual(["fees.view", "fees.collect"]);
+    expect(STAFF_ROLE_DEFAULT_GRANTS.ACCOUNTANT).not.toContain("students.directory");
   });
 });
 

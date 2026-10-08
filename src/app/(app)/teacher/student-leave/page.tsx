@@ -21,10 +21,10 @@ export default async function TeacherStudentLeavePage(props: PageProps<"/teacher
   const tab = (value: string, label: string, count?: number) => ({ href: `/teacher/student-leave?status=${value}`, label, count, active: (status ?? "ALL") === value });
   return (
     <>
-      <PageHeader icon={CalendarOffIcon} tone="blue" title="Leave Requests" description="Leave requests for the students of your class — yours to approve. Approved leave shows on your register and as a marker on the calendar. Your own leave is in the next tab." />
+      <PageHeader icon={CalendarOffIcon} tone="blue" title="Leave Requests" description="Leave requests for the students of your class. You review them first; approving sends the request to the School Admin for final approval. Leave shows on your register once the school approves it. Your own leave is in the next tab." />
       <ViewTabs
         label="Leave requests by status"
-        tabs={[tab("PENDING", "Pending", summary.pending), tab("APPROVED", "Approved", summary.approved), tab("REJECTED", "Rejected", summary.rejected), tab("ALL", "All")]}
+        tabs={[tab("PENDING", "To review", summary.pending), tab("TEACHER_APPROVED", "Sent to school"), tab("APPROVED", "Approved", summary.approved), tab("REJECTED", "Rejected", summary.rejected), tab("ALL", "All")]}
       />
       <FilterBar
         action="/teacher/student-leave"

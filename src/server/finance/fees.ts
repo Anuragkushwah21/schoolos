@@ -1,11 +1,11 @@
 import "server-only";
 
 import { today } from "@/lib/dates";
+import { allocate, dueSummary, splitInstallments } from "@/lib/fee-allocation";
 import { AppError, ConflictError, NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { requireCurrentSession, sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
 import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { isUniqueViolation } from "@/server/db/errors";
@@ -22,9 +22,9 @@ import { ACTIVE_CONCESSION, netOf } from "@/server/finance/net";
  *
  * Money is integer paise throughout, the same convention as `Plan.priceMinor`.
  *
- * Everything here is School Admin only. The parent-facing and student-facing
- * reads live in `server/parent/` and `server/student/`, start from the session,
- * and never reach these writers.
+ * Writers need the School Admin or a staff fee permission. Parents read their
+ * own children's accounts through `server/parent/` (the ParentStudent link is
+ * checked first). Students never see fees.
  */
 
 export type FeeSummary = {
@@ -44,11 +44,11 @@ export type FeeSummary = {
 /**
  * Turn a set of charges and payments into the four numbers every screen shows.
  *
- * Shared by the admin, parent and student views so all three cannot drift: a
- * parent reading "₹10,000 pending" is reading the same arithmetic the office is.
+ * Shared by the office and parent views so they cannot drift: a parent
+ * reading "₹10,000 pending" is reading the same arithmetic the office is.
  */
 export function summarise(
-  charges: Array<{ amountMinor: number; dueOn: Date }>,
+  charges: Array<{ amountMinor: number; dueOn: Date; id?: string; installmentNo?: number }>,
   payments: Array<{ amountMinor: number }>,
   asOf: Date = today(),
   carriedForwardMinor = 0,
@@ -66,14 +66,15 @@ export function summarise(
           ? "PARTIAL"
           : "PENDING";
 
-  // The soonest date money is owed by. Once everything is paid there is nothing
-  // to be due, which is why this is null rather than the last charge's date.
-  const dueOn =
-    pendingMinor === 0
-      ? null
-      : charges
-          .map((row) => row.dueOn)
-          .sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
+  // The soonest date still unpaid: payments settle the earliest instalments
+  // first (lib/fee-allocation.ts), so a paid first instalment no longer makes
+  // the account look overdue. Null once everything is paid.
+  const allocated = allocate(
+    charges.map((row, index) => ({ id: row.id ?? String(index).padStart(6, "0"), netMinor: row.amountMinor, dueOn: row.dueOn, installmentNo: row.installmentNo })),
+    paidMinor + carriedForwardMinor,
+    asOf,
+  );
+  const due = dueSummary(allocated);
 
   return {
     chargedMinor,
@@ -81,8 +82,8 @@ export function summarise(
     carriedForwardMinor,
     pendingMinor,
     status,
-    dueOn,
-    overdue: dueOn !== null && dueOn < asOf,
+    dueOn: pendingMinor === 0 ? null : due.nextDueOn,
+    overdue: pendingMinor > 0 && due.overdue,
   };
 }
 
@@ -91,7 +92,7 @@ export function summarise(
 // -----------------------------------------------------------------------------
 
 export async function listFeeHeads(ctx: TenantContext, options: { activeOnly?: boolean } = {}) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect", "fees.manage"]);
   return ctx.db.feeHead.findMany({
     // System heads ("Previous outstanding (2025-26)") are created by carry-forward, never picked by hand.
     where: { isSystem: false, ...(options.activeOnly ? { isActive: true } : {}) },
@@ -104,7 +105,7 @@ export async function createFeeHead(
   ctx: TenantContext,
   input: { name: string; note: string | null },
 ): Promise<{ id: string }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
 
   try {
     const created = await ctx.db.feeHead.create({
@@ -135,7 +136,7 @@ export async function setFeeHeadActive(
   feeHeadId: string,
   isActive: boolean,
 ): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
 
   const head = await ctx.db.feeHead.findFirst({
     where: { id: feeHeadId },
@@ -165,22 +166,71 @@ export async function setFeeHeadActive(
 export type ChargeInput = {
   studentId: string;
   feeHeadId: string;
+  /** The total for this head. Split into instalments when `installments` has more than one due date. */
   amountMinor: number;
   dueOn: Date;
   notes: string | null;
+  /** Due dates of the instalments, earliest first. Omitted or one date: paid in one go (on `dueOn`). */
+  installments?: Date[] | null;
 };
 
-/** Raise — or correct — one charge on one student for the current session. */
+/** The due dates a charge is split over: the instalments asked for, or just `dueOn`. */
+function scheduleOf(input: { dueOn: Date; installments?: Date[] | null }): Date[] {
+  const dates = input.installments?.length ? [...input.installments].sort((a, b) => a.getTime() - b.getTime()) : [input.dueOn];
+  if (dates.length > 12) throw new AppError("VALIDATION", "Choose at most 12 instalments.");
+  if (new Set(dates.map((date) => date.getTime())).size !== dates.length) throw new AppError("VALIDATION", "Each instalment needs its own due date.");
+  return dates;
+}
+
+type Tx = Parameters<Parameters<TenantContext["db"]["$transaction"]>[0]>[0];
+
+/**
+ * Write one head for one student as its instalments (1…n), in whole paise
+ * that add up exactly to the total. Raising the head again corrects it: the
+ * instalments are rewritten, and any beyond the new count go — unless money
+ * has already been applied to them, which is refused.
+ */
+async function writeHeadCharges(
+  tx: Tx,
+  ctx: TenantContext,
+  input: { studentId: string; academicSessionId: string; feeHeadId: string; totalMinor: number; dates: Date[]; notes?: string | null },
+): Promise<string[]> {
+  const amounts = splitInstallments(input.totalMinor, input.dates.length);
+  const ids: string[] = [];
+  for (const [index, dueOn] of input.dates.entries()) {
+    const key = { schoolId: ctx.schoolId, academicSessionId: input.academicSessionId, studentId: input.studentId, feeHeadId: input.feeHeadId, installmentNo: index + 1 };
+    const row = await tx.feeCharge.upsert({
+      where: { schoolId_academicSessionId_studentId_feeHeadId_installmentNo: key },
+      create: { ...key, amountMinor: amounts[index]!, dueOn, ...(input.notes !== undefined ? { notes: input.notes } : {}) },
+      update: { amountMinor: amounts[index]!, dueOn, ...(input.notes !== undefined ? { notes: input.notes } : {}) },
+      select: { id: true },
+    });
+    ids.push(row.id);
+  }
+  const extras = await tx.feeCharge.findMany({
+    where: { studentId: input.studentId, academicSessionId: input.academicSessionId, feeHeadId: input.feeHeadId, installmentNo: { gt: input.dates.length } },
+    select: { id: true },
+  });
+  if (extras.length) {
+    const extraIds = extras.map((row) => row.id);
+    await tx.feeCharge.deleteMany({ where: { lateFeeForId: { in: extraIds } } });
+    await tx.feeCharge.deleteMany({ where: { id: { in: extraIds } } });
+  }
+  return ids;
+}
+
+/** Raise — or correct — one head on one student for the current session, in one go or in instalments. */
 export async function chargeStudent(
   ctx: TenantContext,
   input: ChargeInput,
 ): Promise<{ id: string }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
   const session = await requireCurrentSession(ctx);
 
-  if (input.amountMinor <= 0) {
+  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0) {
     throw new AppError("VALIDATION", "A charge must be more than zero.");
   }
+  const dates = scheduleOf(input);
 
   const [student, head] = await Promise.all([
     ctx.db.student.findFirst({
@@ -193,29 +243,9 @@ export async function chargeStudent(
   // client is already tenant-scoped.
   if (!student || !head) throw new NotFoundError("That student or fee head was not found.");
 
-  const charge = await ctx.db.feeCharge.upsert({
-    where: {
-      schoolId_academicSessionId_studentId_feeHeadId: {
-        schoolId: ctx.schoolId,
-        academicSessionId: session.id,
-        studentId: student.id,
-        feeHeadId: head.id,
-      },
-    },
-    create: {
-      schoolId: ctx.schoolId,
-      academicSessionId: session.id,
-      studentId: student.id,
-      feeHeadId: head.id,
-      amountMinor: input.amountMinor,
-      dueOn: input.dueOn,
-      notes: input.notes,
-    },
-    // Raising the same head twice corrects the first rather than billing the
-    // family for it again.
-    update: { amountMinor: input.amountMinor, dueOn: input.dueOn, notes: input.notes },
-    select: { id: true },
-  });
+  const ids = await ctx.db.$transaction((tx) =>
+    writeHeadCharges(tx, ctx, { studentId: student.id, academicSessionId: session.id, feeHeadId: head.id, totalMinor: input.amountMinor, dates, notes: input.notes }),
+  );
 
   await recordAudit({
     action: "FEE_CHARGED",
@@ -223,29 +253,32 @@ export async function chargeStudent(
     entityId: student.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${head.name} of ${formatMinor(input.amountMinor)} charged to ${fullName(student)}.`,
+    summary: `${head.name} of ${formatMinor(input.amountMinor)} charged to ${fullName(student)}${dates.length > 1 ? ` in ${dates.length} instalments` : ""}.`,
+    metadata: { feeHeadId: head.id, amountMinor: input.amountMinor, installments: dates.length },
   });
 
-  return charge;
+  return { id: ids[0]! };
 }
 
 /**
  * Raise one head against every enrolled student in a section.
  *
- * The way a school actually bills: "Class 10 A owes ₹20,000 tuition this year".
- * One row per child, because that is where a charge lands — and it means a
- * single child's amount can be corrected afterwards without touching the class.
+ * The way a school actually bills: "Class 10 A owes ₹20,000 tuition this year",
+ * in one go or in instalments. One row per child and instalment, because that
+ * is where a charge lands — so a single child's amount can be corrected
+ * afterwards. Written in one transaction: the whole class or nobody.
  */
 export async function chargeSection(
   ctx: TenantContext,
-  input: { sectionId: string; feeHeadId: string; amountMinor: number; dueOn: Date },
+  input: { sectionId: string; feeHeadId: string; amountMinor: number; dueOn: Date; installments?: Date[] | null },
 ): Promise<{ charged: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
   const session = await requireCurrentSession(ctx);
 
-  if (input.amountMinor <= 0) {
+  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0) {
     throw new AppError("VALIDATION", "A charge must be more than zero.");
   }
+  const dates = scheduleOf(input);
 
   const [section, head] = await Promise.all([
     ctx.db.section.findFirst({
@@ -266,27 +299,14 @@ export async function chargeSection(
     select: { studentId: true },
   });
 
-  for (const row of enrolled) {
-    await ctx.db.feeCharge.upsert({
-      where: {
-        schoolId_academicSessionId_studentId_feeHeadId: {
-          schoolId: ctx.schoolId,
-          academicSessionId: session.id,
-          studentId: row.studentId,
-          feeHeadId: head.id,
-        },
-      },
-      create: {
-        schoolId: ctx.schoolId,
-        academicSessionId: session.id,
-        studentId: row.studentId,
-        feeHeadId: head.id,
-        amountMinor: input.amountMinor,
-        dueOn: input.dueOn,
-      },
-      update: { amountMinor: input.amountMinor, dueOn: input.dueOn },
-    });
-  }
+  await ctx.db.$transaction(
+    async (tx) => {
+      for (const row of enrolled) {
+        await writeHeadCharges(tx, ctx, { studentId: row.studentId, academicSessionId: session.id, feeHeadId: head.id, totalMinor: input.amountMinor, dates });
+      }
+    },
+    { timeout: 60_000 },
+  );
 
   await recordAudit({
     action: "FEE_CHARGED",
@@ -294,21 +314,29 @@ export async function chargeSection(
     entityId: section.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${head.name} of ${formatMinor(input.amountMinor)} charged to ${enrolled.length} students in ${sectionLabel(section)}.`,
+    summary: `${head.name} of ${formatMinor(input.amountMinor)} charged to ${enrolled.length} students in ${sectionLabel(section)}${dates.length > 1 ? `, in ${dates.length} instalments` : ""}.`,
+    metadata: { feeHeadId: head.id, amountMinor: input.amountMinor, installments: dates.length, students: enrolled.length },
   });
 
   return { charged: enrolled.length };
 }
 
+/**
+ * Remove a charge raised by mistake. Refused once money has been applied to it
+ * (void the receipt or give a concession instead), and for carried-forward
+ * balances. Its late fee, if any, goes with it.
+ */
 export async function removeCharge(ctx: TenantContext, chargeId: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
 
   const charge = await ctx.db.feeCharge.findFirst({
     where: { id: chargeId },
     select: {
       id: true,
       amountMinor: true,
+      installmentNo: true,
       studentId: true,
+      academicSessionId: true,
       feeHead: { select: { name: true } },
       student: { select: { firstName: true, lastName: true } },
       _count: { select: { carriedForwardBy: true } },
@@ -318,8 +346,13 @@ export async function removeCharge(ctx: TenantContext, chargeId: string): Promis
   if (charge._count.carriedForwardBy) {
     throw new ConflictError("This is a carried-forward balance from an earlier session. It stays on record; collect it, or give a concession on the earlier session's fees.");
   }
+  const account = await readStudentFees(ctx, charge.studentId, charge.academicSessionId);
+  const applied = account.charges.find((row) => row.id === charge.id);
+  if (applied && applied.coveredMinor > 0) {
+    throw new ConflictError("Money has already been applied to this charge. To correct it, void the receipt or give a concession instead of removing it.");
+  }
 
-  await ctx.db.feeCharge.deleteMany({ where: { id: charge.id } });
+  await ctx.db.$transaction([ctx.db.feeCharge.deleteMany({ where: { lateFeeForId: charge.id } }), ctx.db.feeCharge.deleteMany({ where: { id: charge.id } })]);
 
   await recordAudit({
     action: "FEE_UPDATED",
@@ -327,7 +360,8 @@ export async function removeCharge(ctx: TenantContext, chargeId: string): Promis
     entityId: charge.studentId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${charge.feeHead.name} charge of ${formatMinor(charge.amountMinor)} removed from ${fullName(charge.student)}.`,
+    summary: `${charge.feeHead.name}${charge.installmentNo > 1 ? ` (instalment ${charge.installmentNo})` : ""} charge of ${formatMinor(charge.amountMinor)} removed from ${fullName(charge.student)}.`,
+    metadata: { chargeId: charge.id, amountMinor: charge.amountMinor },
   });
 }
 
@@ -344,28 +378,41 @@ export type PaymentInput = {
   /** Cheque number, UPI or bank transaction id. */
   referenceNo?: string | null;
   notes: string | null;
+  /** Sent once per payment form: a double submit returns the first payment instead of a second one. */
+  idempotencyKey?: string | null;
 };
 
 /**
  * Record money received.
  *
  * Against the student's account for the session rather than head by head, which
- * is how a school takes a payment: "₹10,000 towards this year". Splitting every
- * receipt across four heads would invent work for the office and a new way for
- * the books to be wrong.
+ * is how a school takes a payment: "₹10,000 towards this year". The earliest
+ * instalments are settled first (lib/fee-allocation.ts).
+ *
+ * Safe to submit twice: the form's idempotency key finds the first payment.
+ * Never more than is outstanding — checked inside a serializable transaction,
+ * so two desks taking money at once cannot overpay one child.
  */
 export async function recordPayment(
   ctx: TenantContext,
   input: PaymentInput,
-): Promise<{ id: string }> {
+): Promise<{ id: string; duplicate?: boolean }> {
   await assertAdminOrStaffPermission(ctx, "fees.collect");
   const session = await requireCurrentSession(ctx);
 
-  if (input.amountMinor <= 0) {
+  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0) {
     throw new AppError("VALIDATION", "A payment must be more than zero.");
   }
   if (input.paidOn > today()) {
     throw new AppError("VALIDATION", "A payment cannot be dated in the future.");
+  }
+
+  if (input.idempotencyKey) {
+    const earlier = await ctx.db.feePayment.findFirst({ where: { idempotencyKey: input.idempotencyKey }, select: { id: true, studentId: true } });
+    if (earlier) {
+      if (earlier.studentId !== input.studentId) throw new ConflictError("This form was already used for another payment. Reload the page and try again.");
+      return { id: earlier.id, duplicate: true };
+    }
   }
 
   const student = await ctx.db.student.findFirst({
@@ -374,48 +421,90 @@ export async function recordPayment(
   });
   if (!student) throw new NotFoundError("That student was not found.");
 
-  try {
-    const payment = await ctx.db.feePayment.create({
-      data: {
-        schoolId: ctx.schoolId,
-        academicSessionId: session.id,
-        studentId: student.id,
-        amountMinor: input.amountMinor,
-        paidOn: input.paidOn,
-        method: input.method,
-        receiptNo: input.receiptNo,
-        referenceNo: input.referenceNo ?? null,
-        notes: input.notes,
-        recordedById: ctx.user.id,
+  const write = () =>
+    ctx.db.$transaction(
+      async (tx) => {
+        // What is outstanding right now, from the rows themselves.
+        const [charges, paid, carried] = await Promise.all([
+          tx.feeCharge.findMany({ where: { studentId: student.id, academicSessionId: session.id }, select: { amountMinor: true, concessions: ACTIVE_CONCESSION } }),
+          tx.feePayment.aggregate({ where: { studentId: student.id, academicSessionId: session.id, voidedAt: null }, _sum: { amountMinor: true } }),
+          tx.feeCarryForward.aggregate({ where: { studentId: student.id, fromSessionId: session.id }, _sum: { amountMinor: true } }),
+        ]);
+        const owed = charges.reduce((sum, row) => sum + netOf(row).netMinor, 0);
+        const pending = Math.max(owed - (paid._sum.amountMinor ?? 0) - (carried._sum.amountMinor ?? 0), 0);
+        if (input.amountMinor > pending) {
+          throw new AppError("VALIDATION", pending === 0 ? `${fullName(student)} has nothing outstanding this session. Add the fee to their account first, then record the payment.` : `That is more than the ${formatMinor(pending)} outstanding for ${fullName(student)}.`);
+        }
+        return tx.feePayment.create({
+          data: {
+            schoolId: ctx.schoolId,
+            academicSessionId: session.id,
+            studentId: student.id,
+            amountMinor: input.amountMinor,
+            paidOn: input.paidOn,
+            method: input.method,
+            receiptNo: input.receiptNo,
+            referenceNo: input.referenceNo ?? null,
+            notes: input.notes,
+            recordedById: ctx.user.id,
+            idempotencyKey: input.idempotencyKey ?? null,
+          },
+          select: { id: true },
+        });
       },
-      select: { id: true },
-    });
+      { isolationLevel: "Serializable" },
+    );
 
-    await recordAudit({
-      action: "FEE_PAYMENT_RECORDED",
-      entityType: "Student",
-      entityId: student.id,
-      schoolId: ctx.schoolId,
-      actorId: ctx.user.id,
-      summary: `${formatMinor(input.amountMinor)} received from ${fullName(student)}, receipt ${input.receiptNo}.`,
-    });
-
-    return payment;
+  let payment: { id: string };
+  try {
+    try {
+      payment = await write();
+    } catch (error) {
+      // Another desk wrote at the same moment: try once more against fresh numbers.
+      if (isSerializationFailure(error)) payment = await write();
+      else throw error;
+    }
   } catch (error) {
     if (isUniqueViolation(error)) {
+      // The same form submitted twice at once: return the payment that won.
+      if (input.idempotencyKey) {
+        const earlier = await ctx.db.feePayment.findFirst({ where: { idempotencyKey: input.idempotencyKey }, select: { id: true } });
+        if (earlier) return { id: earlier.id, duplicate: true };
+      }
       throw new ConflictError("That receipt number has already been used.");
     }
     throw error;
   }
+
+  await recordAudit({
+    action: "FEE_PAYMENT_RECORDED",
+    entityType: "Student",
+    entityId: student.id,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `${formatMinor(input.amountMinor)} received from ${fullName(student)}, receipt ${input.receiptNo}.`,
+    // The record itself, for "Payment #…" on the audit log.
+    metadata: { paymentId: payment.id, receiptNo: input.receiptNo, amountMinor: input.amountMinor, method: input.method },
+  });
+
+  return payment;
+}
+
+function isSerializationFailure(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  return code === "P2034" || /could not serialize|serialization failure|write conflict/i.test(String((error as Error | null)?.message ?? ""));
 }
 
 /**
  * Void a payment entered by mistake. It is never deleted: the receipt keeps
  * its number, prints as VOID, and stops counting towards what was paid — so
- * the receipt book has no gaps and the correction is on record.
+ * the receipt book has no gaps and the correction is on record, with who,
+ * when and why.
  */
 export async function voidPayment(ctx: TenantContext, paymentId: string, reason: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.manage");
+  const why = reason.trim();
+  if (why.length < 3) throw new AppError("VALIDATION", "Say why this receipt is being voided.");
 
   const payment = await ctx.db.feePayment.findFirst({
     where: { id: paymentId },
@@ -425,16 +514,20 @@ export async function voidPayment(ctx: TenantContext, paymentId: string, reason:
       receiptNo: true,
       studentId: true,
       voidedAt: true,
+      familyPaymentId: true,
       student: { select: { firstName: true, lastName: true } },
     },
   });
   if (!payment) throw new NotFoundError("That payment was not found.");
   if (payment.voidedAt) throw new ConflictError(`Receipt ${payment.receiptNo} is already void.`);
+  if (payment.familyPaymentId) throw new ConflictError("This is one child's share of a family payment. Void the family receipt instead, so every child's share is corrected together.");
 
-  await ctx.db.feePayment.updateMany({
+  const { count } = await ctx.db.feePayment.updateMany({
     where: { id: payment.id, voidedAt: null },
-    data: { voidedAt: new Date(), voidedById: ctx.user.id, voidReason: reason },
+    data: { voidedAt: new Date(), voidedById: ctx.user.id, voidReason: why },
   });
+  // Voided by someone else a moment ago: nothing changed here, nothing to record.
+  if (!count) throw new ConflictError(`Receipt ${payment.receiptNo} is already void.`);
 
   await recordAudit({
     action: "FEE_PAYMENT_REMOVED",
@@ -442,7 +535,8 @@ export async function voidPayment(ctx: TenantContext, paymentId: string, reason:
     entityId: payment.studentId,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `Receipt ${payment.receiptNo} for ${formatMinor(payment.amountMinor)} from ${fullName(payment.student)} voided: ${reason}`,
+    summary: `Receipt ${payment.receiptNo} for ${formatMinor(payment.amountMinor)} from ${fullName(payment.student)} voided: ${why}`,
+    metadata: { paymentId: payment.id, receiptNo: payment.receiptNo, amountMinor: payment.amountMinor, reason: why },
   });
 }
 
@@ -483,7 +577,8 @@ export async function getStudentFees(
 /**
  * The same read without the role assertion, for callers that have already
  * established the reader is entitled to this child — the parent portal through
- * its `ParentStudent` link, and a student reading their own record.
+ * its `ParentStudent` link. Never pass an id that came from a request without
+ * that check first. (Students never see fees.)
  *
  * Not exported from the module's public surface by accident: it is named for
  * what it assumes, and the two callers both resolve the child from the session
@@ -525,6 +620,8 @@ export async function readStudentFees(
         id: true,
         amountMinor: true,
         dueOn: true,
+        installmentNo: true,
+        lateFeeForId: true,
         notes: true,
         feeHead: { select: { id: true, name: true, note: true, isSystem: true } },
         concessions: ACTIVE_CONCESSION,
@@ -545,6 +642,7 @@ export async function readStudentFees(
         voidedAt: true,
         voidReason: true,
         familyPaymentId: true,
+        createdAt: true,
       },
     }),
   ]);
@@ -562,15 +660,22 @@ export async function readStudentFees(
     carriedFrom: carriedForwardBy[0]?.fromSession ?? null,
   }));
   const carriedForwardMinor = carriedOut.reduce((sum, row) => sum + row.amountMinor, 0);
+  const paidMinor = payments.filter((p) => !p.voidedAt).reduce((sum, row) => sum + row.amountMinor, 0);
+  // Which instalments the money covers, earliest first; shown in due order.
+  const allocated = allocate(
+    shaped.map((row) => ({ ...row, netMinor: row.netMinor })),
+    paidMinor + carriedForwardMinor,
+    today(),
+  );
 
   // A void receipt stays on the list, marked, but paid nothing.
   return {
     session,
-    charges: shaped,
+    charges: allocated,
     payments,
     carriedOut: carriedOut.length ? { amountMinor: carriedForwardMinor, toSession: carriedOut.map((row) => row.toSession.name).join(", ") } : null,
     summary: summarise(
-      shaped.map((row) => ({ amountMinor: row.netMinor, dueOn: row.dueOn })),
+      shaped.map((row) => ({ id: row.id, amountMinor: row.netMinor, dueOn: row.dueOn, installmentNo: row.installmentNo })),
       payments.filter((p) => !p.voidedAt),
       today(),
       carriedForwardMinor,
@@ -599,7 +704,7 @@ export async function listFeePositions(
     page?: number;
   } = {},
 ) {
-  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect"]);
+  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect", "fees.manage"]);
   const session = filters.academicSessionId
     ? await ctx.db.academicSession.findFirst({
         where: { id: filters.academicSessionId },
@@ -668,7 +773,7 @@ export async function listFeePositions(
     studentIds.length
       ? ctx.db.feeCharge.findMany({
           where: { academicSessionId: session.id, studentId: { in: studentIds } },
-          select: { studentId: true, amountMinor: true, dueOn: true, concessions: ACTIVE_CONCESSION },
+          select: { id: true, studentId: true, amountMinor: true, dueOn: true, installmentNo: true, concessions: ACTIVE_CONCESSION },
         })
       : Promise.resolve([]),
     studentIds.length
@@ -684,10 +789,10 @@ export async function listFeePositions(
     : [];
   const carriedBy = new Map(carried.map((row) => [row.studentId, row._sum.amountMinor ?? 0]));
   // Net of concessions, the same arithmetic as the student's own page.
-  const chargesBy = new Map<string, Array<{ amountMinor: number; dueOn: Date }>>();
+  const chargesBy = new Map<string, Array<{ id: string; amountMinor: number; dueOn: Date; installmentNo: number }>>();
   for (const row of chargeRows) {
     const list = chargesBy.get(row.studentId) ?? [];
-    list.push({ amountMinor: netOf(row).netMinor, dueOn: row.dueOn });
+    list.push({ id: row.id, amountMinor: netOf(row).netMinor, dueOn: row.dueOn, installmentNo: row.installmentNo });
     chargesBy.set(row.studentId, list);
   }
   const paymentsBy = new Map<string, Array<{ amountMinor: number }>>();
@@ -742,7 +847,7 @@ export async function listPayments(
   ctx: TenantContext,
   filters: { academicSessionId?: string; take?: number } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect", "fees.manage"]);
 
   return ctx.db.feePayment.findMany({
     where: filters.academicSessionId ? { academicSessionId: filters.academicSessionId } : {},

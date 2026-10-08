@@ -1,19 +1,9 @@
 "use client";
 
-import { useState } from "react";
-
 import { ActionForm } from "@/components/forms/action-form";
-import {
-  FieldRow,
-  type SelectOption,
-  SelectField,
-  SubmitButton,
-  TextField,
-  TextareaField,
-} from "@/components/forms/fields";
-import { type SectionSeats, StreamSeatPicker } from "@/features/school/stream-seat-picker";
+import { SelectField, SubmitButton, TextareaField } from "@/components/forms/fields";
 
-import { acceptApplicationAction, setApplicationStatusAction } from "./actions";
+import { setApplicationStatusAction } from "./actions";
 
 const NEXT_STEPS = [
   { value: "UNDER_REVIEW", label: "Under review" },
@@ -34,47 +24,6 @@ export function ApplicationStatusForm({ applicationId, status }: { applicationId
       <TextareaField name="reviewNotes" label="Notes" rows={2} hint="Internal — not shown to the family." />
       <div>
         <SubmitButton variant="outline">Update</SubmitButton>
-      </div>
-    </ActionForm>
-  );
-}
-
-export function AcceptApplicationForm({
-  applicationId,
-  sections,
-  defaultSectionId,
-  seats = {},
-  requestedStreamId,
-}: {
-  applicationId: string;
-  sections: SelectOption[];
-  defaultSectionId?: string;
-  /** Each section's stream shares and free seats. */
-  seats?: Record<string, SectionSeats>;
-  /** The stream the family applied for, preselected where offered. */
-  requestedStreamId?: string | null;
-}) {
-  const [sectionId, setSectionId] = useState(defaultSectionId ?? "");
-  return (
-    <ActionForm action={acceptApplicationAction} className="gap-4">
-      <input type="hidden" name="applicationId" value={applicationId} />
-      <SelectField
-        name="sectionId"
-        label="Place in section"
-        options={sections}
-        value={sectionId}
-        onChange={(event) => setSectionId(event.target.value)}
-        placeholder="Select…"
-        required
-      />
-      <StreamSeatPicker key={sectionId} seats={seats[sectionId]} defaultValue={requestedStreamId} />
-      <FieldRow>
-        <TextField name="rollNumber" label="Roll number" />
-        <TextField name="admissionNumber" label="Admission number" hint="Blank to number automatically." />
-      </FieldRow>
-      <TextareaField name="reviewNotes" label="Notes" rows={2} />
-      <div>
-        <SubmitButton pendingLabel="Admitting…">Accept and admit</SubmitButton>
       </div>
     </ActionForm>
   );

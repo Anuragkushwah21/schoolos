@@ -20,7 +20,7 @@ import { applicantOf, getLeaveRequest } from "@/server/staff/leave";
 export const metadata: Metadata = { title: "Leave request" };
 
 export default async function LeaveDetailPage(props: PageProps<"/school-admin/leave/[leaveId]">) {
-  const ctx = await requireTenant("SCHOOL_ADMIN");
+  const ctx = await requireTenant("SCHOOL_ADMIN", "PRINCIPAL");
   const { leaveId } = await props.params;
   const { leave, periods } = await orNotFound(getLeaveRequest(ctx, leaveId));
   const person = applicantOf(leave);

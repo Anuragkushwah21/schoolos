@@ -9,6 +9,8 @@ import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { findChild } from "@/server/parent/access";
 import { findStudentSelf } from "@/server/student/access";
+import { assertCan } from "@/server/auth/permissions";
+import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Complaints and requests.
@@ -79,6 +81,7 @@ export async function raiseComplaint(ctx: TenantContext, input: RaiseComplaintIn
 function visibleWhere(ctx: TenantContext): Prisma.ComplaintWhereInput {
   switch (ctx.user.role) {
     case "SCHOOL_ADMIN":
+    case "PRINCIPAL":
       return {};
     case "TEACHER":
       return { assignedToId: ctx.user.id };
@@ -94,7 +97,7 @@ export async function listComplaints(
   ctx: TenantContext,
   filters: { status?: ComplaintStatus; category?: ComplaintCategory; priority?: ComplaintPriority; q?: string } = {},
 ) {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "TEACHER", "PARENT", "STUDENT");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PRINCIPAL", "TEACHER", "PARENT", "STUDENT");
   return ctx.db.complaint.findMany({
     where: {
       AND: [
@@ -122,7 +125,7 @@ export async function listComplaints(
 }
 
 export async function getComplaint(ctx: TenantContext, complaintId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "TEACHER", "PARENT", "STUDENT");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PRINCIPAL", "TEACHER", "PARENT", "STUDENT");
   const complaint = await ctx.db.complaint.findFirst({ where: { AND: [{ id: complaintId }, visibleWhere(ctx)] }, select: CARD });
   if (!complaint) throw new NotFoundError("That complaint was not found.");
   return complaint;
@@ -133,14 +136,14 @@ export async function getComplaint(ctx: TenantContext, complaintId: string) {
  * teacher may respond and move status, but not reassign.
  */
 export async function handleComplaint(ctx: TenantContext, input: HandleComplaintInput): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN", "TEACHER");
+  assertRole(ctx.user, "SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
   const complaint = await getComplaint(ctx, input.complaintId);
 
   let assignedToId = complaint.assignedTo?.id ?? null;
-  if (ctx.user.role === "SCHOOL_ADMIN") {
+  if (isSchoolLeader(ctx.user.role)) {
     if (input.assignedToId) {
       const staff = await ctx.db.user.findFirst({
-        where: { id: input.assignedToId, role: { in: ["SCHOOL_ADMIN", "TEACHER"] }, isActive: true },
+        where: { id: input.assignedToId, role: { in: ["SCHOOL_ADMIN", "PRINCIPAL", "TEACHER"] }, isActive: true },
         select: { id: true },
       });
       // A user of another school, a parent or a student cannot be assigned.
@@ -176,7 +179,7 @@ export async function handleComplaint(ctx: TenantContext, input: HandleComplaint
 }
 
 export async function bulkComplaintStatus(ctx: TenantContext, input: { complaintIds: string[]; status: ComplaintStatus }): Promise<{ updated: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "EDIT");
   const ids = [...new Set(input.complaintIds)];
   const found = await ctx.db.complaint.count({ where: { id: { in: ids } } });
   if (found !== ids.length) throw new NotFoundError("A complaint was not found.");
@@ -207,9 +210,9 @@ export async function closeMyComplaint(ctx: TenantContext, complaintId: string):
 
 /** Staff the admin can assign a complaint to. */
 export async function assignableStaff(ctx: TenantContext) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertCan(ctx, "communication", "EDIT");
   const users = await ctx.db.user.findMany({
-    where: { role: { in: ["SCHOOL_ADMIN", "TEACHER"] }, isActive: true },
+    where: { role: { in: ["SCHOOL_ADMIN", "PRINCIPAL", "TEACHER"] }, isActive: true },
     orderBy: [{ firstName: "asc" }, { lastName: "asc" }],
     select: { id: true, firstName: true, lastName: true, role: true },
   });

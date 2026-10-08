@@ -52,7 +52,12 @@ export default async function NewHomeworkPage(props: PageProps<"/teacher/homewor
         sections={teaching.map((option) => ({
           value: option.sectionId,
           label: option.label,
-          subjects: option.subjects.map((subject) => ({ value: subject.id, label: subject.name })),
+          subjects: option.subjects.map((subject) => ({
+            value: subject.id,
+            label: subject.name,
+            whole: subject.whole,
+            streams: subject.streams.map((stream) => ({ value: stream.id, label: stream.name })),
+          })),
         }))}
       />
     </>

@@ -3,7 +3,7 @@ import "server-only";
 import { ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
 import { recordAudit } from "@/server/audit/log";
-import { assertRole } from "@/server/auth/assert";
+import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
 import type { TenantContext } from "@/server/auth/current-user";
 import { discountFor } from "@/server/finance/net";
 
@@ -22,7 +22,7 @@ export async function grantConcession(
   ctx: TenantContext,
   input: { chargeId: string; kind: "FIXED" | "PERCENT"; amountRupees?: number | null; percent?: number | null; reason: string },
 ): Promise<{ discountMinor: number; netMinor: number }> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.concessions");
   const charge = await ctx.db.feeCharge.findFirst({
     where: { id: input.chargeId },
     select: {
@@ -82,7 +82,7 @@ export async function grantConcession(
 }
 
 export async function revokeConcession(ctx: TenantContext, concessionId: string, reason: string): Promise<void> {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, "fees.concessions");
   const concession = await ctx.db.feeConcession.findFirst({
     where: { id: concessionId, revokedAt: null },
     select: { id: true, feeChargeId: true, charge: { select: { feeHead: { select: { name: true } }, student: { select: { firstName: true, lastName: true } } } } },
@@ -101,7 +101,7 @@ export async function revokeConcession(ctx: TenantContext, concessionId: string,
 
 /** Every concession a charge has had, newest first — what was agreed, by whom, and what replaced it. */
 export async function concessionHistory(ctx: TenantContext, chargeId: string) {
-  assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertAdminOrStaffPermission(ctx, ["fees.view", "fees.collect", "fees.concessions"]);
   return ctx.db.feeConcession.findMany({
     where: { feeChargeId: chargeId },
     orderBy: { createdAt: "desc" },

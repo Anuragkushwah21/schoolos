@@ -17,6 +17,7 @@ import { groupLabel } from "@/server/academics/streams";
 import { CURRENT_STUDENT } from "@/lib/validation/lifecycle";
 import { findChild } from "@/server/parent/access";
 import { findStudentSelf } from "@/server/student/access";
+import { assertModuleEnabled } from "@/server/platform/modules";
 
 /**
  * The library: titles, physical copies and loans.
@@ -199,6 +200,7 @@ export async function libraryRules(ctx: TenantContext) {
 /** The School Admin sets the lending rules. */
 export async function saveLibraryRules(ctx: TenantContext, input: { loanDays: number; maxLoans: number; finePerDayRupees: number }): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "LIBRARY");
   await ctx.db.school.update({
     where: { id: ctx.schoolId },
     data: { libraryLoanDays: input.loanDays, libraryMaxLoans: input.maxLoans, libraryFinePerDayMinor: Math.round(input.finePerDayRupees * 100) },
@@ -580,6 +582,7 @@ export async function listLoans(
 /** A parent's view of one linked child's loans — the link is checked first. */
 export async function childLoans(ctx: TenantContext, studentId: string) {
   assertRole(ctx.user, "PARENT");
+  await assertModuleEnabled(ctx, "LIBRARY");
   const child = await findChild(ctx, studentId);
   const now = today();
   const rows = await ctx.db.bookIssue.findMany({ where: { studentId: child.student.id }, orderBy: { issuedOn: "desc" }, take: 50, select: LOAN_SELECT });
@@ -589,6 +592,7 @@ export async function childLoans(ctx: TenantContext, studentId: string) {
 /** A student's own loans. */
 export async function myLoans(ctx: TenantContext) {
   assertRole(ctx.user, "STUDENT");
+  await assertModuleEnabled(ctx, "LIBRARY");
   const self = await findStudentSelf(ctx);
   const now = today();
   const rows = await ctx.db.bookIssue.findMany({ where: { studentId: self.student.id }, orderBy: { issuedOn: "desc" }, take: 50, select: LOAN_SELECT });
@@ -604,6 +608,7 @@ export type ImportError = { line: number; message: string };
  */
 export async function importBooks(ctx: TenantContext, text: string): Promise<{ created: number; updated: number; errors: ImportError[] }> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  await assertModuleEnabled(ctx, "LIBRARY");
   let records;
   try {
     records = readCsvRecords(text, { required: ["Title", "Quantity"], maxRows: 2000 });

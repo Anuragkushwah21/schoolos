@@ -3,6 +3,7 @@ import "server-only";
 import { formatSpan } from "@/lib/calendar";
 import { addDays, formatDate, formatDayShort, formatMinutes, today } from "@/lib/dates";
 import { fullName, humanize } from "@/lib/format";
+import { visibleToStream } from "@/server/academics/stream-scope";
 import { sectionLabel } from "@/server/academics/structure";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -17,6 +18,7 @@ import { listExams, VISIBLE_PAPER } from "@/server/exams/service";
 import { overdueLoanCount, overdueLoansFor } from "@/server/operations/library";
 import { staffHolds } from "@/server/auth/staff-access";
 import { findStudentSelf } from "@/server/student/access";
+import { hasModule } from "@/server/platform/modules";
 
 /**
  * Alert feeds for students and teachers, in the same spirit as the parent
@@ -108,6 +110,7 @@ export async function getStudentAlerts(ctx: TenantContext): Promise<FeedAlert[]>
         sectionId,
         academicSessionId: sessionId,
         status: "PUBLISHED",
+        AND: [visibleToStream(self.placement.streamId)],
         OR: [{ createdAt: { gte: addDays(now, -2) } }, { dueOn: { gte: now, lte: addDays(now, 1) } }],
         dueOn: { gte: now },
       },
@@ -132,7 +135,7 @@ export async function getStudentAlerts(ctx: TenantContext): Promise<FeedAlert[]>
   ]);
 
   const alerts: FeedAlert[] = [...shared, ...(await studentSupportAlerts(ctx, self.student.id)), ...(await familyLeaveAlerts(ctx, [self.student.id], "/student/leave"))];
-  for (const loan of await overdueLoansFor(ctx, [self.student.id])) {
+  for (const loan of (await hasModule(ctx, "LIBRARY")) ? await overdueLoansFor(ctx, [self.student.id]) : []) {
     alerts.push({
       kind: "library-overdue",
       childId: null,
@@ -240,6 +243,38 @@ function leaveDecisionAlert(
 }
 
 /**
+ * The Principal's notifications: what is worth a look today across the
+ * school — absences, missed classes, marks still missing, results ready to
+ * publish — and the school's notices, holidays and meetings. Oversight only:
+ * each links to the Principal's read-only view, never to a form.
+ */
+export async function getPrincipalAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
+  assertRole(ctx.user, "PRINCIPAL");
+  const now = today();
+  const moment = new Date();
+  const day = now.toISOString().slice(0, 10);
+  const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
+  const [shared, absent, missed, exams] = await Promise.all([
+    sharedAlerts(ctx, "/school-admin/notices", "/school-admin/holidays", "/school-admin/meetings"),
+    ctx.db.studentAttendance.count({ where: { date: now, status: "ABSENT" } }),
+    ctx.db.classSession.count({ where: { date: now, status: "MISSED" } }),
+    session ? listExams(ctx, { academicSessionId: session.id }) : Promise.resolve([]),
+  ]);
+  const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length;
+  const pending = exams.filter((exam) => exam.stage === "MARKS_PENDING").length;
+  const counts = [
+    { kind: "absent", count: absent, title: `${absent} student${absent === 1 ? "" : "s"} absent today`, href: "/school-admin/attendance/absent", tone: "warning" as const },
+    { kind: "missed", count: missed, title: `${missed} class${missed === 1 ? "" : "es"} missed today`, href: "/school-admin/substitutes", tone: "warning" as const },
+    { kind: "marks-pending", count: pending, title: `${pending} exam${pending === 1 ? " has" : "s have"} marks still missing`, href: "/school-admin/exams/pending", tone: "info" as const },
+    { kind: "results-ready", count: ready, title: `${ready} exam result${ready === 1 ? " is" : "s are"} ready to publish`, href: "/school-admin/exams/results", tone: "info" as const },
+  ];
+  return sortAlerts([
+    ...counts.filter((row) => row.count > 0).map((row) => ({ kind: row.kind, childId: null, title: row.title, detail: "", at: moment, href: row.href, tone: row.tone, key: `${row.kind}:${row.count}:${day}` })),
+    ...shared,
+  ]);
+}
+
+/**
  * The School Admin's notifications: what is waiting for them to act on. Each
  * is a count with the one page to act on it, like the dashboard's "Needs
  * attention", plus results ready to release and parent concerns.
@@ -259,7 +294,8 @@ export async function getAdminAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
     adminConcernCounts(ctx),
     pendingLeaveCount(ctx),
     session ? listExams(ctx, { academicSessionId: session.id }) : Promise.resolve([]),
-    overdueLoanCount(ctx),
+    // Only for a school whose plan has the library.
+    hasModule(ctx, "LIBRARY").then((on) => (on ? overdueLoanCount(ctx) : 0)),
   ]);
   const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length;
   const pending = exams.filter((exam) => exam.stage === "MARKS_PENDING").length;
@@ -276,9 +312,16 @@ export async function getAdminAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
       href: "/school-admin/concerns?assigned=NONE",
       tone: "warning",
     },
-    { kind: "student-leave", count: studentLeave, title: `${studentLeave} student leave request${studentLeave === 1 ? "" : "s"} pending`, href: "/school-admin/student-leave?status=PENDING", tone: "info" },
+    {
+      kind: "student-leave-final",
+      count: studentLeave.forAdmin,
+      title: `${studentLeave.forAdmin} student leave request${studentLeave.forAdmin === 1 ? "" : "s"} approved by the class teacher, waiting for your final approval`,
+      href: "/school-admin/student-leave?status=TEACHER_APPROVED",
+      tone: "warning",
+    },
+    { kind: "student-leave", count: studentLeave.withTeacher, title: `${studentLeave.withTeacher} student leave request${studentLeave.withTeacher === 1 ? "" : "s"} with class teachers`, href: "/school-admin/student-leave?status=PENDING", tone: "info" },
     { kind: "concerns", count: concerns.open, title: `${concerns.open} new parent–teacher concern${concerns.open === 1 ? "" : "s"}`, href: "/school-admin/concerns", tone: "info" },
-    { kind: "results-ready", count: ready, title: `${ready} exam result${ready === 1 ? " is" : "s are"} ready to publish`, href: "/school-admin/exams/term?status=READY_TO_PUBLISH", tone: "info" },
+    { kind: "results-ready", count: ready, title: `${ready} exam result${ready === 1 ? " is" : "s are"} ready to publish`, href: "/school-admin/exams/results", tone: "info" },
     { kind: "marks-pending", count: pending, title: `${pending} exam${pending === 1 ? " has" : "s have"} marks still missing`, href: "/school-admin/exams/pending", tone: "info" },
     { kind: "admissions", count: admissions, title: `${admissions} admission application${admissions === 1 ? "" : "s"} to review`, href: "/school-admin/admissions", tone: "info" },
     { kind: "enquiries", count: enquiries, title: `${enquiries} enquir${enquiries === 1 ? "y" : "ies"} due for follow-up`, href: "/school-admin/admissions/enquiries?followUp=due", tone: "info" },

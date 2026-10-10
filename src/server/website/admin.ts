@@ -2,6 +2,7 @@ import "server-only";
 
 import { ConflictError, NotFoundError } from "@/lib/errors";
 import type { SchoolPageInput, WebsiteProfileInput } from "@/lib/validation/website";
+import { syncOrganizationName } from "@/server/platform/campuses";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -44,7 +45,10 @@ export async function getWebsiteProfile(ctx: TenantContext) {
 
 export async function updateWebsiteProfile(ctx: TenantContext, input: WebsiteProfileInput): Promise<void> {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  const before = await ctx.db.school.findFirst({ where: { id: ctx.schoolId }, select: { name: true } });
   await ctx.db.school.updateMany({ where: { id: ctx.schoolId }, data: input });
+  // The campus name is the school's name; a single-campus organization follows it.
+  if (before && typeof input.name === "string") await syncOrganizationName(ctx.schoolId, before.name, input.name);
   await recordAudit({
     action: "WEBSITE_UPDATED",
     entityType: "School",

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { type BillingPeriodKey, cleanFeatures } from "@/lib/plan-catalog";
+import { cleanModules } from "@/lib/school-modules";
 import { prisma } from "@/server/db/prisma";
 
 /**
@@ -58,23 +60,71 @@ export async function getUpcomingOffers(now: Date = new Date()) {
   });
 }
 
+/**
+ * The published plans, in display order: the one catalogue the homepage,
+ * registration, the Live Demo and the Upgrade Plan page all read. Drafts,
+ * archived and deactivated plans never appear; a plan's unpublished edits
+ * (its `draft`) are never read here.
+ */
 export async function getPublicPlans() {
-  return prisma.plan.findMany({
-    where: { isActive: true },
-    orderBy: { priceMinor: "asc" },
-    select: {
-      id: true,
-      tier: true,
-      name: true,
-      description: true,
-      priceMinor: true,
-      currency: true,
-      maxStudents: true,
-      maxTeachers: true,
-      maxAdmins: true,
-      storageMb: true,
-    },
+  const rows = await prisma.plan.findMany({
+    where: { isActive: true, status: "PUBLISHED" },
+    orderBy: [{ displayOrder: "asc" }, { priceMinor: "asc" }],
+    select: PUBLIC_PLAN_SELECT,
   });
+  return rows.map(presentPublicPlan);
+}
+
+export const PUBLIC_PLAN_SELECT = {
+  id: true,
+  slug: true,
+  name: true,
+  description: true,
+  highlights: true,
+  displayOrder: true,
+  priceMinor: true,
+  priceOnRequest: true,
+  billingPeriod: true,
+  currency: true,
+  maxStudents: true,
+  maxTeachers: true,
+  maxAdmins: true,
+  storageMb: true,
+  campusLimit: true,
+  extraCampusAllowed: true,
+  extraCampusPriceMinor: true,
+  extraCampusPeriod: true,
+  maxCampuses: true,
+  optionalModules: true,
+  features: true,
+} as const;
+
+type PublicPlanRow = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  highlights: string[];
+  displayOrder: number;
+  priceMinor: number;
+  priceOnRequest: boolean;
+  billingPeriod: BillingPeriodKey;
+  currency: string;
+  maxStudents: number | null;
+  maxTeachers: number | null;
+  maxAdmins: number | null;
+  storageMb: number | null;
+  campusLimit: number;
+  extraCampusAllowed: boolean;
+  extraCampusPriceMinor: number | null;
+  extraCampusPeriod: BillingPeriodKey;
+  maxCampuses: number | null;
+  optionalModules: string[];
+  features: string[];
+};
+
+export function presentPublicPlan(row: PublicPlanRow) {
+  return { ...row, optionalModules: cleanModules(row.optionalModules), features: cleanFeatures(row.features) };
 }
 
 export type PublicPlan = Awaited<ReturnType<typeof getPublicPlans>>[number];

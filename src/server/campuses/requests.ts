@@ -1,5 +1,7 @@
 import "server-only";
 
+import { assertNotDemo } from "@/server/demo/guard";
+
 import type { Prisma } from "@/generated/prisma/client";
 import type { CampusRequestStatus } from "@/generated/prisma/enums";
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from "@/lib/errors";
@@ -15,6 +17,8 @@ import { prisma } from "@/server/db/prisma";
 import { campusCount, campusLimitOf, ensureOrganization } from "@/server/platform/campuses";
 import { currentPlanOf, planLimits } from "@/server/platform/entitlements";
 import { uniqueSlug } from "@/server/platform/registration";
+import { formatMoney } from "@/lib/format";
+import { periodLabel } from "@/lib/plan-catalog";
 
 /**
  * New campus requests: a School Admin (normally the Owner) asks; only the
@@ -42,20 +46,31 @@ async function organizationPlan(organizationId: string) {
   };
 }
 
-/** Whether another campus can be asked for, and why not. */
+/**
+ * Whether another campus can be asked for, what it would cost, and why not.
+ * Past the included campuses an extra campus is quoted at the plan's price
+ * (a quote — SchoolOS bills it manually after approval); past the cap, it
+ * needs an upgrade or the Super Admin's say-so.
+ */
 async function capacity(organizationId: string) {
-  const [{ limit, planName }, count, pending] = await Promise.all([
+  const [policy, count, pending] = await Promise.all([
     campusLimitOf(organizationId),
     campusCount(organizationId),
     prisma.campusRequest.count({ where: { organizationId, status: { in: OPEN } } }),
   ]);
+  const { limit, included, planName } = policy;
   const plan = planName ? `Your current plan (${planName})` : "Your current plan";
+  const next = count + pending + 1;
+  const beyondCap = limit !== null && next > limit;
+  const extra = !beyondCap && next > included && policy.extraAllowed;
+  const extraFee = extra ? { amountMinor: policy.extraPriceMinor ?? 0, period: policy.extraPeriod } : null;
   // Asking is always allowed. This only explains what approval would need.
   let entitlement: string | null = null;
-  if (count + pending >= limit) {
-    entitlement = `${plan} includes ${limit === 1 ? "1 campus" : `up to ${limit} campuses`}, and you have ${count}${pending ? ` plus ${pending} waiting for review` : ""}. You can still send a request — opening another campus needs a plan upgrade or extra campus entitlement, which SchoolOS confirms when reviewing it.`;
+  if (beyondCap || (next > included && !policy.extraAllowed)) {
+    const allowance = policy.overridden && limit !== null ? `${plan}: SchoolOS has set your organization to up to ${limit === 1 ? "1 campus" : `${limit} campuses`}` : `${plan} includes ${included === 1 ? "1 campus" : `${included} campuses`}${limit !== null && limit !== included ? ` (up to ${limit} in all)` : ""}`;
+    entitlement = `${allowance}, and you have ${count}${pending ? ` plus ${pending} waiting for review` : ""}. You can still send a request — opening another campus needs a plan upgrade or extra campus entitlement, which SchoolOS confirms when reviewing it.`;
   }
-  return { limit, count, pending, entitlement, withinEntitlement: entitlement === null };
+  return { limit, included, count, pending, entitlement, extraFee, withinEntitlement: entitlement === null };
 }
 
 /** What the "Request new school/campus" page needs for this School Admin. */
@@ -128,13 +143,15 @@ async function checkedRequest(organizationId: string, input: CampusRequestInput,
 
 export async function submitCampusRequest(ctx: TenantContext, input: CampusRequestInput, limitsAsked: Limits) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertNotDemo(ctx.user, "Campus requests");
   const organizationId = await ensureOrganization(ctx.user.homeSchoolId ?? ctx.schoolId);
   const cap = await capacity(organizationId);
   const { modules, roles, limits, data } = await checkedRequest(organizationId, input, limitsAsked, null);
-  if (cap.entitlement) data.entitlementNotes.unshift(`Campus limit: the plan includes ${cap.limit}; this would be campus ${cap.count + cap.pending + 1}.`);
+  if (cap.entitlement) data.entitlementNotes.unshift(`Campus limit: the plan includes ${cap.included}${cap.limit !== null && cap.limit !== cap.included ? ` (cap ${cap.limit})` : ""}; this would be campus ${cap.count + cap.pending + 1}.`);
+  if (cap.extraFee) data.entitlementNotes.unshift(`Extra campus beyond the ${cap.included} included: quoted ${formatMoney(cap.extraFee.amountMinor)} per ${periodLabel(cap.extraFee.period)}.`);
 
   const row = await prisma.campusRequest.create({
-    data: { ...data, organizationId, fromSchoolId: ctx.user.homeSchoolId ?? ctx.schoolId, requestedById: ctx.user.id },
+    data: { ...data, quotedExtraFeeMinor: cap.extraFee?.amountMinor ?? null, quotedExtraPeriod: cap.extraFee?.period ?? null, organizationId, fromSchoolId: ctx.user.homeSchoolId ?? ctx.schoolId, requestedById: ctx.user.id },
     select: { id: true },
   });
   await recordAudit({
@@ -155,6 +172,7 @@ export async function submitCampusRequest(ctx: TenantContext, input: CampusReque
  */
 export async function updateCampusRequest(ctx: TenantContext, requestId: string, input: CampusRequestInput, limitsAsked: Limits) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertNotDemo(ctx.user, "Campus requests");
   const organizationId = await ensureOrganization(ctx.user.homeSchoolId ?? ctx.schoolId);
   const row = await prisma.campusRequest.findFirst({ where: { id: requestId, organizationId }, select: { id: true, status: true } });
   if (!row) throw new NotFoundError();
@@ -242,7 +260,7 @@ export async function getCampusRequest(actor: SessionUser, requestId: string) {
   });
   if (!row) throw new NotFoundError();
   const [plan, cap, history] = await Promise.all([organizationPlan(row.organizationId), campusLimitOf(row.organizationId), requestHistory(row.id)]);
-  return { ...row, plan, history, campusLimit: cap.limit, campusCount: await campusCount(row.organizationId) };
+  return { ...row, plan, history, campusLimit: cap.limit, campusIncluded: cap.included, campusCount: await campusCount(row.organizationId) };
 }
 
 async function openRequest(requestId: string) {
@@ -277,13 +295,16 @@ export async function rejectCampusRequest(actor: SessionUser, requestId: string,
 export async function approveCampusRequest(
   actor: SessionUser,
   requestId: string,
-  decision: { modules: readonly string[]; roles: readonly string[]; limits: Limits; reviewNote: string | null },
+  decision: { modules: readonly string[]; roles: readonly string[]; limits: Limits; reviewNote: string | null; raiseLimit?: boolean },
 ): Promise<{ schoolId: string; status: CampusRequestStatus }> {
   assertRole(actor, "SUPER_ADMIN");
   const row = await openRequest(requestId);
   const { limit } = await campusLimitOf(row.organizationId);
   const count = await campusCount(row.organizationId);
-  if (count >= limit) throw new AppError("CONFLICT", `This organization is at its campus limit (${limit}). Raise its campus limit first.`);
+  // At the limit, approving needs the Super Admin's explicit say-so to raise
+  // it (to exactly one more campus) — never a silent overrun of the plan.
+  const raiseTo = limit !== null && count >= limit ? count + 1 : null;
+  if (raiseTo !== null && !decision.raiseLimit) throw new AppError("CONFLICT", `This organization is at its campus limit (${limit}). Tick “Raise the campus limit to ${raiseTo}” to approve, or raise the limit first.`);
 
   const plan = await organizationPlan(row.organizationId);
   // The Super Admin may grant anything that exists; unknown keys are dropped.
@@ -324,6 +345,7 @@ export async function approveCampusRequest(
       select: { id: true },
     });
     await provisionSchool(tx, school.id);
+    if (raiseTo !== null) await tx.organization.update({ where: { id: row.organizationId }, data: { campusLimitOverride: raiseTo } });
     // Provisioned once: only a still-open request is closed; a second
     // approval racing this one finds it closed and rolls its school back.
     const { count: closed } = await tx.campusRequest.updateMany({
@@ -345,6 +367,7 @@ export async function approveCampusRequest(
     summary: `Campus request "${row.name}" ${modified ? "approved with changes" : "approved"}. Modules: ${modules.map(moduleLabel).join(", ") || "core only"}. Roles: ${roles.map(roleLabel).join(", ") || "core only"}. Limits: ${describeLimits(limits)}.`,
     metadata: { requested: { modules: row.requestedModules, roles: row.requestedRoles, limits: asked }, approved: { modules, roles, limits }, schoolId },
   });
+  if (raiseTo !== null) await recordAudit({ action: "ORGANIZATION_CAMPUS_LIMIT_CHANGED", entityType: "Organization", entityId: row.organizationId, schoolId: row.fromSchoolId, actorId: actor.id, summary: `Campus limit raised from ${limit} to ${raiseTo} to approve "${row.name}".`, metadata: { previous: limit, next: raiseTo, requestId: row.id } });
   await recordAudit({ action: "CAMPUS_ACTIVATED", entityType: "School", entityId: schoolId, schoolId, actorId: actor.id, summary: `${row.name} is live as a campus of the organization.`, metadata: { organizationId: row.organizationId, requestId: row.id } });
   return { schoolId, status };
 }

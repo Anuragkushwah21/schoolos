@@ -5,8 +5,8 @@
  *     a set adjusted for it (audited with the plan and modules).
  *   * Manage features changes one school only; unknown modules are ignored;
  *     enabled/disabled and previous → new are audited. A School Admin cannot.
- *   * A plan's modules reach the schools following it, not those adjusted by
- *     hand; a plan change moves a following school to the new plan's modules.
+ *   * A plan change grants eligibility; the campus's switched-on modules stay
+ *     as they are (owners switch newly eligible ones on).
  *   * Enforcement: with Fees off, the School Admin's fee services refuse,
  *     staff fee grants open nothing, and dashboards and alerts still load.
  *   * The other school keeps everything.
@@ -25,7 +25,6 @@ import { listFeePositions } from "@/server/finance/fees";
 import { setSalary } from "@/server/finance/salary";
 import { getParentAlerts } from "@/server/parent/alerts";
 import { hasModule, schoolModules } from "@/server/platform/modules";
-import { updatePlan } from "@/server/platform/plans";
 import { setSchoolModules, setSubscription, transitionSchool } from "@/server/platform/schools";
 
 import { adminOf, contextFor } from "../helpers/context";
@@ -51,7 +50,7 @@ beforeAll(async () => {
   superAdmin = { id: user.id, email: user.email, role: "SUPER_ADMIN", firstName: "Platform", lastName: "Owner", schoolId: null, schoolSlug: null, schoolName: null, schoolStatus: null } as SessionUser;
   const base = { description: null, priceMinor: 100, maxStudents: null, maxTeachers: null, maxAdmins: null, storageMb: null, isActive: true };
   for (const [tier, modules] of [["STARTER", ["FINANCE"]], ["STANDARD", ["FINANCE", "EXPENSES", "PAYROLL", "LIBRARY"]], ["PRO", [...OPTIONAL_MODULE_KEYS]]] as const) {
-    const row = await prisma.plan.upsert({ where: { tier }, update: {}, create: { tier, name: tier[0] + tier.slice(1).toLowerCase(), ...base } });
+    const row = await prisma.plan.upsert({ where: { tier }, update: {}, create: { tier, slug: tier.toLowerCase(), name: tier[0] + tier.slice(1).toLowerCase(), ...base } });
     await prisma.plan.update({ where: { id: row.id }, data: { optionalModules: [...modules] } });
     plans[tier] = { id: row.id, name: row.name };
   }
@@ -103,20 +102,15 @@ describe("manage features for one school", () => {
     await expect(setSchoolModules(adminOf(schoolA).user as SessionUser, { schoolId: schoolA.schoolId, followPlan: false, modules: [] })).rejects.toBeInstanceOf(ForbiddenError);
   });
 
-  it("a plan's modules reach schools following it, not those adjusted by hand; a plan change moves a follower", async () => {
-    const follower = await pendingSchool("follower");
-    const adjusted = await pendingSchool("adjusted");
-    await transitionSchool(superAdmin, follower.id, "approve", null, { planId: plans.STARTER.id });
-    await transitionSchool(superAdmin, adjusted.id, "approve", null, { planId: plans.STARTER.id, modules: ["FINANCE", "INVENTORY"] });
-    const { schoolsUpdated } = await updatePlan(superAdmin, plans.STARTER.id, { name: "Starter", description: null, priceMinor: 100, maxStudents: null, maxTeachers: null, maxAdmins: null, storageMb: null, isActive: true, optionalModules: ["FINANCE", "LIBRARY"] });
-    expect(schoolsUpdated).toBeGreaterThanOrEqual(1);
-    expect((await prisma.school.findUniqueOrThrow({ where: { id: follower.id } })).optionalModules).toEqual(["FINANCE", "LIBRARY"]);
-    expect((await prisma.school.findUniqueOrThrow({ where: { id: adjusted.id } })).optionalModules).toEqual(["FINANCE", "INVENTORY"]);
+  it("a plan change grants eligibility only: the campus keeps its modules, and the audit says what is newly eligible", async () => {
+    const school = await pendingSchool("follower");
+    await transitionSchool(superAdmin, school.id, "approve", null, { planId: plans.STARTER.id });
+    expect((await prisma.school.findUniqueOrThrow({ where: { id: school.id } })).optionalModules).toEqual(["FINANCE"]);
 
-    await setSubscription(superAdmin, { schoolId: follower.id, planId: plans.PRO.id, status: "ACTIVE", startsAt: new Date(), endsAt: null, notes: null });
-    expect((await prisma.school.findUniqueOrThrow({ where: { id: follower.id } })).optionalModules).toEqual([...OPTIONAL_MODULE_KEYS]);
-    const audit = await prisma.auditLog.findFirstOrThrow({ where: { entityId: follower.id, action: "SCHOOL_PLAN_CHANGED" } });
-    expect(audit.summary).toMatch(/Starter → Pro/);
+    await setSubscription(superAdmin, { schoolId: school.id, planId: plans.PRO.id, status: "ACTIVE", startsAt: new Date(), endsAt: null, notes: null });
+    expect((await prisma.school.findUniqueOrThrow({ where: { id: school.id } })).optionalModules).toEqual(["FINANCE"]);
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { entityId: school.id, action: "SCHOOL_PLAN_CHANGED" } });
+    expect(audit.summary).toMatch(/Starter → Pro\. Modules unchanged \(Fees & finance\)\. Now eligible to switch on: Expenses, Payroll, Library, Transport, Inventory/);
   });
 });
 

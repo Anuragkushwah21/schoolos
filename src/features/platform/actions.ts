@@ -8,8 +8,12 @@ import { id } from "@/lib/validation/common";
 import {
   createSchoolAdminSchema,
   offerSchema,
+  organizationPlanSchema,
   approveSchoolSchema,
-  planSchema,
+  planActiveSchema,
+  planCreateSchema,
+  planDraftSchema,
+  planIdSchema,
   reviewSchoolSchema,
   schoolModulesSchema,
   schoolRolesSchema,
@@ -19,11 +23,13 @@ import {
 import { requireRoleForAction } from "@/server/auth/current-user";
 import { prisma } from "@/server/db/prisma";
 import { deleteOffer, saveOffer } from "@/server/platform/offers";
-import { updatePlan } from "@/server/platform/plans";
+import { changeOrganizationPlan } from "@/server/platform/organizations";
+import { archivePlan, createPlan, discardPlanDraft, publishPlan, restorePlan, savePlanDraft, setPlanActive } from "@/server/platform/plans";
 import {
   type Credentials,
   createSchoolAdmin,
   markEmailVerified,
+  renameSchool,
   resetSchoolAdminPassword,
   setSchoolAdminActive,
   setSchoolModules,
@@ -215,10 +221,11 @@ export async function setSubscriptionAction(
     async () => {
       const actor = await superAdmin();
       const input = parseFormData(subscriptionSchema, formData);
-      await setSubscription(actor, input);
-      return successResult("Subscription saved.");
+      const { campuses } = await setSubscription(actor, input);
+      return successResult(campuses > 1 ? `Subscription saved for all ${campuses} campuses of the organization. Campus modules are unchanged — newly included ones are shown to the school as available to switch on.` : "Subscription saved. The school's modules are unchanged — newly included ones are shown to the school as available to switch on.");
     },
-    { revalidate: "/super-admin/dashboard" },
+    // Every signed-in area reads the plan (sidebar badge, dashboards, Plan & billing, the Super Admin's own pages).
+    { revalidate: "/" },
   );
 }
 
@@ -254,18 +261,84 @@ export async function deleteOfferAction(
   );
 }
 
-export async function updatePlanAction(
-  _previous: ActionResult<undefined>,
-  formData: FormData,
-): Promise<ActionResult<undefined>> {
+const planPaths = ["/super-admin/plans", "/super-admin/dashboard", "/", "/register", "/demo", "/school-admin/plan"];
+
+/** Plan Builder: save edits as a draft. Nothing public changes. */
+export async function savePlanDraftAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
   return performAction(
     async () => {
       const actor = await superAdmin();
-      const { planId, priceRupees, ...rest } = parseFormData(planSchema, formData);
-      const { schoolsUpdated } = await updatePlan(actor, planId, { ...rest, priceMinor: Math.round(priceRupees * 100), roleLimits: limitsFromForm(formData) });
-      return successResult(schoolsUpdated ? `Plan saved. ${schoolsUpdated} school${schoolsUpdated === 1 ? "" : "s"} on this plan updated.` : "Plan saved.");
+      const { planId, priceRupees, extraCampusRupees, ...rest } = parseFormData(planDraftSchema, formData);
+      const { problems } = await savePlanDraft(actor, planId, {
+        ...rest,
+        priceMinor: Math.round((priceRupees ?? 0) * 100),
+        extraCampusPriceMinor: extraCampusRupees === undefined ? null : Math.round(extraCampusRupees * 100),
+        roleLimits: limitsFromForm(formData),
+      });
+      return successResult(problems.length ? `Draft saved. Before publishing: ${problems.join(" ")}` : "Draft saved. Review the impact, then publish.");
     },
-    { revalidate: ["/super-admin/dashboard", "/"] },
+    { revalidate: ["/super-admin/plans"] },
+  );
+}
+
+export async function publishPlanAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const { impact } = await publishPlan(await superAdmin(), parseFormData(planIdSchema, formData).planId);
+      return successResult(`Published.${impact.organizations ? ` ${impact.organizations} organization${impact.organizations === 1 ? "" : "s"} on this plan; their campuses' modules were not changed.` : ""}`);
+    },
+    { revalidate: planPaths },
+  );
+}
+
+export async function discardPlanDraftAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      await discardPlanDraft(await superAdmin(), parseFormData(planIdSchema, formData).planId);
+      return successResult("Unpublished changes discarded.");
+    },
+    { revalidate: ["/super-admin/plans"] },
+  );
+}
+
+export async function createPlanAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      await createPlan(await superAdmin(), parseFormData(planCreateSchema, formData));
+      return successResult("Plan created as a draft. Configure it, then publish.");
+    },
+    { revalidate: ["/super-admin/plans"] },
+  );
+}
+
+export async function setPlanActiveAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const input = parseFormData(planActiveSchema, formData);
+      await setPlanActive(await superAdmin(), input.planId, input.active);
+      return successResult(input.active ? "Plan open for new registrations." : "Plan closed for new registrations. Existing customers carry on.");
+    },
+    { revalidate: planPaths },
+  );
+}
+
+export async function archivePlanAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      await archivePlan(await superAdmin(), parseFormData(planIdSchema, formData).planId);
+      return successResult("Plan archived. Existing customers stay on it until moved.");
+    },
+    { revalidate: planPaths },
+  );
+}
+
+export async function restorePlanAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      await restorePlan(await superAdmin(), parseFormData(planIdSchema, formData).planId);
+      return successResult("Plan restored, closed to new registrations until you open it.");
+    },
+    { revalidate: planPaths },
   );
 }
 
@@ -310,5 +383,29 @@ export async function setSchoolRolesAction(
       return successResult("Roles and limits saved.");
     },
     { revalidate: "/super-admin" },
+  );
+}
+
+/** Super Admin: correct a school's (campus's) name. */
+export async function renameSchoolAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const actor = await superAdmin();
+      const { schoolId, name } = parseFormData(z.object({ schoolId: id, name: z.string().trim().min(2, "Enter the school name").max(150) }), formData);
+      await renameSchool(actor, schoolId, name);
+      return successResult("School renamed.");
+    },
+    { revalidate: "/super-admin" },
+  );
+}
+
+/** Organization page: move every campus to a plan. Success is reported only after the change is saved. */
+export async function changeOrganizationPlanAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const result = await changeOrganizationPlan(await superAdmin(), parseFormData(organizationPlanSchema, formData));
+      return successResult(result.unchanged ? "Nothing to change: every campus is already on this plan." : `Plan saved for ${result.campuses === 1 ? "the campus" : `all ${result.campuses} campuses`}. Campus modules are unchanged; newly included ones are offered to the school to switch on.`);
+    },
+    { revalidate: "/" },
   );
 }

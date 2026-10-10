@@ -50,6 +50,10 @@ export type SessionUser = {
    * Owner who switched to another of their campuses (server-checked).
    */
   homeSchoolId?: string | null;
+  /** Signed in to a Live Demo sandbox (fictional data). Read from the school row, never from the client. */
+  isDemo?: boolean;
+  /** When the demo sandbox ends (ISO), for the demo banner. */
+  demoExpiresAt?: string | null;
   /** The person's own interface language, if they chose one. */
   preferredLanguage?: string | null;
   /** Signed in with a seeded or issued default password: must choose their own first. */
@@ -59,6 +63,8 @@ export type SessionUser = {
 export type SessionMetadata = {
   ipAddress?: string | null;
   userAgent?: string | null;
+  /** End the session earlier than the usual week (a demo sandbox's expiry). */
+  expiresAt?: Date;
 };
 
 export async function createSession(
@@ -66,7 +72,7 @@ export async function createSession(
   metadata: SessionMetadata = {},
 ): Promise<{ token: string; expiresAt: Date }> {
   const token = generateSessionToken();
-  const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
+  const expiresAt = metadata.expiresAt ?? new Date(Date.now() + SESSION_DURATION_MS);
 
   await prisma.session.create({
     data: {
@@ -117,7 +123,7 @@ export async function validateSessionToken(
           preferredLanguage: true,
           mustChangePassword: true,
           schoolId: true,
-          school: { select: { slug: true, name: true, status: true } },
+          school: { select: { slug: true, name: true, status: true, isDemo: true, demoExpiresAt: true } },
           student: { select: { status: true } },
           teacher: { select: { status: true } },
           staffMember: { select: { status: true } },
@@ -144,6 +150,8 @@ export async function validateSessionToken(
     // Every non-platform role must belong to a school that is currently live.
     if (!user.schoolId || user.school?.status !== "ACTIVE") return null;
   }
+  // A demo sandbox ends at its expiry, whatever the session row says.
+  if (user.school?.isDemo && (!user.school.demoExpiresAt || user.school.demoExpiresAt.getTime() <= Date.now())) return null;
 
   // An Owner working in another of their campuses: honoured only while that
   // campus is live and belongs to the organization this login owns. Anything
@@ -168,6 +176,8 @@ export async function validateSessionToken(
     schoolName: school.name,
     schoolStatus: school.status,
     homeSchoolId: user.schoolId,
+    isDemo: user.school?.isDemo ?? false,
+    demoExpiresAt: user.school?.isDemo ? (user.school.demoExpiresAt?.toISOString() ?? null) : null,
     preferredLanguage: user.preferredLanguage,
     mustChangePassword: user.mustChangePassword,
   };

@@ -34,7 +34,8 @@ import { greetingKey } from "@/lib/greeting";
 import { setupReport } from "@/server/academics/setup";
 import { getCurrentSession } from "@/server/academics/structure";
 import { requireTenant } from "@/server/auth/current-user";
-import { hrefAllowed } from "@/lib/school-modules";
+import { hrefAllowed, moduleLabel } from "@/lib/school-modules";
+import { modulesAvailableToEnable } from "@/server/platform/entitlements";
 import { schoolModules } from "@/server/platform/modules";
 import { getIntlLocale, getT } from "@/server/i18n";
 
@@ -55,7 +56,7 @@ export const metadata: Metadata = { title: "School dashboard" };
  */
 export default async function AdminDashboardPage() {
   const ctx = await requireTenant("SCHOOL_ADMIN");
-  const [t, intl, session, setup, modules] = await Promise.all([getT(), getIntlLocale(), getCurrentSession(ctx), setupReport(ctx), schoolModules(ctx.schoolId)]);
+  const [t, intl, session, setup, modules, available] = await Promise.all([getT(), getIntlLocale(), getCurrentSession(ctx), setupReport(ctx), schoolModules(ctx.schoolId), modulesAvailableToEnable(ctx.schoolId)]);
   const sessionId = session?.id ?? null;
 
   return (
@@ -85,6 +86,15 @@ export default async function AdminDashboardPage() {
       />
 
       <SetupProgressCard report={setup} />
+
+      {available.modules.length ? (
+        <div className="bg-info-soft text-info-strong mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm">
+          <span>{`Your ${available.planName ?? ""} plan includes ${available.modules.map(moduleLabel).join(", ")}, not switched on for this campus yet. Nothing is switched on automatically.`.replace("  ", " ")}</span>
+          <Button asChild size="sm" variant="outline">
+            <Link href="/school-admin/plan">Switch on in Plan &amp; billing</Link>
+          </Button>
+        </div>
+      ) : null}
 
       <Suspense fallback={<SectionSkeleton tiles={5} />}>
         <TodaySection ctx={ctx} sessionId={sessionId} modules={modules} />

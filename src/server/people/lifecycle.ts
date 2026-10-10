@@ -15,6 +15,7 @@ import {
   loginState,
   studentMaySignIn,
 } from "@/lib/validation/lifecycle";
+import { claimSeats } from "@/server/academics/streams";
 import { setClassTeacher } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -135,11 +136,15 @@ export async function changeStudentStatus(
     // years' placements are history and are never touched.
     const current = await tx.studentEnrollment.findFirst({
       where: { studentId: student.id, academicSession: { isCurrent: true } },
-      select: { id: true, status: true },
+      select: { id: true, status: true, sectionId: true, streamId: true },
     });
     if (current && leaving && current.status === "ACTIVE") {
       await tx.studentEnrollment.updateMany({ where: { id: current.id }, data: { status: ENROLLMENT_ON_LEAVING[status] } });
     } else if (current && !leaving && current.status !== "ACTIVE") {
+      // Coming back takes a seat again: the section (and stream) must have
+      // room, checked under the same lock as a new admission. A full section
+      // refuses the return — place the student in another section first.
+      await claimSeats(tx, current.sectionId, current.streamId);
       await tx.studentEnrollment.updateMany({ where: { id: current.id }, data: { status: "ACTIVE" } });
     }
     // A child who left no longer rides the school bus. Resuming it is a

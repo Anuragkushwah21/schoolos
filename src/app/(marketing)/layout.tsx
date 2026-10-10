@@ -28,6 +28,9 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
             <Link href="/#roles" className="hover:text-foreground transition-colors">
               For your staff
             </Link>
+            <Link href="/demo" className="text-primary hover:text-primary-strong font-medium transition-colors">
+              Live Demo
+            </Link>
             <Link href="/#offers" className="hover:text-foreground transition-colors">
               Offers
             </Link>
@@ -53,6 +56,8 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
           <div className="sm:hidden">
             <MobileHeaderMenu>
               <nav aria-label="Primary" className="mb-4 flex flex-col gap-3 text-sm">
+                <Link href="/demo" className="text-primary font-medium">Live Demo</Link>
+                <Link href="/#features">Features</Link>
                 <Link href="/#offers">Offers</Link>
                 <Link href="/#pricing">Pricing</Link>
                 <Link href="/contact">Contact us</Link>
@@ -70,8 +75,8 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
           <div className="flex max-w-sm flex-col gap-3">
             <Logo />
             <p className="text-muted-foreground text-sm">
-              School management for Nursery to Class 12 — admissions, people,
-              timetable, attendance and a public website, on one platform.
+              School management for Nursery to Class 12 — students, attendance,
+              exams, fees, timetable, a parent portal and a public website, on one platform.
             </p>
           </div>
 
@@ -90,6 +95,9 @@ export default function MarketingLayout({ children }: { children: React.ReactNod
 
           <div className="flex flex-col gap-2 text-sm">
             <p className="font-medium">Get started</p>
+            <Link href="/demo" className="text-muted-foreground hover:text-foreground">
+              Live Demo
+            </Link>
             <Link href="/register" className="text-muted-foreground hover:text-foreground">
               Register your school
             </Link>

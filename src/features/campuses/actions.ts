@@ -61,7 +61,7 @@ export async function reviewCampusRequestAction(_p: Result, formData: FormData):
 export async function approveCampusRequestAction(_p: Result, formData: FormData): Promise<Result> {
   return performAction(async () => {
     const input = parseFormData(campusApproveSchema, formData);
-    const { status } = await approveCampusRequest(await superAdmin(), input.requestId, { modules: input.modules, roles: input.roles, limits: limitsFromForm(formData), reviewNote: input.reviewNote });
+    const { status } = await approveCampusRequest(await superAdmin(), input.requestId, { modules: input.modules, roles: input.roles, limits: limitsFromForm(formData), reviewNote: input.reviewNote, raiseLimit: input.raiseLimit });
     return successResult(status === "MODIFIED" ? "Approved with changes. The campus is live." : "Approved. The campus is live.");
   }, { revalidate: platform });
 }

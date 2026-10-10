@@ -298,7 +298,7 @@ describe("administrators and subscriptions", () => {
     const plan = await prisma.plan.upsert({
       where: { tier: "STARTER" },
       update: {},
-      create: { tier: "STARTER", name: "Starter", priceMinor: 1500000 },
+      create: { tier: "STARTER", slug: "starter", name: "Starter", priceMinor: 1500000 },
     });
     const { reference } = await registerSchool(
       registration({ name: `${PREFIX} Subscriber`, plan: "STARTER" }),

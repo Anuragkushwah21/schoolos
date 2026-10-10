@@ -573,7 +573,7 @@ describe("plan limits", () => {
     const plan = await prisma.plan.upsert({
       where: { tier: "STARTER" },
       update: {},
-      create: { tier: "STARTER", name: "Starter", priceMinor: 1500000 },
+      create: { tier: "STARTER", slug: "starter", name: "Starter", priceMinor: 1500000 },
     });
     const original = plan.maxStudents;
     const active = await prisma.student.count({ where: { schoolId: schoolB.schoolId, status: "ACTIVE" } });

@@ -13,36 +13,455 @@ way, and [`API.md`](API.md) the REST endpoints. This file is the history.
 
 ## Current status
 
-_Last updated: 8 Oct 2026 (Results, fees, parent self-service and records — production pass)_
+_Last updated: 10 Oct 2026 (Plan Builder templates: auto-selected modules and features)_
 
 | | |
 | --- | --- |
-| Database migrations | 54 in `prisma/migrations`. Checked on Neon 8 Oct (`prisma migrate status`, read-only): everything through `20261027090000_campuses` is applied; **NOT applied: `20261028090000_plan_requests` and `20261029090000_results_fees`** — run `npx prisma migrate deploy`. Until then the live site errors on fee screens, exams, plan requests and campus pages. |
-| Tests | 103 files, 1024 tests passing; typecheck and lint clean; production build passing |
-| Email | Code sends through Gmail SMTP when configured. **The Gmail App Password in `.env` was rejected by Gmail** — create a new App Password and put it in `SMTP_PASSWORD` |
-| Uncommitted work | Everything in the 2 Oct and 3 Oct entries below (last commit `d611d70`) |
+| Database migrations | 59 in `prisma/migrations`. Neon (read-only check 10 Oct): applied through `20261102090000_ptm_responses`; **NOT applied: `20261103090000_plan_template`** — run `npx prisma migrate deploy` (adds one nullable column + backfill; the Plan Builder needs it). |
+| Tests | 113 files, 1113 tests passing (10 Oct); typecheck clean; lint 0 errors (8 pre-existing warnings); production build passing. |
+| Email | Code sends through Gmail SMTP when configured. **The Gmail App Password in `.env` was rejected by Gmail** — create a new App Password and put it in `SMTP_PASSWORD`. Demo sandboxes never send email. |
+| Uncommitted work | Everything since commit `9cdbfdf` |
 
 **Setup gaps on the live database** (not code bugs — features look broken until these are filled in):
 
 - **Sankeswar** — all 7 sections have **no class teacher**; **0 subjects** assigned to teachers; no students yet. Without these, attendance registers have no owner, leave requests only the admin can approve, and every concern goes to the School Admin.
 - **Green Valley Academy** — 9 of 13 sections have no class teacher.
 
-**Known limits:** no online payment gateway (the parent "pay together" panel is a calculator; payment is recorded at the fee desk); the new admin dashboard and new exams/fees/admissions screens are English only (menus are Hindi/English); leave pages' body text is English only; timetable and homework are not split by stream; events have no audience field, so there is no bulk event visibility.
-
---- | --- |
-| Database migrations | 31 in `prisma/migrations`. 30 applied to Neon (`20261006090000_rooms` confirmed applied 1 Oct 2026); **`20261007090000_notice_reads` is NOT applied yet** — run `npx prisma migrate deploy`. Until then the Notices pages and dashboards error on the live database |
-| Tests | 62 files, 718 tests passing; lint clean; production build passing |
-| Email | Code sends through Gmail SMTP when configured. **The Gmail App Password in `.env` was rejected by Gmail** — create a new App Password and put it in `SMTP_PASSWORD` |
-| Uncommitted work | Everything since commit `d1118c8` (29 Sep) is not committed yet |
-
-**Setup gaps on the live database** (not code bugs — features look broken until these are filled in):
-
-- **Sankeswar** — all 7 sections have **no class teacher**; **0 subjects** assigned to teachers; no students yet. Without these, attendance registers have no owner, leave requests only the admin can approve, and every concern goes to the School Admin.
-- **Green Valley Academy** — 9 of 13 sections have no class teacher.
-
-**Known limits:** leave pages' body text is English only (menus are Hindi/English); timetable and homework are not split by stream (only concerns and support are); Class 6–8 leave uses the same rules as other classes but has no separate test.
+**Known limits:** no online payment gateway (payments are recorded at the fee desk); no SMS/WhatsApp; the Live Demo rate limit is in memory per server instance (6 starts per IP per hour), so several instances each allow 6; expired demo sandboxes are deleted when the next demo starts, not on a schedule.
 
 ---
+
+## 10 Oct 2026 — Plan Builder templates: auto-selected modules and features
+
+**Asked:** when a Super Admin creates or edits a plan, pre-select modules and features from Starter / Growth / Pro templates or from the saved configuration; Included / Not included, counts, a Customized indicator, Load template, Restore defaults, Select all, Clear optional, module details, dependency checks, a diff against the published plan and an impact preview. A saved plan is never reset when it is opened, and entitlement stays separate from campus activation.
+
+**What already existed (reused, not rebuilt):** Plan Builder with draft → publish, ladder rules, essential modules (Fees & finance, Expenses), impact preview with grandfathered campuses, organization-wide plan changes, campus modules that never switch on with a plan, Super Admin–only server checks, audit on every plan change.
+
+**Changed**
+- `Plan.templateKey` (starter / growth / pro / null): which template a plan is compared against. It is a label for the editor, not an entitlement.
+- `src/lib/plan-catalog.ts`: `PLAN_TEMPLATES` (Starter: 1 campus, essentials, no org features, basic office roles; Growth: 2 campuses, + Payroll and Library, Organization dashboard, + Librarian; Pro: 3 campuses, all six modules, both features, all roles). Also `templateSelection`, `templateDiff`, `planWarnings` (a role whose module is missing, e.g. Librarian without Library — this is advice and does not block publishing) and `MODULE_CAPABILITIES` (read-only "What's inside"). `DEFAULT_PLANS` is now derived from the templates.
+- `createPlan`: "Start from" a template (default Growth) or a copy of the highest plan. The audit says which template.
+- `savePlanDraft`: stores the template label, audits "customized from X" or "matches the X template", and returns warnings.
+- `listPlans`: per plan, the template diff, warnings, and "changes from the published plan".
+- Plan Builder form (`src/features/platform/plan-builder.tsx`):
+  - opens on the saved draft or live configuration;
+  - Load template and Restore defaults change the form only after a confirmation, and nothing is saved until "Save draft";
+  - Select all modules / Clear optional modules (essentials stay);
+  - Included / Not included on each module and feature, live counts, the Customized / Matches template badge with what differs;
+  - expandable module details, live role warnings, and roles that are now controlled.
+- Plans page: template badge, "Changes from the published plan" and "Check before publishing". The existing impact preview is unchanged.
+- Hindi for every new string.
+
+**Migration:** `20261103090000_plan_template` (one nullable column, backfilled from tier: STARTER→starter, STANDARD→growth, PRO→pro). Applied to the local test DB only. **NOT applied to Neon.** Neon was checked read-only first: all 58 earlier migrations are on it.
+
+**Tested**
+- Unit (`tests/unit/plan-catalog.test.ts`): templates climb the ladder and pass `planProblems`; selections are copies; default plans equal the templates; `templateDiff`; warnings that do not block.
+- Integration (`tests/integration/plan-builder.test.ts`):
+  - create from a template, or without one;
+  - an invalid template and a non–Super Admin are refused;
+  - reopening keeps the saved selections and shows Customized;
+  - restore happens only by saving;
+  - a draft of a plan in use changes no entitlements and no campus modules, and lists its changes;
+  - `listPlans` is Super Admin only.
+- Full suite: 113 files, 1113 tests pass. Typecheck clean, lint 0 errors, `next build` passes.
+- Browser check (production build on the test DB): Load template → confirmation → counts and hidden template updated → Select all → What's inside; no page errors.
+
+**Open / decisions**
+- Admissions, PTM, attendance and the other core modules are always on, so templates vary only the six optional modules, the two organization features, roles and campuses. Gating core modules by plan would take access away from existing Starter schools — that needs your decision.
+- Parts inside a module (e.g. late fees within Fees & finance) have no separate entitlement; "What's inside" is read-only.
+- Saving a draft updates the template label at once (it is not an entitlement). The selections themselves reach schools only when the plan is published.
+
+---
+
+## 10 Oct 2026 — Unified, audience-aware calendar and weekly reminder
+
+**Asked:** whenever a dated school activity is created for an audience, it should appear on those people's calendars automatically (no second entry), with a month view, upcoming list, details, dashboard reminders, correct handling of edits/cancellations/drafts, and strict server-side visibility.
+
+**Existing architecture (kept):**
+- A read layer (`server/calendar/entries.ts`) already combined events, exams, meetings and approved leave per role, with holidays drawn on the month grid.
+- Meetings already carried audience targeting: role groups × whole school / sections / chosen students and staff (`visibleMeetingWhere`).
+- Each role has a Calendar page (`/…/holidays`).
+
+**Gaps found:**
+- Items were titles only: no time, venue, link, instructions or details view.
+- Cancelled meetings simply vanished.
+- Class tests were missing.
+- No upcoming list or dashboard reminder.
+- Leaders' links and the holiday editor shared one click.
+
+**Changed:**
+- **One read layer, no copies.** Calendar items are read from their own records:
+  - holidays, events, meetings/PTMs, exams, class tests, approved leave;
+  - editing, rescheduling or cancelling the record is what changes every calendar;
+  - each item carries time, venue, optional online link, instructions, a detail line (e.g. "Parent-teacher meeting · Parents + Teachers · Class 8 – A") and a link to open it for that role;
+  - one entry per source record (keyed), so nothing appears twice; exams created per section show once.
+  - No new table, so no migration.
+- **Visibility, all on the server from the session:**
+  - meetings only for the groups and classes/students chosen;
+  - events published only (drafts marked for the office);
+  - exams by section;
+  - class tests by section and stream (a test for one stream reaches only that stream's students and parents);
+  - parents through their linked children's current placements;
+  - other schools never.
+  - Notices stay in Notices — they have no meaningful activity date.
+- **Calendar page (every role):**
+  - month grid with Previous / Next / Today;
+  - tap a day to see its items in full — category, time, venue, "Join online", instructions, "Open";
+  - "Coming up — next 30 days";
+  - holidays below.
+  - Cancelled meetings stay on their day, struck through and marked "Cancelled", with no join link.
+  - The School Admin adds or edits a holiday from the selected day.
+- **Reminder:** every dashboard's "School updates" card starts with "Coming up this week" (next 7 days, "Today" / "Tomorrow" with time, link to the calendar). It leaves out cancelled items, drafts, and meetings that already ended earlier today, using the school's time zone.
+- No push, email, SMS or WhatsApp is claimed or added; reminders are in-app on the dashboard. Scheduled reminder timing is not part of this (no scheduler exists).
+
+**Tested:**
+- New `tests/integration/calendar.test.ts` (8):
+  - a class meeting reaches its teachers, students and parents and not a parent of another section, a teacher without the class, staff, or another school;
+  - parents-only meetings;
+  - chosen-student meetings;
+  - class tests by section and stream;
+  - draft events office-only until published; holidays for all;
+  - cancelled shown as cancelled and out of "upcoming"; rescheduling shows only the new date;
+  - no duplicates and full details;
+  - school-date boundary (a meeting that ended earlier today leaves "upcoming", a later one stays).
+- Full suite 1105/1105 (existing notices, PTM, exams and holiday tests included), typecheck, lint (0 errors), `next build`.
+- Browser (production build, test database, demo school): parent calendar with the day's PTM details and the 30-day list; parent mobile dashboard showing "Coming up this week".
+
+**Limitations:**
+- Events have no audience of their own (whole school, as before).
+- Reminders have no configurable timing and no read/unread state of their own (meetings and notices keep theirs in the alert feed).
+- The calendar URL stays `/…/holidays`, titled Calendar.
+
+## 10 Oct 2026 — Meeting link clearly optional
+
+**Asked:** when creating a PTM or any meeting, make the link field optional.
+
+**Found:** the link was already optional on the server (`optionalUrl`) and not required in the form. It still felt mandatory because:
+- the label did not say "optional";
+- the field was `type="url"`, so the browser refused a link typed without `https://` (e.g. `meet.google.com/abc`);
+- the server then asked for "an https:// link".
+
+**Changed:**
+- **Label:** "Online meeting link (optional)", with the hint "Leave empty for a meeting at school". Location is labelled optional too.
+- **Browser check removed:** the field is plain text with `inputMode="url"`, so the browser never blocks the form.
+- **`https://` added automatically:** a link typed without it gets it (`meet.google.com/abc` → `https://meet.google.com/abc`).
+- **Still refused:** an empty link is saved as no link; `http://` and broken addresses are still refused with a clear message.
+
+**Migration:** none.
+
+**Tested:**
+- New `tests/unit/meeting-link.test.ts` (3): empty or left out, `https://` added, http/broken refused.
+- Unit tests plus the meetings, PTM and principal integration tests: 17 files, 130 tests passing.
+- Typecheck, lint, `next build`.
+
+## 10 Oct 2026 — Simple PTM: parent answers, class lists, attendance and remarks
+
+**Asked:** finish a simple PTM workflow:
+- announce;
+- optional parent answer (Will attend / Unable to attend / Not responded, no slots);
+- the teacher's class-wise list;
+- recording what actually happened (Attended / Did not attend / Rescheduled) with private remarks and follow-up;
+- reliability, privacy and tests.
+
+**Already existed (reused):**
+- PTMs as Meetings of type PTM: title, date, start/end time, location, instructions, audiences, and targeting by whole school, sections or chosen students.
+- Create, edit, cancel, reschedule and delete by the School Admin / Principal / staff with "schedule meetings".
+- Server-side visibility per role (`visibleMeetingWhere`).
+- Meetings pages for parents, students and teachers, and dashboard alerts.
+
+**Added:**
+- **`PtmFamily`** — one row per PTM and child (unique): the parent's answer (with who and when), and separately the recorded attendance, remarks, follow-up, and who recorded it.
+- **Parents** see "Will you come? (optional)" on each PTM, one line per child it is for, with "Will attend" / "Unable to attend" and "Not responded" until they answer. They can change it until the PTM ends. Only a linked parent, only for a child the PTM targets; another family's or school's child, a PTM for another class, an ended or cancelled PTM are refused.
+- **Teachers** get "Class list and attendance" on each PTM (`/teacher/meetings/[id]`):
+  - summary (will attend, unable, not responded, attended);
+  - class-wise families with parent names and answers, limited to the classes they teach or are class teacher of.
+- **Recording what happened:**
+  - only the class teacher of the child's section, or the School Admin / Principal (who also see the Families panel on the meeting page);
+  - only once the PTM has started, never for a cancelled one;
+  - recording again corrects it.
+- **Answer and attendance are separate:** a "Will attend" can be recorded as "Did not attend".
+- **Remarks and follow-up are staff-only.** They are never returned to parents or students, and the audit says "notes recorded" without the text.
+- **Moving a PTM to another date or time** clears earlier answers, so families answer for the new time. Other edits keep them.
+- Audit: `PTM_RESPONSE_SAVED`, `PTM_ATTENDANCE_RECORDED` (with the change, e.g. "Did not attend → Rescheduled").
+- Mobile-friendly: large buttons, cards instead of wide tables.
+- Hindi for every new string.
+- No SMS, WhatsApp, slots or payments.
+
+**Migration:** `20261102090000_ptm_responses` — enums `PtmResponse`, `PtmAttendance` and table `PtmFamily` (additive; tenant-scoped through `TENANT_MODELS`). Applied to the local test database only — **NOT on Neon**.
+
+**Tested:**
+- New `tests/integration/ptm.test.ts` (7):
+  - answers saved and changed with exactly one row;
+  - only linked parents, for targeted children, before the end; teachers cannot answer;
+  - the class teacher's list with counts;
+  - no recording before the start;
+  - after the PTM, attendance separate from the answer; private notes never reach the family or the audit text;
+  - parents and students refused the staff list;
+  - a teacher without the class and another school's admin get "not found";
+  - cancelled PTMs refuse both;
+  - rescheduling clears answers, other edits keep them.
+- Full suite 1094/1094, typecheck, lint (0 errors), `next build`.
+- Browser on a production build (demo school): parent "Will attend" → saved message → stays after reload; teacher's class list shows the answer.
+
+**Note:** during the browser check the server was first started without the test environment and briefly pointed at the live Neon database. It read nothing but a session lookup (the test session did not exist, so it showed the login page) and wrote nothing. It was stopped at once and restarted on the test database.
+
+**Open:**
+- a family's own view of whether they were marked as attended is not shown (not asked for);
+- teachers still cannot create PTMs themselves (unchanged permission).
+
+## 10 Oct 2026 — Super Admin control center: organizations and plan changes
+
+**Asked:** audit how the Super Admin manages organizations, campuses, plans, subscriptions and features; give one clear management model; make the plan change from an organization page clear, safe and auditable; keep it simple for non-technical users.
+
+**Audit:**
+- **Screens before:**
+  - Dashboard, Schools (list + a long school page), Approvals, Campus requests, Plan requests, Feature requests, Plans (builder), Reports, Audit, Settings, Website enquiries, Offers.
+  - There was **no organization page**: a customer's plan, campuses and limits were spread over cards on each school's page.
+- **Where a plan can change:**
+  - school approval (choose plan);
+  - the school page's Subscription form (organization-wide since the previous fix);
+  - plan request approval;
+  - the Live Demo switcher (demo only).
+  - Plans are defined only in the Plan Builder.
+- **Where modules change:**
+  - the School Admin's Plan & billing (eligible modules only);
+  - the Super Admin's per-campus module card (any module — an exception tool);
+  - the Plan Builder (eligibility only);
+  - the demo (sandbox only).
+- **Conflicting control:** the Super Admin card's "Follow the plan" switched on *every* plan module, which read like an automatic rule.
+- **Source of truth:**
+
+| What | Where |
+|---|---|
+| Plan definition | `Plan` (published columns) |
+| Active plan | `Subscription` on each campus, kept in step by `setSubscription` |
+| Switched-on modules | `School.optionalModules` |
+| Campus cap | `Organization.campusLimitOverride` over the plan |
+| Permissions | `lib/permissions` + staff grants |
+
+- **Plan-change inconsistency:** the single-campus subscription change (fixed in the previous entry) plus **legacy data**: organizations whose campuses were already on different plans were not visible anywhere. Downgrading below the number of campuses gave no warning.
+
+**Changed:**
+- **Sidebar in five groups:**
+  - Overview: Dashboard, Platform reports
+  - Schools & Organizations: Organizations (new), Schools, Approvals, Campus requests
+  - Plans & Features: Plans & Features, Feature requests
+  - Subscriptions & Requests: Plan requests, Offers, Website enquiries
+  - Platform Settings: Platform settings, Audit logs
+  - Nothing was removed.
+- **Organizations list** (`/super-admin/organizations`): search, campuses, plan, and a "Campuses on different plans" flag.
+- **Organization page** (`/super-admin/organizations/[id]`):
+  - current plan, status, dates and price;
+  - campus allowance with the campus limit;
+  - what the plan includes;
+  - every campus with its plan ("Different plan" flagged), modules on, in plan but off, kept;
+  - history (plan, subscription and module audit entries).
+- **Change plan on that page:**
+  - pick a plan and see a side-by-side comparison (price, campuses, student/teacher limits, newly included modules, no longer included and where kept on, features gained/lost);
+  - a required "I have checked the comparison" tick, and a second tick when the organization runs more campuses than the new plan allows (existing campuses stay, no more can be added);
+  - saving goes through `setSubscription` (every campus, one transaction), which also fixes legacy mixed plans;
+  - re-sending the same plan changes nothing and writes no history (double submit safe);
+  - drafts are never offered.
+- **School page:**
+  - links to the organization page from "Owner & campuses" and from the subscription card;
+  - the module card is now "Campus modules (Super Admin)", explaining that the owner normally switches modules on, and the checkbox reads "Switch on everything in the X plan".
+- New server module `src/server/platform/organizations.ts` (reads and changes through existing services — no second source of truth).
+- Hindi for every new string (70) and the nav groups.
+
+**Migration:** none.
+
+**Tested:**
+- New `tests/integration/organization-plan.test.ts` (6 tests):
+  - listing and the mixed-plan flag;
+  - comparison (new, removed, kept-on, features, over-cap, drafts excluded);
+  - over-cap refusal without confirmation;
+  - saving moves all campuses and fixes mixed plans, keeps modules;
+  - double submit changes nothing and adds no history;
+  - the School Admin's Plan & billing and "available to switch on" follow;
+  - non-Super Admin, draft plan and unknown organization refused; another school untouched;
+  - sidebar groups.
+- Full suite 1087/1087, typecheck, lint (0 errors), `next build`.
+- Browser on a production build:
+  - organizations list with the mixed flag;
+  - organization page;
+  - choose Pro → comparison shown;
+  - without the over-cap tick the browser refuses to submit;
+  - with both ticks → "Plan saved for all 2 campuses", mixed warning gone, history shows the change.
+
+**Open:** a School Admin's already-open tab shows the change on their next click.
+
+## 10 Oct 2026 — Fix: Super Admin plan change not reaching the School Admin
+
+**Asked:** after the Super Admin changed a school's plan, the School Admin's dashboard did not show it.
+
+**Root cause (reproduced with a failing test first):**
+1. **Only one campus changed.** The Super Admin's subscription form changed only the school whose page was open. The organization's plan — which the owner's dashboard, My Schools, Plan & billing and module eligibility read — is the plan of its first campus. Changing any other campus showed nothing to the owner, and left the campuses on different plans.
+2. **Stale pages.** The save revalidated only `/super-admin/dashboard`, so even the Super Admin's own school page kept showing the old plan until reloaded.
+3. **Nothing visible changed.** By design a new plan only makes modules *eligible* and switches none on, but no screen said so: the sidebar and dashboard looked exactly the same.
+4. **Inconsistent approval on failure.** An approved plan request was marked approved before the plan change ran; if the change failed, the request stayed "approved" with the old plan in place.
+
+**Changed:**
+- `setSubscription` applies the plan, status and dates to every campus of the school's organization (pending, under review, active or suspended) in one transaction — all campuses or none. A school without an organization changes alone. Campus modules are never switched on; roles the plan adds are offered additively, as before. Plan requests use the same path.
+- If the change fails, the plan request goes back to waiting.
+- Saving a subscription or deciding a plan request revalidates every signed-in area. The message says how many campuses were changed and that modules are unchanged.
+- The Super Admin's subscription card says when the change will apply to several campuses.
+- School Admin:
+  - **dashboard notice**: "Your Pro plan includes Payroll, Library… not switched on for this campus yet", with a link;
+  - **badge on My Schools** with the count;
+  - **Plan & billing** shows each module as on, "Included in your plan — off for this campus", kept (grandfathered), or "Not in your plan — comes with …".
+- Module pages already explain "not switched on here" versus "not in your plan" (`ModuleGate`). Server checks are unchanged: an eligible-but-off module stays closed.
+
+**Migration:** none.
+
+**Tested:**
+- New `tests/integration/plan-change-sync.test.ts` (6): a change from any campus's page moves the whole organization and the owner's views read it; new modules eligible but none switched on, selections kept; downgrade keeps a grandfathered module; non-Super Admin refused, invalid plan or dates leave every campus unchanged, another school untouched; nav badge and dashboard count, with eligible-but-off modules still refused on the server; plan request approval moves every campus, and a failed approval leaves the request pending and the plan unchanged.
+- Full suite 1081/1081 (one unrelated intermittent failure on an earlier run, see Current status). Typecheck, lint (0 errors), `next build`.
+- Browser check (production build, demo sandbox on Pro with two modules on): dashboard notice and Plan & billing states.
+
+**Open:** a School Admin who already has a page open sees the change on their next navigation (pages are rendered per request; there is no push to an open tab).
+
+## 9 Oct 2026 — Core workflow audit: integrity, permission and student-support fixes
+
+**Asked:** audit the core school workflows end to end (students and admissions, attendance, fees, exams, timetable and homework, dashboards, student support, communication, staff roles, setup) and implement the most important verified gaps.
+
+**Audit (read-only, three passes with file-level evidence):** most workflows were already complete and correct, among them:
+- transaction-safe admission numbers, duplicate-student warnings, cross-school parent links blocked by the database;
+- section capacity under lock, attendance unique per student per day with consistent corrections;
+- receipt numbers unique, double-submit protection, submit → verify → publish with guarded steps;
+- report cards to the student or a linked parent only;
+- no student path to fee data (checked every page, API route, alert feed, search and receipt);
+- notice targeting by class, section, stream or student with server-side filtering, emergency notices, holidays, PTMs;
+- support records with follow-up statuses.
+
+**Fixed — security / permissions:**
+- The Principal could turn an enquiry's agreed discount into a real fee concession (`applyDiscussedConcessions` checked only "students: edit") and enter fee figures on a new enquiry. Both now need the fee permissions (School Admin, or staff with `fees.concessions` / `enquiries.fees`); the "Apply agreed discount" page is School Admin only.
+- Exam papers for one stream could be marked by a teacher of the same subject in another stream; now checked with the stream.
+
+**Fixed — data integrity:**
+- Re-raising a fee head with fewer instalments silently deleted concessions on the dropped instalments (cascade). Now refused while a dropped instalment has a concession. (Payments are account-level, so money was never lost.)
+- Charging a whole section again overwrote children's individually corrected amounts. Children who already have that head are now left unchanged and the result says how many.
+- A student who left could be set active again without a seat check, overfilling a section. Now takes a seat under the same lock as admission; a full section refuses.
+- The last guardian of a student could be removed; now refused. Removing the primary guardian passes "primary" to the next one, and the removal is audited (`PARENT_UNLINKED`).
+- Teacher timetable clashes are re-checked inside the write under a lock (partly overlapping periods saved at the same moment could both get in).
+- Students on long leave (status ON_LEAVE) disappeared from the attendance register; they now appear, marked "on long leave".
+
+**Improved:**
+- **Needs attention:** attendance and homework signals beside marks — attendance below the school's threshold (default 75%) over its window (default 30 days; approved leave not counted, at least 5 marked days), and a teacher's remark that homework is frequently missing. Every row says what was seen. Class-wise summary (marks / attendance / homework flags, support open / resolved) for the School Admin, Principal and each teacher's own classes. The threshold and window are School Admin settings. The Principal and teacher dashboards use the same threshold instead of a hardcoded 75%.
+- **Daily collection** on Fee reports: today's total, receipts, voided payments, by method and by who took it.
+- **Parents** can open homework and class notes files for their own children's current sections (server-checked); homework resources are listed on the parent's homework page. The Principal can open files too.
+- **Admin dashboard:** students by class with boys and girls (Nursery–Class 12). Class strength now counts students on leave and lists empty classes.
+- **Student search** matches each word, so a full name ("Ravi Kumar") or "name + phone" works. The CSV download keeps the gender and admission-year filters.
+- The Principal dashboard says "Needing attention", not "Weak students".
+
+**Not changed, deliberately:**
+- Accountant default grants (full accounts, an earlier decision of 7 Oct).
+- Receptionist defaults.
+- Teachers cannot post notices (permission VIEW).
+
+**Migration:** `20261101090000_attention_signals` — `School.attendanceAttentionPercent` (default 75) and `attendanceAttentionDays` (default 30). Additive. Applied to the local test database only — **NOT on Neon**.
+
+**Tested:**
+- New `tests/integration/core-integrity.test.ts` (9 tests): concession guard, section re-charge, ON_LEAVE on the register, return into a full section, last guardian, full-name search and CSV gender filter, class strength, attendance/homework signals with scope, daily collection.
+- `family-enquiries` adds the Principal refusal.
+- `class-materials` and `homework-resources` now expect a linked parent to get the file and another school's parent to get "not found". These two tests previously asserted that parents are always refused; this reverses that, per this request.
+- Full suite before the material change: 1073/1075, with the 2 failures being exactly those two tests.
+- Final run: 108 files, 1075/1075 passing; typecheck clean; lint 0 errors; `next build` passing.
+
+**Still open (not implemented):**
+- refunds (only void exists; needs a refund policy);
+- PTM time-slot booking;
+- event audience targeting;
+- teachers posting class notices;
+- per-notice read counts;
+- a school-wide attendance CSV;
+- keeping section-change history within a session (only the audit log has it);
+- application-number generation can fail under heavy simultaneous load (unique constraint prevents duplicates).
+
+## 9 Oct 2026 — Fix: requests hanging ~76 s, then database ETIMEDOUT
+
+**Asked:** the dev server (on Neon) showed `/api/v1/me/alerts` returning 500 after 76 s with `PrismaClientKnownRequestError ETIMEDOUT` in `validateSessionToken`, and "The destination stream closed early".
+
+**Cause:** the connection pool had no connect timeout and no idle timeout. Neon closes idle connections (and suspends idle computes); the pool then tried to use or open a connection that never answered, and waited for the operating system's TCP timeout (~75 s on macOS) before failing. The browser gave up meanwhile, hence "stream closed early". Neon itself was reachable when checked (`SELECT 1` in under a second, read-only).
+
+**Changed:** `src/server/db/connection.ts` — pool timing for hosted Postgres: connect timeout 10 s (a clear error instead of a 76 s hang), idle connections closed after 20 s (before Neon drops them), TCP keep-alive on. Applies to the app and the scripts that share `connectionConfig`.
+
+**Migration:** none. Neon migration status checked read-only: up to date.
+
+**Tested:** typecheck; `live-demo`, `plan-builder`, `campuses` integration tests (37) against the local test database; read-only connection check to Neon.
+
+**Open:** restart the dev server so the new pool settings are used (the cached pool lives until then).
+
+## 9 Oct 2026 — Dynamic plans: Plan Builder, plan comparison, demo plan switcher, custom feature requests
+
+**Asked:** database-driven Starter / Growth / Pro plans configured by the Super Admin (draft → preview → impact → publish), one subscription per organization with campus-level modules, configurable extra-campus pricing, a public plan comparison at registration, a plan switcher in the Live Demo, a custom feature request workflow, and server-side entitlement checks.
+
+**Reused, not rebuilt:** `Plan`, `Subscription` (one row per campus, kept on the same plan for the whole organization), `Organization.campusLimitOverride`, `School.optionalModules` (what a campus has switched on), plan requests, campus requests, school approval, the Live Demo sandboxes.
+
+**Changed — reverses earlier behaviour (deliberately, per this spec):**
+- Editing a plan no longer pushes its modules to "follower" schools, and a plan change (approval of an upgrade, or the Super Admin setting a subscription) no longer switches modules. A plan makes modules *eligible*; the owner (any campus) or a School Admin (their campus) switches them on at **Plan & billing → Modules by campus**. A module a plan stops including stays on (grandfathered) until switched off. Roles a plan adds are still offered to campuses that follow the plan's roles (additive only).
+- Approving a plan request moves **every campus** of the organization to the plan (before: only the requesting school).
+- The All Campuses summary needs the plan feature **Organization dashboard** (or a Super Admin campus-limit override above 1).
+
+**Plan Builder** (Super Admin → Plans): create plans (draft), edit name, description, highlights, display order, price / billing period / "price on request", included campuses, extra campuses (allowed, price, period, cap), the full module catalogue (essential modules locked on), organization features, roles and limits. Edits save as a draft; the page shows rule problems, an impact preview (organizations and campuses on the plan, grandfathered modules, campuses over the new cap, price-change note), a preview card and comparison, then **Publish** (confirmed), **Discard draft**, **Open / Close to new schools**, **Archive / Restore**. Rules: every plan keeps Fees & finance and Expenses; plans are a ladder by display order (each keeps everything below it, modules and features); module dependencies are checked (none exist between today's modules, the check is in place). Every step is audited (`PLAN_CREATED`, `PLAN_DRAFT_SAVED`, `PLAN_PUBLISHED` with a diff and impact, …). Discounts stay with the existing Offers.
+
+**Public side:** homepage pricing, `/register` and `/demo` read the same published plans (`getPublicPlans`: published + open only, display order). `/register` shows plan cards, "Compare all features" (module-by-module, grouped), the extra-campus policy, and the form on the same page; choosing a plan never clears what was typed and is kept in `?plan=`. Registration accepts a published plan slug (old `?plan=STARTER` links still work), refuses closed/unknown plans, and records it as a TRIALING subscription as before. "Price on request" never shows a number.
+
+**Campuses & billing:** a campus request past the included campuses is quoted the plan's extra-campus price (stored on the request; shown to the owner before sending and to the Super Admin when reviewing); past the cap it needs an upgrade or the Super Admin's raise. Plan & billing shows the full breakdown (plan fee once + extra campuses) before any plan request; every confirmation says nothing is charged — there is no payment gateway.
+
+**Live Demo:** `/demo` has a plan chooser (default: the highest plan) and the comparison; the demo bar has a **Plan** switcher. Switching sets the sandbox's subscription and modules to exactly that plan (server-side, demo schools only); menus and module pages follow, and a module outside the plan explains which plans include it. Multi-campus features are described, not interactive (one campus).
+
+**Custom feature requests:** owners on a plan with the feature (default Pro) submit requests (title, problem, description, outcome, campus, module, priority, examples) and follow history; the Super Admin moves them through Submitted → Needs clarification → Under evaluation → Approved → In development → Testing → Released / Declined, with estimate, agreed cost (required before development), developer/tester, internal notes, and an explicit release scope (customer-specific / optional module / standard feature / paid add-on) with eligible plans or organizations. A release never changes plans by itself. Attachments are not supported (text examples only).
+
+**Entitlement service** (`server/platform/entitlements.ts`): `organizationEntitlements` (plan, eligible modules, features, included campuses, cap, extras), `assertPlanFeature`, `moduleStatus` (enabled / not switched on / not in plan); `server/campuses/modules.ts` for campus module switching. Existing `assertModuleEnabled`, role and tenant checks are unchanged.
+
+**Migration:** `20261031090000_plan_builder` — additive: Plan gets `slug` (backfilled from tier), `status`, `displayOrder` (1/2/3), `highlights`, `billingPeriod`, `priceOnRequest`, `features`, extra-campus fields, `draft*`, `publishedAt`; `tier` becomes optional; CampusRequest gets the quoted fee; new `FeatureRequest` and `FeatureRequestEvent`. Backfill (plans only, no school or subscription touched): Fees & finance and Expenses added to every plan's eligible modules; Organization dashboard on plans with more than one campus or tier Standard/Pro; custom feature requests on Pro. Existing names and prices are kept (the Standard plan keeps its name — rename it to "Growth" in the Plan Builder if wanted). Applied to the local test database only — **NOT on Neon**.
+
+**Tested:** new `tests/unit/plan-catalog.test.ts` (12) and `tests/integration/plan-builder.test.ts` (13); updated `school-modules`, `plan-upgrade` and `campuses` tests for the reversed behaviour. Full suite 107 files / 1066 tests passing (one earlier run under heavy machine load timed out in two unrelated tests, which passed on their own and in the clean re-run); typecheck clean; lint 0 errors; `next build` passing. Browser check on a production build: `/register` (cards, comparison, form), `/super-admin/plans` (builder, problems, preview), Plan & billing in a demo sandbox (breakdown, modules by campus, plan switcher in the demo bar), `/demo` (plan chooser and comparison). Hindi: 343 new phrases (0 missing).
+
+**Open / decisions needed:** real prices for Starter/Growth/Pro (seed scripts create "Price on request"); whether Starter owners may send feature requests; whether to rename "Standard" to "Growth" on Neon; payment collection stays manual; attachments for feature requests.
+
+## 9 Oct 2026 — Fix: approving a campus request at the campus limit
+
+**Asked:** approving a campus request on Super Admin failed with "This organization is at its campus limit (1). Raise its campus limit first."
+
+**Cause:** not a crash. The approval rightly refuses to go past the organization's campus limit, but the approve screen offered no way through: the Super Admin had to find the separate "Campus limit" form first.
+
+**Changed:** when the organization is at its limit, the Approve form now shows a required tick box, "Raise the campus limit to N and approve". Ticking it raises that organization's own campus limit to exactly one more than its current count (its plan does not change) and creates the campus in the same transaction, with an `ORGANIZATION_CAMPUS_LIMIT_CHANGED` audit entry. Without the tick, approval is still refused, with a message that says what to do. The separate "Campus limit" form still works as before.
+
+**Migration:** none (uses `Organization.campusLimitOverride`, already on Neon).
+
+**Tested:** new test in `campuses.test.ts` (raise and approve: limit goes 2 → 3, campus created, audited); full suite 1041/1041, lint 0 errors, `next build`. Hindi for the 4 new messages added.
+
+## 9 Oct 2026 — Homepage redesign, interactive Live Demo, first-campus naming
+
+**Asked:** a new marketing homepage ("Your Entire School. One Smart Platform.") built only from real capabilities; a Live Demo that runs the real app on fictional data, with strict server-side isolation; the registered school name used as the first campus / organization name everywhere, with tests.
+
+**Changed — Live Demo**
+
+- Each visitor gets a **private sandbox school** ("Green Valley Demo School", `School.isDemo`, deleted after 2 hours) seeded in under a second: 36 students in Class 6/8/10 (A/B), 6 teachers, a principal, an accountant, a parent with two children (one with a student login), 30 days of attendance, homework, timetable, exams (two published, one waiting for verification), weighted final result, fees with instalments, concession, late fee and payments (3 today), notices, events, a PTM and responsibilities. All names fictional; emails on `demo.schoolos.invalid`; passwords are random hashes nobody knows.
+- `/demo` page with role cards (School Admin, Principal, Teacher, Parent, Student, Accountant). The server creates the session — no credentials are shown or exist.
+- Amber banner on every page: "DEMO MODE — Sample Data Only", role switch, Start over (new sandbox), Exit demo, Register your school, minutes left, and a skippable per-role tour.
+- **Guards (server, by `School.isDemo` from the database, never a client flag):** no password change, API tokens, campus switch/requests or plan requests; activation, resend and password-reset emails are never sent for a demo school. Sandboxes are excluded from Super Admin lists, school detail, platform analytics, audit and public school pages.
+- Receipts and report cards from a sandbox carry a red "SAMPLE" watermark and notice.
+- Start limited to 6 per IP per hour; expired sandboxes are cleaned on the next start; at most 200 kept.
+
+**Changed — homepage** (`src/features/marketing/sections.tsx`, new `role-preview.tsx`; `product-preview.tsx` removed)
+
+- Hero with "Explore Live Demo" → `/demo` and "Register Your School"; real screenshots from the demo (`public/marketing/*.png`).
+- "Does This Sound Like Your School?" (4 pain points) → problem-to-solution cards; grouped features (states that Fees & finance, expenses, payroll, library, transport and inventory are optional by plan); five-role tabbed preview with real screens; multi-campus (plan allowance, SchoolOS approval); privacy & security; getting started; live offers and pricing (now shows each plan's campus allowance instead of "all modules"); FAQ (small school, parents, multi-campus, no payment gateway, accounts, registration, demo, data); final CTA.
+- "Live Demo" link in header, mobile menu and footer. No testimonials, logos, statistics or invented prices.
+
+**Changed — first-campus naming**
+
+- Registration already created one Organization + School with the submitted name; now covered by tests (no duplicates on repeat submission or approval).
+- Super Admin can rename a school ("School / campus name" card); a School Admin's profile rename works too. A single-campus organization's name follows the school; a multi-campus group name is never overwritten. Ids never change.
+- My Schools lists every campus in the organization (name, "You are here", status, city/state).
+
+**Migration:** `20261030090000_live_demo` (`School.isDemo`, `School.demoExpiresAt`, index). Applied to the local test database only — **NOT on Neon**.
+
+**Tested:** `live-demo.test.ts` (11) and `campus-naming.test.ts` (5) new; full suite 1040/1040; typecheck, lint (0 errors), `next build`. Browser check on a production build: homepage desktop, mobile and dark; `/demo` → Parent → switch to Principal → Exit (then `/principal` asks for login); tour close/reload/reopen; receipt and report-card watermarks. Hindi: 334 new phrases added (0 missing).
+
+**Open:** apply the three migrations on Neon; the demo rate limit is per server instance; no scheduled sandbox cleanup (runs on each demo start); production should serve over HTTPS so the session cookie is `Secure`.
 
 ## 8 Oct 2026 — Results, fees, parent self-service and centralized records (production pass)
 

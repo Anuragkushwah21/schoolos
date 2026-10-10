@@ -3,6 +3,18 @@ import { z } from "zod";
 import { id, optionalId, optionalText, optionalTime, optionalUrl, requiredDate, requiredText, requiredTime } from "@/lib/validation/common";
 
 /**
+ * The online link is optional — most meetings happen at school. When given,
+ * a link typed without "https://" (e.g. meet.google.com/abc-defg-hij) gets it
+ * added; then it must be a valid https:// address.
+ */
+const meetingLinkSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}, optionalUrl);
+
+/**
  * Meetings the school office calls — shared by the form, the Server Actions
  * and the REST API. Whether the time is still in the future depends on the
  * school's clock and on the meeting being edited, so the service checks that.
@@ -56,7 +68,7 @@ export const meetingSchema = z
     startMinute: requiredTime("a start time"),
     endMinute: optionalTime,
     location: optionalText(200),
-    meetingLink: optionalUrl,
+    meetingLink: meetingLinkSchema,
     /**
      * Who is invited. "ALL", or every group ticked, is stored as ALL alone so
      * a group added later is included too.

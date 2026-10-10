@@ -36,6 +36,7 @@ import { schoolNow } from "@/lib/time-status";
 import { cn } from "@/lib/utils";
 import { getIntlLocale, getT } from "@/server/i18n";
 import { requireTenant } from "@/server/auth/current-user";
+import { signalSettings } from "@/server/exams/student-signals";
 import { findTeacherSelf } from "@/server/auth/teacher-access";
 import { getCurrentSession } from "@/server/academics/structure";
 import { attendanceTrend, studentsNeedingAttention } from "@/server/analytics/school";
@@ -50,7 +51,6 @@ import { attendedDays } from "@/lib/attendance";
 
 export const metadata: Metadata = { title: "Teacher dashboard" };
 
-const LOW_ATTENDANCE = 0.75;
 /** How far ahead the "due soon" homework list looks. */
 const HOMEWORK_HORIZON_DAYS = 7;
 
@@ -108,11 +108,15 @@ export default async function TeacherDashboardPage(props: PageProps<"/teacher/da
   // Every one of these is limited to this teacher's own sections — the same
   // list that decides which registers they may open at all. Omitting the ids
   // would quietly widen them to the whole school.
-  const [trend, attention, dueSoon] = await Promise.all([
+  const [trend, attention, dueSoon, signals, absentToday] = await Promise.all([
     scopeIds.length ? attendanceTrend(ctx, { academicSessionId: plan.session.id, days: 21, sectionIds: scopeIds }) : Promise.resolve([]),
-    scopeIds.length ? studentsNeedingAttention(ctx, { academicSessionId: plan.session.id, sectionIds: scopeIds, threshold: LOW_ATTENDANCE, limit: 5 }) : Promise.resolve([]),
+    scopeIds.length ? studentsNeedingAttention(ctx, { academicSessionId: plan.session.id, sectionIds: scopeIds, limit: 5 }) : Promise.resolve([]),
     homeworkDueForMySections(ctx, { from: today(), to: addDays(today(), HOMEWORK_HORIZON_DAYS), take: 5, sectionId: selected?.sectionId }),
+    signalSettings(ctx),
+    // Today's absentees in the registers this teacher may open (names only — no family phone numbers here).
+    registersAll.length ? ctx.db.studentAttendance.findMany({ where: { date: today(), status: "ABSENT", sectionId: { in: registersAll.map((reg) => reg.sectionId) } }, orderBy: { student: { firstName: "asc" } }, select: { sectionId: true, student: { select: { firstName: true, lastName: true } } } }) : Promise.resolve([]),
   ]);
+  const LOW_ATTENDANCE = signals.percent / 100;
 
   const periods = plan.periods.filter((period) => inScope(period.sectionId));
   const registers = closedToday ? [] : registersAll.filter((reg) => inScope(reg.sectionId));
@@ -255,6 +259,9 @@ export default async function TeacherDashboardPage(props: PageProps<"/teacher/da
                             : t("dashboard.teacher.attendanceLocked")}
                     </span>
                   </span>
+                  {absentToday.some((row) => row.sectionId === reg.sectionId) ? (
+                    <span className="text-danger-strong text-xs sm:max-w-xs">{`Absent today: ${absentToday.filter((row) => row.sectionId === reg.sectionId).map((row) => `${row.student.firstName} ${row.student.lastName}`).join(", ")}`}</span>
+                  ) : null}
                   {reg.phase === "LOCKED" ? null : (
                     <Button asChild variant={reg.phase === "CORRECTABLE" ? "outline" : "default"}>
                       <Link href={`/teacher/attendance?section=${reg.sectionId}`}>
@@ -499,7 +506,7 @@ export default async function TeacherDashboardPage(props: PageProps<"/teacher/da
             <CardHeader>
               <CardTitle>Low attendance</CardTitle>
               <CardDescription>
-                {selected ? `Students in ${selected.label}` : "Students in your classes"} below {LOW_ATTENDANCE * 100}% this session.
+                {selected ? `Students in ${selected.label}` : "Students in your classes"} below {Math.round(LOW_ATTENDANCE * 100)}% this session.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -523,7 +530,7 @@ export default async function TeacherDashboardPage(props: PageProps<"/teacher/da
               ) : (
                 <p className="text-muted-foreground flex items-center gap-2 text-sm">
                   <CheckIcon className="size-4 shrink-0" style={{ color: "var(--viz-good)" }} aria-hidden />
-                  Nobody is below {LOW_ATTENDANCE * 100}%.
+                  Nobody is below {Math.round(LOW_ATTENDANCE * 100)}%.
                 </p>
               )}
             </CardContent>

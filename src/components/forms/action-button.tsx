@@ -34,9 +34,12 @@ export function ActionButton({
   variant,
   size = "sm",
   className,
+  disabled = false,
 }: {
   action: FormAction<undefined>;
-  fields: Record<string, string>;
+  /** A list value is sent as repeated fields (like checkboxes). */
+  fields: Record<string, string | readonly string[]>;
+  disabled?: boolean;
   children: React.ReactNode;
   pendingLabel?: string;
   confirm?: { title: string; description: string; confirmLabel?: string };
@@ -56,7 +59,10 @@ export function ActionButton({
 
   function run() {
     const formData = new FormData();
-    for (const [key, value] of Object.entries(fields)) formData.set(key, value);
+    for (const [key, value] of Object.entries(fields)) {
+      if (typeof value === "string") formData.set(key, value);
+      else for (const item of value) formData.append(key, item);
+    }
     startTransition(() => dispatch(formData));
   }
 
@@ -67,7 +73,7 @@ export function ActionButton({
       size={size}
       className={className}
       // Disabled while the action runs: one press, one request.
-      disabled={pending}
+      disabled={pending || disabled}
       aria-busy={pending || undefined}
       onClick={() => (confirm ? setOpen(true) : run())}
     >

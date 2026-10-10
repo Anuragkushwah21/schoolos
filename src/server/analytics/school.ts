@@ -119,7 +119,8 @@ export async function studentsNeedingAttention(
   ctx: TenantContext,
   options: { academicSessionId: string; sectionIds?: string[]; threshold?: number; limit?: number },
 ) {
-  const threshold = options.threshold ?? 0.75;
+  // The school's own attendance rule (Settings under Student performance), unless a caller passes one.
+  const threshold = options.threshold ?? ((await ctx.db.school.findFirst({ select: { attendanceAttentionPercent: true } }))?.attendanceAttentionPercent ?? 75) / 100;
 
   const grouped = await ctx.db.studentAttendance.groupBy({
     by: ["studentId", "status"],

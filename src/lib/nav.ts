@@ -76,17 +76,21 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   // The platform owner governs schools, never a school's daily work: no
   // students, attendance, fees or timetable here — those are each school's.
   SUPER_ADMIN: [
-    { href: "/super-admin/dashboard", labelKey: "nav.dashboard", icon: "dashboard", exact: true },
+    // Five groups (10 Oct 2026): what is happening, the customers, what is
+    // sold, what customers asked for, and the platform itself.
+    { href: "/super-admin/dashboard", labelKey: "nav.dashboard", icon: "dashboard", exact: true, group: "nav.groupOverview" },
+    { href: "/super-admin/reports" as Route, labelKey: "nav.platformReports", icon: "reports" },
+    { href: "/super-admin/organizations" as Route, labelKey: "nav.organizations", icon: "schools", group: "nav.groupCustomers" },
     { href: "/super-admin/schools", labelKey: "nav.schools", icon: "schools" },
     { href: "/super-admin/approvals" as Route, labelKey: "nav.approvals", icon: "inbox" },
     { href: "/super-admin/campus-requests" as Route, labelKey: "nav.campusRequests", icon: "schools" },
-    { href: "/super-admin/plan-requests" as Route, labelKey: "nav.planRequests", icon: "plans" },
-    { href: "/super-admin/plans", labelKey: "nav.featuresPlans", icon: "plans" },
-    { href: "/super-admin/reports" as Route, labelKey: "nav.platformReports", icon: "reports" },
-    { href: "/super-admin/audit", labelKey: "nav.auditLogs", icon: "audit" },
-    { href: "/super-admin/settings" as Route, labelKey: "nav.platformSettings", icon: "settings", match: ["/api-tokens", "/account"] },
-    { href: "/super-admin/inquiries", labelKey: "nav.enquiries", icon: "inbox", group: "nav.groupWebsite" },
+    { href: "/super-admin/plans", labelKey: "nav.featuresPlans", icon: "plans", group: "nav.groupPlans" },
+    { href: "/super-admin/feature-requests" as Route, labelKey: "nav.featureRequests", icon: "plans" },
+    { href: "/super-admin/plan-requests" as Route, labelKey: "nav.planRequests", icon: "plans", group: "nav.groupRequests" },
     { href: "/super-admin/offers", labelKey: "nav.offers", icon: "offers" },
+    { href: "/super-admin/inquiries", labelKey: "nav.enquiries", icon: "inbox" },
+    { href: "/super-admin/settings" as Route, labelKey: "nav.platformSettings", icon: "settings", match: ["/api-tokens", "/account"], group: "nav.groupPlatform" },
+    { href: "/super-admin/audit", labelKey: "nav.auditLogs", icon: "audit" },
   ],
   // Each concept has its own entry: Events (something happening), Calendar
   // (a date overview), Notices (a message), Meetings (people meeting) and
@@ -241,10 +245,10 @@ export function superAdminNav(counts: { pending: number; campusRequests?: number
 }
 
 /** The School Admin's sidebar, with how many leave requests wait for their decision on the Leave entry. */
-export function adminNav(counts: { leave: number }, options: { campuses?: boolean } = {}): NavItem[] {
+export function adminNav(counts: { leave: number; modulesToEnable?: number }, options: { campuses?: boolean } = {}): NavItem[] {
   const items = NAV_BY_ROLE.SCHOOL_ADMIN.map((item) => (item.href === "/school-admin/leave" && counts.leave ? { ...item, badge: counts.leave } : item));
   // My Schools (campus requests on every plan, switching, All Campuses, Upgrade Plan).
-  if (options.campuses ?? true) items.splice(items.findIndex((item) => item.href === "/school-admin/settings"), 0, { href: "/school-admin/campuses" as Route, labelKey: "nav.mySchools", icon: "schools", match: ["/school-admin/plan"] });
+  if (options.campuses ?? true) items.splice(items.findIndex((item) => item.href === "/school-admin/settings"), 0, { href: "/school-admin/campuses" as Route, labelKey: "nav.mySchools", icon: "schools", match: ["/school-admin/plan", "/school-admin/feature-requests"], ...(counts.modulesToEnable ? { badge: counts.modulesToEnable } : {}) });
   return items;
 }
 

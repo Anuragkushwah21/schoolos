@@ -6,7 +6,6 @@ import {
   id,
   optionalId,
   optionalDate,
-  optionalEnum,
   optionalInt,
   optionalPhone,
   optionalText,
@@ -18,8 +17,6 @@ import {
 } from "@/lib/validation/common";
 import { cleanModules } from "@/lib/school-modules";
 import { cleanRoles } from "@/lib/school-roles";
-
-export const PLAN_TIERS = ["STARTER", "STANDARD", "PRO"] as const;
 
 /**
  * Public school registration. `website` is a honeypot: it is hidden from people
@@ -51,7 +48,14 @@ export const registerSchoolSchema = z
      */
     password: passwordSchema,
     confirmPassword: z.string().min(1, "Confirm your password"),
-    plan: optionalEnum(PLAN_TIERS),
+    /** A published plan's slug (`starter`, `growth`…). Old tier links (`STARTER`) still work. */
+    plan: z
+      .string()
+      .trim()
+      .max(40)
+      .optional()
+      .transform((value) => (value ? value.toLowerCase() : undefined))
+      .refine((value) => value === undefined || /^[a-z0-9-]+$/.test(value), "Choose a plan from the list"),
     website: z.string().optional(),
   })
   .refine((data) => data.password === data.confirmPassword, {
@@ -81,6 +85,17 @@ export const SUBSCRIPTION_STATUSES = [
   "CANCELLED",
   "EXPIRED",
 ] as const;
+
+/** Change an organization's plan from its page (every campus together). */
+export const organizationPlanSchema = z.object({
+  organizationId: id,
+  planId: id,
+  status: z.enum(SUBSCRIPTION_STATUSES),
+  startsAt: requiredDate("a start date"),
+  endsAt: optionalDate,
+  notes: optionalText(500),
+  confirmOverCap: checkbox,
+});
 
 export const subscriptionSchema = z.object({
   schoolId: id,
@@ -124,30 +139,44 @@ const moduleList = z.preprocess(
   z.array(z.string().max(40)).max(50),
 ).transform((values) => cleanModules(values));
 
-export const planSchema = z.object({
+const rupees = (label: string) =>
+  z.preprocess((value) => (value === "" || value === undefined || value === null ? undefined : value), z.coerce.number({ error: `Enter ${label}` }).min(0, "Cannot be negative").max(10_000_000, "That is too high").optional());
+const listOf = (max: number) => z.preprocess((value) => (value === undefined || value === "" ? [] : Array.isArray(value) ? value : [value]), z.array(z.string().max(120)).max(max));
+const period = z.enum(["MONTHLY", "QUARTERLY", "YEARLY"]).default("YEARLY");
+
+/**
+ * The Plan Builder form. Saved as a draft; publishing is a separate step.
+ * Money is entered in rupees and stored in paise.
+ */
+export const planDraftSchema = z.object({
   planId: id,
   name: requiredText("a name", 60),
   description: optionalText(300),
-  /** Entered in rupees, stored in paise. */
-  priceRupees: z.coerce
-    .number({ error: "Enter a price" })
-    .min(0, "Price cannot be negative")
-    .max(10_000_000, "That price is too high"),
+  highlights: z.preprocess((value) => (typeof value === "string" ? value.split("\n") : value), listOf(8)).transform((rows) => rows.map((row) => row.trim()).filter(Boolean)),
+  displayOrder: requiredInt(0, 1000).default(0),
+  priceRupees: rupees("a price"),
+  priceOnRequest: checkbox,
+  billingPeriod: period,
+  campusLimit: requiredInt(1, 500).default(1),
+  extraCampusAllowed: checkbox,
+  extraCampusRupees: rupees("the extra-campus price"),
+  extraCampusPeriod: period,
+  maxCampuses: optionalInt(1, 1000),
+  optionalModules: moduleList,
+  features: listOf(20),
   maxStudents: optionalInt(1, 1_000_000),
   maxTeachers: optionalInt(1, 100_000),
   maxAdmins: optionalInt(1, 1_000),
   storageMb: optionalInt(1, 10_000_000),
-  isActive: checkbox,
-  /** Ticked optional modules; checked against the catalogue on the server. */
-  optionalModules: moduleList,
-  /** Campuses one organization may run (1 = multi-campus off). */
-  campusLimit: requiredInt(1, 500).default(1),
-  /** Ticked optional roles; checked against the catalogue on the server. */
-  availableRoles: z.preprocess(
-    (value) => (value === undefined || value === "" ? [] : Array.isArray(value) ? value : [value]),
-    z.array(z.string().max(40)).max(50),
-  ).transform((values) => cleanRoles(values)),
+  availableRoles: listOf(50).transform((values) => cleanRoles(values)),
+  /** The template the plan is compared with ("Customized"); a label, not an entitlement. */
+  templateKey: z.preprocess((value) => (value === "" || value === undefined ? null : value), z.enum(["starter", "growth", "pro"]).nullable()),
 });
+
+export const planIdSchema = z.object({ planId: id });
+const templateKeyField = z.preprocess((value) => (value === "" || value === undefined ? null : value), z.enum(["starter", "growth", "pro"]).nullable());
+export const planCreateSchema = z.object({ name: requiredText("a name", 60), templateKey: templateKeyField });
+export const planActiveSchema = z.object({ planId: id, active: z.enum(["true", "false"]).transform((value) => value === "true") });
 
 /** One school's optional modules: follow the plan, or the ticked set. */
 export const schoolModulesSchema = z.object({

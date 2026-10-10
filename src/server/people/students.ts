@@ -23,6 +23,7 @@ import { createPortalUser } from "@/server/people/accounts";
 import { changeStudentStatus } from "@/server/people/lifecycle";
 import { duplicateStudentError, findPossibleDuplicates } from "@/server/people/duplicates";
 import { assertCan } from "@/server/auth/permissions";
+import { admittedWhere, studentSearchWhere } from "@/server/people/student-search";
 
 /**
  * Students and their guardians, as managed by the School Admin.
@@ -54,12 +55,7 @@ export async function listStudents(
     where: { isCurrent: true },
     select: { id: true, startDate: true },
   });
-  const admittedWhere: Prisma.StudentWhereInput =
-    filters.admitted === "NEW"
-      ? { admissionDate: { gte: session?.startDate ?? new Date(8.64e15) } }
-      : typeof filters.admitted === "number"
-        ? { admissionDate: { gte: new Date(Date.UTC(filters.admitted, 0, 1)), lt: new Date(Date.UTC(filters.admitted + 1, 0, 1)) } }
-        : {};
+  const admitted = admittedWhere(filters.admitted, session?.startDate);
 
   const page = Math.max(1, filters.page ?? 1);
   const enrollmentFilter: Prisma.StudentEnrollmentWhereInput | undefined =
@@ -74,34 +70,9 @@ export async function listStudents(
   const where: Prisma.StudentWhereInput = {
     ...(filters.status === "CURRENT" ? { status: { in: [...CURRENT_STUDENT] } } : filters.status ? { status: filters.status } : {}),
     ...(filters.gender ? { gender: filters.gender } : {}),
-    ...admittedWhere,
+    ...admitted,
     ...(enrollmentFilter ? { enrollments: { some: enrollmentFilter } } : {}),
-    ...(filters.q
-      ? {
-          OR: [
-            { firstName: { contains: filters.q, mode: "insensitive" } },
-            { lastName: { contains: filters.q, mode: "insensitive" } },
-            { admissionNumber: { contains: filters.q, mode: "insensitive" } },
-            // The parent is often what the office has been given — a mobile
-            // number from a caller, or a father's name — so the same box finds
-            // the child through them.
-            {
-              parents: {
-                some: {
-                  parent: {
-                    OR: [
-                      { firstName: { contains: filters.q, mode: "insensitive" } },
-                      { lastName: { contains: filters.q, mode: "insensitive" } },
-                      { phone: { contains: filters.q } },
-                      { email: { contains: filters.q, mode: "insensitive" } },
-                    ],
-                  },
-                },
-              },
-            },
-          ],
-        }
-      : {}),
+    ...studentSearchWhere(filters.q),
   };
 
   const [rows, total] = await Promise.all([
@@ -776,10 +747,29 @@ export async function linkGuardian(
   });
 }
 
+/**
+ * Remove a guardian from a student. Every student keeps at least one
+ * guardian, so the last one cannot be removed (link another first); when the
+ * primary guardian goes, the longest-linked remaining one becomes primary.
+ */
 export async function unlinkGuardian(ctx: TenantContext, linkId: string): Promise<void> {
   assertCan(ctx, "students", "EDIT");
-  const { count } = await ctx.db.parentStudent.deleteMany({ where: { id: linkId } });
-  if (!count) throw new NotFoundError();
+  const link = await ctx.db.parentStudent.findFirst({ where: { id: linkId }, select: { id: true, studentId: true, isPrimary: true, parent: { select: { firstName: true, lastName: true } } } });
+  if (!link) throw new NotFoundError();
+  await ctx.db.$transaction(async (tx) => {
+    const others = await tx.parentStudent.findMany({ where: { studentId: link.studentId, id: { not: link.id } }, orderBy: { createdAt: "asc" }, select: { id: true, isPrimary: true } });
+    if (!others.length) throw new ConflictError("A student must keep at least one parent or guardian. Link another guardian before removing this one.");
+    await tx.parentStudent.deleteMany({ where: { id: link.id } });
+    if (link.isPrimary && !others.some((row) => row.isPrimary)) await tx.parentStudent.updateMany({ where: { id: others[0]!.id }, data: { isPrimary: true } });
+  });
+  await recordAudit({
+    action: "PARENT_UNLINKED",
+    entityType: "Student",
+    entityId: link.studentId,
+    schoolId: ctx.schoolId,
+    actorId: ctx.user.id,
+    summary: `${link.parent.firstName} ${link.parent.lastName} removed as a guardian.`,
+  });
 }
 
 export async function updateParent(

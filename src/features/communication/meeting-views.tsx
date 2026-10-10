@@ -51,7 +51,7 @@ export function MeetingDetails({ meeting, showCreator = false }: { meeting: Meet
   );
 }
 
-function MeetingCard({ meeting }: { meeting: MeetingView }) {
+function MeetingCard({ meeting, extra }: { meeting: MeetingView; extra?: React.ReactNode }) {
   const muted = meeting.stage === "COMPLETED" || meeting.stage === "CANCELLED";
   return (
     <Card className={muted ? "opacity-80" : undefined}>
@@ -69,15 +69,17 @@ function MeetingCard({ meeting }: { meeting: MeetingView }) {
           </CardDescription>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-4">
         <MeetingDetails meeting={meeting} />
+        {extra}
       </CardContent>
     </Card>
   );
 }
 
 /** An invitee's meetings: what is coming up (or happening now), then history. */
-export function MyMeetings({ upcoming, past, emptyHint }: { upcoming: MeetingView[]; past: MeetingView[]; emptyHint: string }) {
+/** `extras`: something to show inside a meeting's card, by meeting id (a parent's answer, a teacher's class list link). */
+export function MyMeetings({ upcoming, past, emptyHint, extras = {} }: { upcoming: MeetingView[]; past: MeetingView[]; emptyHint: string; extras?: Record<string, React.ReactNode> }) {
   if (!upcoming.length && !past.length) {
     return <EmptyState title="No meetings yet">{emptyHint}</EmptyState>;
   }
@@ -86,7 +88,7 @@ export function MyMeetings({ upcoming, past, emptyHint }: { upcoming: MeetingVie
       <section className="flex flex-col gap-4">
         <h2 className="text-lg font-semibold">Upcoming</h2>
         {upcoming.length ? (
-          upcoming.map((meeting) => <MeetingCard key={meeting.id} meeting={meeting} />)
+          upcoming.map((meeting) => <MeetingCard key={meeting.id} meeting={meeting} extra={extras[meeting.id]} />)
         ) : (
           <p className="text-muted-foreground text-sm">Nothing scheduled right now.</p>
         )}
@@ -95,7 +97,7 @@ export function MyMeetings({ upcoming, past, emptyHint }: { upcoming: MeetingVie
         <section className="flex flex-col gap-4">
           <h2 className="text-lg font-semibold">Completed</h2>
           {past.map((meeting) => (
-            <MeetingCard key={meeting.id} meeting={meeting} />
+            <MeetingCard key={meeting.id} meeting={meeting} extra={extras[meeting.id]} />
           ))}
         </section>
       ) : null}

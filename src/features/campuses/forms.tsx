@@ -224,7 +224,7 @@ export function CampusRequestForm({ modules, roles, limits, existing }: { module
 
 
 /** Super Admin: approve as asked, or change the modules, roles and limits first. */
-export function ApproveCampusForm({ requestId, modules, roles, limits }: { requestId: string; modules: readonly string[]; roles: readonly string[]; limits: Record<string, number | undefined> }) {
+export function ApproveCampusForm({ requestId, modules, roles, limits, raiseLimitTo = null }: { requestId: string; modules: readonly string[]; roles: readonly string[]; limits: Record<string, number | undefined>; raiseLimitTo?: number | null }) {
   return (
     <ActionForm action={approveCampusRequestAction} className="gap-4">
       <input type="hidden" name="requestId" value={requestId} />
@@ -242,6 +242,12 @@ export function ApproveCampusForm({ requestId, modules, roles, limits }: { reque
         <LimitFields initial={limits} />
       </div>
       <TextareaField name="reviewNote" label="Note (optional)" rows={2} />
+      {raiseLimitTo !== null ? (
+        <label className="border-warning/40 bg-warning-soft flex items-start gap-2 rounded-lg border p-3 text-sm">
+          <input type="checkbox" name="raiseLimit" required className="mt-0.5 size-4" />
+          <span>{`Raise the campus limit to ${raiseLimitTo} and approve. The organization is at its limit; this sets its own campus limit (its plan does not change).`}</span>
+        </label>
+      ) : null}
       <p className="text-muted-foreground text-xs">Changing anything approves it as “Modified”. The original request is kept. The campus is created and goes live on approval.</p>
       <div>
         <SubmitButton pendingLabel="Approving…">Approve & create campus</SubmitButton>

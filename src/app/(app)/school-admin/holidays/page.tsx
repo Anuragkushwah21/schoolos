@@ -37,7 +37,7 @@ export default async function AdminHolidaysPage(props: PageProps<"/school-admin/
           <WeeklyOffsForm selected={weeklyOffDays} />
         </CardContent>
       </Card>
-      <HolidaysScreen ctx={ctx} basePath="/school-admin/holidays" monthParam={param(search.month)} editable />
+      <HolidaysScreen ctx={ctx} basePath="/school-admin/holidays" monthParam={param(search.month)} dayParam={param(search.day)} editable />
     </>
   );
 }

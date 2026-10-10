@@ -45,7 +45,7 @@ beforeAll(async () => {
   const user = await prisma.user.create({ data: { email: `super@${PREFIX}.test`, passwordHash: "x", role: "SUPER_ADMIN", firstName: "Platform", lastName: "Admin" } });
   superAdmin = { id: user.id, email: user.email, role: "SUPER_ADMIN", firstName: "Platform", lastName: "Admin", schoolId: null, schoolSlug: null, schoolName: null, schoolStatus: null };
   for (const [tier, data] of [["STARTER", { optionalModules: ["FINANCE"], campusLimit: 1, isActive: true }], ["PRO", { optionalModules: ["FINANCE", "LIBRARY", "TRANSPORT"], campusLimit: 3, isActive: true }]] as const) {
-    const row = await prisma.plan.upsert({ where: { tier }, update: {}, create: { tier, name: tier[0] + tier.slice(1).toLowerCase(), priceMinor: tier === "PRO" ? 5000 : 100 } });
+    const row = await prisma.plan.upsert({ where: { tier }, update: {}, create: { tier, slug: tier.toLowerCase(), name: tier[0] + tier.slice(1).toLowerCase(), priceMinor: tier === "PRO" ? 5000 : 100 } });
     restore.push({ id: row.id, data: { optionalModules: row.optionalModules, campusLimit: row.campusLimit, isActive: row.isActive } });
     await prisma.plan.update({ where: { id: row.id }, data: { ...data, optionalModules: [...data.optionalModules] } });
     if (tier === "STARTER") starter = row;
@@ -118,7 +118,8 @@ describe("Upgrade Plan", () => {
     await approvePlanChange(superAdmin, id, "Paid by bank transfer");
     await expect(approvePlanChange(superAdmin, id, null)).rejects.toBeInstanceOf(ConflictError);
     expect((await prisma.subscription.findFirstOrThrow({ where: { schoolId: schoolA.schoolId }, orderBy: { createdAt: "desc" } })).planId).toBe(pro.id);
-    expect((await prisma.school.findUniqueOrThrow({ where: { id: schoolA.schoolId } })).optionalModules).toEqual(["FINANCE", "LIBRARY", "TRANSPORT"]);
+    // The upgrade grants eligibility: modules stay as they were until the school switches them on.
+    expect((await prisma.school.findUniqueOrThrow({ where: { id: schoolA.schoolId } })).optionalModules).toEqual(["FINANCE"]);
     expect((await campusLimitOf(await ensureOrganization(schoolA.schoolId))).limit).toBe(3);
     const actions = (await prisma.auditLog.findMany({ where: { entityId: id }, select: { action: true } })).map((row) => row.action);
     expect(actions).toEqual(expect.arrayContaining(["PLAN_CHANGE_REQUESTED", "PLAN_CHANGE_APPROVED"]));

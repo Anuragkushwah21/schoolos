@@ -1,5 +1,7 @@
 import "server-only";
 
+import { requireParentSelf } from "@/server/parent/access";
+
 import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { AppError, ForbiddenError, NotFoundError } from "@/lib/errors";
 import { visibleToStream } from "@/server/academics/stream-scope";
@@ -354,6 +356,22 @@ export async function readMaterialFile(ctx: TenantContext, materialId: string) {
           },
         },
       ],
+    };
+  } else if (ctx.user.role === "PARENT") {
+    // A guardian: material for their own children's current sections (and
+    // streams) only — published homework or a class that was taken there.
+    const parent = await requireParentSelf(ctx);
+    const placements = await ctx.db.studentEnrollment.findMany({
+      where: { status: "ACTIVE", academicSession: { isCurrent: true }, student: { parents: { some: { parentId: parent.id } } } },
+      select: { sectionId: true, streamId: true, academicSessionId: true },
+    });
+    if (!placements.length) throw new NotFoundError("That file was not found.");
+    where = {
+      id: materialId,
+      OR: placements.flatMap((placement) => [
+        { classSession: { timetableSlot: { sectionId: placement.sectionId, AND: [visibleToStream(placement.streamId)], academicSessionId: placement.academicSessionId } } },
+        { homework: { sectionId: placement.sectionId, AND: [visibleToStream(placement.streamId)], academicSessionId: placement.academicSessionId, status: "PUBLISHED" as const } },
+      ]),
     };
   } else if (ctx.user.role === "TEACHER") {
     const teacher = await requireTeacherSelf(ctx);

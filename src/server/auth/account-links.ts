@@ -124,13 +124,17 @@ const ROLE_NAMES: Partial<Record<UserRole, string>> = {
  * and provider as "forgot password". A new link supersedes the previous one.
  * Returns whether the email went and, if not, why.
  */
+const DEMO_NO_EMAIL = "Live Demo: no email is sent from the demo school.";
+
 export async function sendActivation(userId: string, createdById: string | null): Promise<{ email: string; delivered: boolean; error?: string }> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, firstName: true, lastName: true, role: true, activatedAt: true, school: { select: { name: true } } },
+    select: { id: true, email: true, firstName: true, lastName: true, role: true, activatedAt: true, school: { select: { name: true, isDemo: true } } },
   });
   if (!user) throw new NotFoundError();
   if (user.activatedAt) throw new ConflictError("This account is already active. Use password reset instead.");
+  // A Live Demo sandbox never sends email — not even to an address a visitor typed in.
+  if (user.school?.isDemo) return { email: user.email, delivered: false, error: DEMO_NO_EMAIL };
   const { token, id } = await issueLink(user.id, "ACTIVATION", createdById);
   const result = await deliver(
     id,
@@ -155,6 +159,7 @@ export async function resendAccountEmail(ctx: TenantContext, userId: string): Pr
   const user = await ctx.db.user.findFirst({ where: { id: userId, role: { in: PORTAL_ROLES } }, select: { id: true, email: true, firstName: true, activatedAt: true, isActive: true } });
   if (!user) throw new NotFoundError();
   if (!user.isActive) throw new ConflictError("This login is switched off. Turn it back on first.");
+  if (ctx.user.isDemo) return { email: user.email, delivered: false, error: DEMO_NO_EMAIL, kind: user.activatedAt ? "PASSWORD_RESET" : "ACTIVATION" };
   let result: { email: string; delivered: boolean; error?: string; kind: "ACTIVATION" | "PASSWORD_RESET" };
   if (!user.activatedAt) {
     result = { ...(await sendActivation(user.id, ctx.user.id)), kind: "ACTIVATION" };
@@ -236,9 +241,11 @@ export async function redeemAccountLink(token: string, purpose: AccountTokenPurp
 export async function requestPasswordReset(email: string): Promise<void> {
   const user = await prisma.user.findUnique({
     where: { email: email.trim().toLowerCase() },
-    select: { id: true, email: true, firstName: true, isActive: true, activatedAt: true, school: { select: { status: true } } },
+    select: { id: true, email: true, firstName: true, isActive: true, activatedAt: true, school: { select: { status: true, isDemo: true } } },
   });
   if (!user || !user.isActive || (user.school && user.school.status !== "ACTIVE")) return;
+  // Demo sandbox accounts never receive email.
+  if (user.school?.isDemo) return;
   if (!user.activatedAt) {
     await sendActivation(user.id, null);
     return;

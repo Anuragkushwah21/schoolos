@@ -31,7 +31,7 @@ export default async function PlanRequestsPage(props: PageProps<"/super-admin/pl
   const rows = await listPlanChangeRequests(user, view);
   return (
     <>
-      <PageHeader icon={SparklesIcon} tone="purple" title="Plan requests" description="Schools asking to change plan. Approving moves the school to the plan now (modules and roles follow unless adjusted for the school). Payment is arranged outside SchoolOS." />
+      <PageHeader icon={SparklesIcon} tone="purple" title="Plan requests" description="Schools asking to change plan. Approving moves every campus of the organization to the plan now. Campus modules stay as they are — newly eligible ones are switched on by the school. Payment is arranged outside SchoolOS." />
       <ViewTabs
         label="Status"
         tabs={[{ href: "/super-admin/plan-requests", label: "All", active: view === null }, ...VIEWS.map((key) => ({ href: `/super-admin/plan-requests?status=${key}`, label: STATUS[key]!.label, active: view === key }))]}

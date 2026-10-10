@@ -1,5 +1,7 @@
 import "server-only";
 
+import { assertNotDemo } from "@/server/demo/guard";
+
 import { createHash, randomBytes } from "node:crypto";
 
 import type { ApiTokenScope } from "@/generated/prisma/enums";
@@ -135,6 +137,7 @@ export async function createApiToken(
 ): Promise<{ token: string; id: string }> {
   assertRole(actor, "SCHOOL_ADMIN", "SUPER_ADMIN");
 
+  assertNotDemo(actor, "API tokens");
   if (input.expiresAt && input.expiresAt.getTime() <= Date.now()) {
     throw new ConflictError("Choose an expiry date in the future.");
   }

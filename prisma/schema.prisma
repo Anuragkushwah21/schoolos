@@ -346,6 +346,45 @@ enum PlanTier {
   PRO
 }
 
+enum PlanStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum BillingPeriod {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum FeatureRequestStatus {
+  SUBMITTED
+  NEEDS_INFO
+  UNDER_EVALUATION
+  APPROVED
+  IN_DEVELOPMENT
+  TESTING
+  RELEASED
+  DECLINED
+}
+
+enum FeatureRequestPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// What a released custom feature becomes — decided by the Super Admin, never
+/// implied by the requester's plan.
+enum FeatureReleaseScope {
+  CUSTOMER_SPECIFIC
+  OPTIONAL_MODULE
+  STANDARD_FEATURE
+  PREMIUM_ADDON
+}
+
 /// An exam's results are hidden from students and parents until it is
 /// PUBLISHED. Only the School Admin publishes.
 enum ExamStatus {
@@ -386,6 +425,20 @@ enum MeetingStatus {
 enum MeetingType {
   PTM
   GENERAL
+}
+
+/// A parent's optional answer to a PTM invitation. No answer = not responded.
+enum PtmResponse {
+  WILL_ATTEND
+  UNABLE_TO_ATTEND
+}
+
+/// What actually happened, recorded by a teacher after the PTM — separate
+/// from what the parent said beforehand.
+enum PtmAttendance {
+  ATTENDED
+  DID_NOT_ATTEND
+  RESCHEDULED
 }
 
 /// A group of people a meeting is for. ALL stands for every group, including
@@ -631,11 +684,13 @@ model User {
   school   School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
   sessions               Session[]
-  ownedOrganization      Organization?       @relation("OrganizationOwner")
-  campusRequests         CampusRequest[]     @relation("CampusRequester")
-  planRequests           PlanChangeRequest[] @relation("PlanRequester")
-  planRequestsReviewed   PlanChangeRequest[] @relation("PlanReviewer")
-  campusRequestsReviewed CampusRequest[]     @relation("CampusReviewer")
+  ownedOrganization      Organization?         @relation("OrganizationOwner")
+  campusRequests         CampusRequest[]       @relation("CampusRequester")
+  featureRequests        FeatureRequest[]      @relation("FeatureRequester")
+  featureRequestEvents   FeatureRequestEvent[] @relation("FeatureRequestActor")
+  planRequests           PlanChangeRequest[]   @relation("PlanRequester")
+  planRequestsReviewed   PlanChangeRequest[]   @relation("PlanReviewer")
+  campusRequestsReviewed CampusRequest[]       @relation("CampusReviewer")
   apiTokens              ApiToken[]
   teacher                Teacher?
   student                Student?
@@ -801,6 +856,12 @@ model School {
   optionalModules   String[] @default(["FINANCE", "EXPENSES", "PAYROLL", "LIBRARY", "TRANSPORT", "INVENTORY"])
   modulesCustomized Boolean  @default(false)
 
+  /// A Live Demo sandbox: fictional data for one website visitor, deleted
+  /// after `demoExpiresAt`. Never a real school — hidden from the platform's
+  /// lists and reports and from public school pages, and it sends no email.
+  isDemo        Boolean   @default(false)
+  demoExpiresAt DateTime?
+
   /// The optional roles this campus may use (see lib/school-roles.ts): copied
   /// from its plan, unless the Super Admin adjusted them (`rolesCustomized`).
   /// Core roles (School Admin, Teacher, Parent, Student) are always available.
@@ -861,38 +922,42 @@ model School {
   // --- fee receipts ---
   /// Printed under the school's name on every fee receipt, e.g. the board
   /// affiliation or registration number.
-  receiptHeaderNote        String?
+  receiptHeaderNote          String?
   /// Printed at the foot of every fee receipt, e.g. "Fees once paid are not
   /// refundable."
-  receiptFooterNote        String?
+  receiptFooterNote          String?
   /// Library fine per day overdue, in paise. Zero means no fines.
-  libraryFinePerDayMinor   Int     @default(200)
+  libraryFinePerDayMinor     Int     @default(200)
   /// Default loan period for a new issue, in days.
-  libraryLoanDays          Int     @default(14)
+  libraryLoanDays            Int     @default(14)
   /// Books a borrower may hold at once.
-  libraryMaxLoans          Int     @default(3)
+  libraryMaxLoans            Int     @default(3)
   /// The last copy number issued (BK-0001, BK-0002, …).
-  lastBookCopyNumber       Int     @default(0)
+  lastBookCopyNumber         Int     @default(0)
   /// How many days back a student leave request may start. 0: from today only.
-  studentLeaveBackdateDays Int     @default(7)
+  studentLeaveBackdateDays   Int     @default(7)
   /// Retired 8 Oct 2026 and no longer read or written: students never see
   /// fees. Kept so existing rows and migrations stay intact.
-  showFeesToStudents       Boolean @default(false)
+  showFeesToStudents         Boolean @default(false)
   /// A subject "needs attention" below this percentage (see server/exams/attention.ts).
-  needsAttentionPercent    Int     @default(40)
+  needsAttentionPercent      Int     @default(40)
   /// …or when this many of the last three tests are below it.
-  needsAttentionRepeat     Int     @default(2)
+  needsAttentionRepeat       Int     @default(2)
+  /// A student's attendance needs attention below this percentage…
+  attendanceAttentionPercent Int     @default(75)
+  /// …over this many most recent days (registers marked in that window).
+  attendanceAttentionDays    Int     @default(30)
   /// Lets the fee desk take one payment for several siblings, split per child.
-  familyPaymentEnabled     Boolean @default(false)
+  familyPaymentEnabled       Boolean @default(false)
   /// The school's grading scale: [{"min": 91, "grade": "A1"}, …] from highest
   /// to lowest, the last band starting at 0. Null: the CBSE nine-point scale.
-  gradeBands               Json?
+  gradeBands                 Json?
   /// A paper without its own pass mark passes at this percentage.
-  passPercent              Int     @default(33)
+  passPercent                Int     @default(33)
   /// Late fee added once to each instalment still unpaid this many days after
   /// its due date (paise). Zero: no late fees.
-  lateFeeMinor             Int     @default(0)
-  lateFeeGraceDays         Int     @default(0)
+  lateFeeMinor               Int     @default(0)
+  lateFeeGraceDays           Int     @default(0)
 
   /// When the daily register is taken, and whether it submits itself.
   attendanceTiming     RegisterTiming     @default(FIRST_PERIOD)
@@ -929,6 +994,7 @@ model School {
   planRequests          PlanChangeRequest[]
   campusRequestCreated  CampusRequest[]            @relation("CampusRequestCreatedSchool")
   campusRequestsFrom    CampusRequest[]            @relation("CampusRequestFromSchool")
+  featureRequests       FeatureRequest[]
   apiTokens             ApiToken[]
   emailVerifications    EmailVerification[]
   academicSessions      AcademicSession[]
@@ -978,6 +1044,7 @@ model School {
   meetingSections       MeetingSection[]
   meetingRecipients     MeetingRecipient[]
   meetingStudents       MeetingStudent[]
+  ptmFamilies           PtmFamily[]
   statusChanges         StatusChange[]
   studentSupports       StudentSupport[]
   supportNotes          SupportNote[]
@@ -1027,6 +1094,7 @@ model School {
   @@index([status])
   @@index([createdAt])
   @@index([organizationId])
+  @@index([isDemo, demoExpiresAt])
 }
 
 /// A term exam for one section — "Half-Yearly 2026" for 10-A. Its papers are
@@ -1141,10 +1209,11 @@ model Meeting {
   academicSession AcademicSession? @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   createdBy       User?            @relation("MeetingCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
-  sections   MeetingSection[]
-  recipients MeetingRecipient[]
-  students   MeetingStudent[]
-  supports   StudentSupport[]
+  sections    MeetingSection[]
+  recipients  MeetingRecipient[]
+  students    MeetingStudent[]
+  supports    StudentSupport[]
+  ptmFamilies PtmFamily[]
 
   @@unique([schoolId, id])
   @@index([schoolId, date])
@@ -1174,6 +1243,34 @@ model MeetingStudent {
   schoolId  String
   meetingId String
   studentId String
+
+  school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  meeting Meeting @relation(fields: [schoolId, meetingId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  student Student @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, meetingId, studentId])
+  @@index([schoolId, studentId])
+}
+
+/// One child's family at one PTM: the parent's optional response, and what a
+/// teacher recorded afterwards. One row per PTM and child (never duplicated).
+/// `remarks` and `followUp` are staff-only notes, never shown to the family.
+model PtmFamily {
+  id            String         @id @default(cuid())
+  schoolId      String
+  meetingId     String
+  studentId     String
+  response      PtmResponse?
+  respondedById String?
+  respondedAt   DateTime?
+  attendance    PtmAttendance?
+  remarks       String?
+  followUp      String?
+  recordedById  String?
+  recordedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
   school  School  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   meeting Meeting @relation(fields: [schoolId, meetingId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
@@ -1962,12 +2059,18 @@ model AssetEvent {
 /// Subscription plan offered by the platform. Priced in paise/cents to keep
 /// money in integers and out of floating point.
 model Plan {
-  id              String   @id @default(cuid())
-  tier            PlanTier @unique
+  id              String    @id @default(cuid())
+  /// The three original plans keep their tier; plans made in the Plan Builder have none.
+  tier            PlanTier? @unique
+  /// Stable key for links and registration (`/register?plan=growth`). Never a display name.
+  slug            String    @unique
+  /// The template this plan started from ("starter", "growth", "pro"), so the
+  /// Plan Builder can say "Customized" and restore its defaults. Null: none.
+  templateKey     String?
   name            String
   description     String?
   priceMinor      Int
-  currency        String   @default("INR")
+  currency        String    @default("INR")
   /// Null means unlimited.
   maxStudents     Int?
   maxTeachers     Int?
@@ -1975,17 +2078,43 @@ model Plan {
   storageMb       Int?
   /// Optional modules this plan includes (keys of OPTIONAL_MODULES in
   /// lib/school-modules.ts). Core modules are always on and are not listed.
-  optionalModules String[] @default([])
+  optionalModules String[]  @default([])
   /// How many campuses (schools) one Owner/Organization may run on this plan.
   /// 1 = single school only: multi-campus is off.
-  campusLimit     Int      @default(1)
+  campusLimit     Int       @default(1)
   /// Optional roles the plan includes (lib/school-roles.ts). Core roles are always on.
-  availableRoles  String[] @default(["PRINCIPAL", "ACCOUNTANT", "RECEPTIONIST", "LIBRARIAN", "DRIVER", "TRANSPORT_ATTENDANT", "PEON", "OFFICE_STAFF", "COORDINATOR", "SECURITY", "LAB_ASSISTANT", "OTHER"])
+  availableRoles  String[]  @default(["PRINCIPAL", "ACCOUNTANT", "RECEPTIONIST", "LIBRARIAN", "DRIVER", "TRANSPORT_ATTENDANT", "PEON", "OFFICE_STAFF", "COORDINATOR", "SECURITY", "LAB_ASSISTANT", "OTHER"])
   /// Per-role/user limits (key → maximum); a missing key is unlimited.
-  roleLimits      Json     @default("{}")
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  roleLimits      Json      @default("{}")
+  /// Open for new registrations and plan requests (activate / deactivate).
+  isActive        Boolean   @default(true)
+
+  /// DRAFT: never published, hidden. PUBLISHED: the live configuration.
+  /// ARCHIVED: hidden from everyone new; existing subscriptions carry on.
+  status                PlanStatus    @default(PUBLISHED)
+  displayOrder          Int           @default(0)
+  /// Short selling points for the public plan card.
+  highlights            String[]      @default([])
+  billingPeriod         BillingPeriod @default(YEARLY)
+  /// Prices not decided: show "Price on request", never a number.
+  priceOnRequest        Boolean       @default(false)
+  /// Organization-level features (lib/plan-features.ts), e.g. the organization dashboard.
+  features              String[]      @default([])
+  /// `campusLimit` is the number of campuses included in the plan fee. Past
+  /// it, more campuses are possible only when allowed, at the price below.
+  extraCampusAllowed    Boolean       @default(false)
+  extraCampusPriceMinor Int?
+  extraCampusPeriod     BillingPeriod @default(YEARLY)
+  /// Hard cap on campuses including extras; null = no cap.
+  maxCampuses           Int?
+  /// Unpublished edits from the Plan Builder. Nothing reads them except the
+  /// builder and its preview; publishing copies them onto the columns above.
+  draft                 Json?
+  draftUpdatedAt        DateTime?
+  draftById             String?
+  publishedAt           DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
   subscriptions Subscription[]
   requestedBy   PlanChangeRequest[] @relation("PlanRequested")
@@ -2393,6 +2522,7 @@ model Student {
   admissionApplication AdmissionApplication?
   enquiryChild         EnquiryChild?
   meetingInvites       MeetingStudent[]
+  ptmFamilies          PtmFamily[]
   statusChanges        StatusChange[]
   supports             StudentSupport[]
   supportConcerns      SupportConcern[]
@@ -4197,9 +4327,74 @@ model Organization {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  owner    User?           @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  schools  School[]
-  requests CampusRequest[]
+  owner           User?            @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  schools         School[]
+  requests        CampusRequest[]
+  featureRequests FeatureRequest[]
+}
+
+/// A school owner's request for something SchoolOS does not do yet. Reviewed
+/// by the Super Admin; cost, scope and timeline are agreed before work starts.
+model FeatureRequest {
+  id              String                 @id @default(cuid())
+  organizationId  String
+  /// The campus it is for (any campus of the organization), if one.
+  schoolId        String?
+  requestedById   String?
+  title           String
+  problem         String
+  description     String
+  expectedOutcome String?
+  /// A module key (core or optional) it relates to, if any.
+  moduleKey       String?
+  priority        FeatureRequestPriority @default(MEDIUM)
+  examples        String?
+  status          FeatureRequestStatus   @default(SUBMITTED)
+
+  estimatedTimeline  String?
+  estimatedCostMinor Int?
+  costAgreed         Boolean              @default(false)
+  /// Customer-specific vs product-wide is the Super Admin's call.
+  potentialStandard  Boolean              @default(false)
+  releaseScope       FeatureReleaseScope?
+  /// Plans and organizations eligible after release (ids), per the scope.
+  eligiblePlanIds    String[]             @default([])
+  eligibleOrgIds     String[]             @default([])
+  releaseNote        String?
+  approvedById       String?
+  approvedAt         DateTime?
+  developedBy        String?
+  testedBy           String?
+  releasedById       String?
+  releasedAt         DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  school       School?               @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  requestedBy  User?                 @relation("FeatureRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  events       FeatureRequestEvent[]
+
+  @@index([organizationId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// The history and discussion of a feature request. `internal` notes are the
+/// Super Admin's own and never shown to the school.
+model FeatureRequestEvent {
+  id         String                @id @default(cuid())
+  requestId  String
+  actorId    String?
+  fromStatus FeatureRequestStatus?
+  toStatus   FeatureRequestStatus?
+  body       String?
+  internal   Boolean               @default(false)
+  createdAt  DateTime              @default(now())
+
+  request FeatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor   User?          @relation("FeatureRequestActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([requestId, createdAt])
 }
 
 enum CampusRequestStatus {
@@ -4236,16 +4431,21 @@ model CampusRequest {
   expectedStaff    Int?
   notes            String?
 
-  requestedModules String[]
-  requestedRoles   String[]
-  requestedLimits  Json     @default("{}")
+  requestedModules    String[]
+  requestedRoles      String[]
+  requestedLimits     Json           @default("{}")
   /// What the request asks for beyond the organization's plan at the time
   /// (campus limit, modules, roles, limits) — shown to the Super Admin.
   /// Asking is always allowed; activation needs the entitlement.
-  entitlementNotes String[] @default([])
-  approvedModules  String[]
-  approvedRoles    String[]
-  approvedLimits   Json?
+  entitlementNotes    String[]       @default([])
+  approvedModules     String[]
+  approvedRoles       String[]
+  approvedLimits      Json?
+  /// The extra-campus fee quoted when the request was made (beyond the
+  /// plan's included campuses), so the Super Admin sees what was shown.
+  /// A quote only — nothing is charged by SchoolOS.
+  quotedExtraFeeMinor Int?
+  quotedExtraPeriod   BillingPeriod?
 
   reviewedById    String?
   reviewedAt      DateTime?

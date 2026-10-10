@@ -1,4 +1,6 @@
 import { ShellChrome } from "@/components/shared/shell-chrome";
+import { DemoBanner } from "@/features/demo/forms";
+import { demoPlanState, demoRoleOf } from "@/server/demo/sessions";
 import { NAV_BY_ROLE, type NavItem } from "@/lib/nav";
 import { roleProfilePath } from "@/lib/roles";
 import type { SessionUser } from "@/server/auth/session";
@@ -40,7 +42,7 @@ export async function AppShell({
   ]);
   const links = nav ?? NAV_BY_ROLE[user.role];
 
-  return (
+  const shell = (
     <ShellChrome
       nav={modules ? withinModules(links, modules) : links}
       modules={modules}
@@ -57,5 +59,15 @@ export async function AppShell({
     >
       {children}
     </ShellChrome>
+  );
+  // The Live Demo: a bar on every page says so, with role switch, reset and exit.
+  const demoRole = user.isDemo ? demoRoleOf(user) : null;
+  if (!demoRole) return shell;
+  const demoPlan = user.schoolId ? await demoPlanState(user.schoolId).catch(() => null) : null;
+  return (
+    <div className="flex min-h-full flex-1 flex-col">
+      <DemoBanner role={demoRole} expiresAt={user.demoExpiresAt ?? null} plans={demoPlan?.plans ?? []} currentPlan={demoPlan?.current ?? null} />
+      {shell}
+    </div>
   );
 }

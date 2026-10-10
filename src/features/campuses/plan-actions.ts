@@ -1,13 +1,15 @@
 "use server";
 
 import { type ActionResult, parseFormData, successResult } from "@/lib/action-result";
-import { planApproveSchema, planRejectSchema, planRequestIdSchema, planRequestSchema } from "@/lib/validation/campuses";
+import { campusModulesSchema, planApproveSchema, planRejectSchema, planRequestIdSchema, planRequestSchema } from "@/lib/validation/campuses";
 import { requireRoleForAction, requireTenantForAction } from "@/server/auth/current-user";
+import { setCampusModules } from "@/server/campuses/modules";
 import { performAction } from "@/server/perform-action";
 import { approvePlanChange, cancelPlanChange, rejectPlanChange, requestPlanChange } from "@/server/platform/plan-requests";
 
 type Result = ActionResult<undefined>;
-const paths = ["/school-admin/plan", "/school-admin/campuses", "/super-admin/plan-requests", "/super-admin/schools"];
+// A plan decision changes what every signed-in area shows (sidebar badge, dashboards, Plan & billing).
+const paths = ["/"];
 
 /** Ask for another plan. Nothing changes until SchoolOS approves. */
 export async function requestPlanChangeAction(_p: Result, formData: FormData): Promise<Result> {
@@ -40,4 +42,14 @@ export async function rejectPlanChangeAction(_p: Result, formData: FormData): Pr
     await rejectPlanChange(await requireRoleForAction("SUPER_ADMIN"), input.requestId, input.reason);
     return successResult("Plan request rejected.");
   }, { revalidate: paths });
+}
+
+/** Switch eligible modules on or off for one campus (owner: any campus; School Admin: their own). */
+export async function setCampusModulesAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(async () => {
+    const ctx = await requireTenantForAction("SCHOOL_ADMIN");
+    const input = parseFormData(campusModulesSchema, formData);
+    const { added, removed } = await setCampusModules(ctx, input.schoolId, input.modules);
+    return successResult(added.length || removed.length ? "Modules updated for this campus." : "Nothing changed.");
+  }, { revalidate: [...paths, "/school-admin"] });
 }

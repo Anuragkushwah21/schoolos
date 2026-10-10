@@ -11,7 +11,32 @@ export type ConnectionConfig = {
   connectionString: string;
   ssl?: { rejectUnauthorized: boolean };
   stream?: () => net.Socket;
+  connectionTimeoutMillis?: number;
+  idleTimeoutMillis?: number;
+  keepAlive?: boolean;
+  keepAliveInitialDelayMillis?: number;
 };
+
+/**
+ * Pool timing for a hosted Postgres behind a pooler (Neon, Supabase).
+ *
+ *   * `connectionTimeoutMillis` — give up on a connection attempt after 10 s
+ *     with a clear error, instead of pg's default of waiting forever (in
+ *     practice the OS TCP timeout, ~75 s on macOS, which is what a request
+ *     hanging for 76 s and ending in ETIMEDOUT looks like).
+ *   * `idleTimeoutMillis` — close our idle connections after 20 s, before the
+ *     provider drops them (Neon closes idle connections and suspends idle
+ *     computes). Reusing a connection the server already closed is the other
+ *     way to hang until the TCP timeout.
+ *   * `keepAlive` — TCP keep-alives, so a connection that died in between is
+ *     noticed rather than written to.
+ */
+const POOL_TIMING = {
+  connectionTimeoutMillis: 10_000,
+  idleTimeoutMillis: 20_000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
+} as const;
 
 /**
  * Public resolvers to fall back to, in order.
@@ -140,5 +165,6 @@ export function connectionConfig(databaseUrl: string): ConnectionConfig {
     // providers serve, and what `sslmode=require` already meant here.
     ...(wantsTls ? { ssl: { rejectUnauthorized: true } } : {}),
     stream: resilientStream,
+    ...POOL_TIMING,
   };
 }

@@ -20,6 +20,7 @@ import { CampusLimitForm } from "@/features/campuses/forms";
 import {
   CreateAdminForm,
   ReasonForm,
+  RenameSchoolForm,
   SchoolRolesForm,
   ResetPasswordForm,
   SubscriptionForm,
@@ -206,10 +207,10 @@ export default async function PlatformSchoolPage(
           {/* ---------------- feature access ---------------- */}
           <Card id="features" className="scroll-mt-24">
             <CardHeader>
-              <CardTitle>Feature access</CardTitle>
+              <CardTitle>Campus modules (Super Admin)</CardTitle>
               <CardDescription>
                 {subscription ? `Plan: ${subscription.plan.name}. ` : "No plan yet. "}
-                {school.modulesCustomized ? "Optional modules adjusted for this school." : "Optional modules follow the plan."} Core modules are always on.
+                The school&apos;s owner normally switches eligible modules on in Plan &amp; billing. Use this for an exception at this campus only. Core modules are always on.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-5">
@@ -227,6 +228,17 @@ export default async function PlatformSchoolPage(
                   customized={school.modulesCustomized}
                 />
               </div>
+            </CardContent>
+          </Card>
+
+          {/* ---------------- name ---------------- */}
+          <Card>
+            <CardHeader>
+              <CardTitle>School / campus name</CardTitle>
+              <CardDescription>Shown wherever this school or campus appears. The school&apos;s id and records do not change.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RenameSchoolForm schoolId={school.id} name={school.name} />
             </CardContent>
           </Card>
 
@@ -262,6 +274,9 @@ export default async function PlatformSchoolPage(
                   ))}
                 </ul>
                 <CampusLimitForm organizationId={school.organization.id} current={school.organization.campusLimitOverride} />
+                <Link href={`/super-admin/organizations/${school.organization.id}`} className="text-primary font-medium hover:underline">
+                  Open the organization — plan, all campuses and history
+                </Link>
               </CardContent>
             </Card>
           ) : null}
@@ -334,7 +349,15 @@ export default async function PlatformSchoolPage(
                   : "No plan assigned yet."}
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-col gap-3">
+              {school.organization ? (
+                <p className="bg-info-soft text-info-strong rounded-lg px-3 py-2 text-sm">
+                  {`One plan for the organization: saving applies to all ${school.organization.schools.filter((row) => ["PENDING", "UNDER_REVIEW", "ACTIVE", "SUSPENDED"].includes(row.status)).length} campus(es) of ${school.organization.name}. `}
+                  <Link href={`/super-admin/organizations/${school.organization.id}`} className="font-medium underline">
+                    Compare plans on the organization page
+                  </Link>
+                </p>
+              ) : null}
               <SubscriptionForm
                 schoolId={school.id}
                 plans={plans.map((plan) => ({

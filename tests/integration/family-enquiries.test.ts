@@ -271,6 +271,8 @@ describe("existing parent and admission", () => {
     // Meher's discount cannot be put on Vir's fee.
     await expect(applyDiscussedConcessions(adminOf(schoolA), { enquiryId: id, confirm: true, items: [{ childId: meher!.id, chargeId: virCharge.id, amountMinor: 400_000 }] })).rejects.toBeInstanceOf(ValidationError);
     await expect(applyDiscussedConcessions(teacherOf(schoolA), { enquiryId: id, confirm: true, items: [{ childId: meher!.id, chargeId: meherCharge.id, amountMinor: 400_000 }] })).rejects.toBeInstanceOf(ForbiddenError);
+    // The Principal oversees admissions but never changes fee records.
+    await expect(applyDiscussedConcessions({ ...adminOf(schoolA), user: { ...adminOf(schoolA).user, role: "PRINCIPAL" } }, { enquiryId: id, confirm: true, items: [{ childId: meher!.id, chargeId: meherCharge.id, amountMinor: 400_000 }] })).rejects.toBeInstanceOf(ForbiddenError);
     expect(await prisma.feeConcession.count({ where: { schoolId: schoolA.schoolId } })).toBe(0);
 
     await applyDiscussedConcessions(adminOf(schoolA), { enquiryId: id, confirm: true, items: [{ childId: meher!.id, chargeId: meherCharge.id, amountMinor: 400_000 }] });

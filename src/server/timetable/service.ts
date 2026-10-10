@@ -153,6 +153,18 @@ async function claimSection(tx: Tx, schoolId: string, section: SectionRef, overl
 type Tx = Parameters<Parameters<TenantContext["db"]["$transaction"]>[0]>[0];
 
 /**
+ * Lock the teacher and check their periods again inside the write: the check
+ * before the transaction alone lets two saves at the same moment both put
+ * one teacher in partly overlapping periods (the unique index only catches
+ * identical start times).
+ */
+async function claimTeacher(tx: Tx, schoolId: string, teacher: { id: string; firstName: string; lastName: string }, overlapping: Record<string, unknown>) {
+  await tx.teacher.updateMany({ where: { schoolId, id: teacher.id }, data: { updatedAt: new Date() } });
+  const clash = await tx.timetableSlot.findFirst({ where: { schoolId, ...overlapping, teacherId: teacher.id } });
+  if (clash) throw new ConflictError(overlapMessage(`${teacher.firstName} ${teacher.lastName}`, clash));
+}
+
+/**
  * Lock the room and make sure nothing else is in it at that time. Runs inside
  * the transaction that writes the period, so the check and the write cannot
  * be split by another admin's save.
@@ -215,6 +227,7 @@ export async function createSlot(ctx: TenantContext, input: PeriodInput & { sect
   try {
     await ctx.db.$transaction(async (tx) => {
       await claimSection(tx, ctx.schoolId, section, overlapping, streamId);
+      await claimTeacher(tx, ctx.schoolId, teacher, overlapping);
       if (room) await claimRoom(tx, ctx.schoolId, room, overlapping);
       await tx.timetableSlot.create({
         data: {
@@ -305,6 +318,7 @@ export async function updateSlot(ctx: TenantContext, input: Omit<SlotUpdateInput
   try {
     await ctx.db.$transaction(async (tx) => {
       await claimSection(tx, ctx.schoolId, slot.section, overlapping, streamId);
+      await claimTeacher(tx, ctx.schoolId, teacher, overlapping);
       if (room) await claimRoom(tx, ctx.schoolId, room, overlapping);
       await tx.timetableSlot.updateMany({
         where: { schoolId: ctx.schoolId, id: slot.id },

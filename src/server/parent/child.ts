@@ -379,6 +379,7 @@ export async function getChildHomework(ctx: TenantContext, studentId: string) {
       dueOn: true,
       subject: { select: { name: true } },
       teacher: { select: { firstName: true, lastName: true } },
+      resources: { select: { id: true, kind: true, url: true, fileName: true, fileSize: true } },
     },
   });
 
@@ -401,6 +402,7 @@ export async function getChildHomework(ctx: TenantContext, studentId: string) {
       dueOn: row.dueOn,
       subject: row.subject.name,
       teacher: fullName(row.teacher),
+      resources: row.resources,
       bucket,
     };
   });

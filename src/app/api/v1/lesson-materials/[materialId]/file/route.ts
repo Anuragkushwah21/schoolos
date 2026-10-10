@@ -6,14 +6,15 @@ import { readMaterialFile } from "@/server/classwork/lessons";
 /**
  * An uploaded lesson PDF, streamed to someone allowed to read that lesson.
  *
- * `readMaterialFile` decides who that is — the student's own section, the
- * teacher who took the class, or the school office — and answers 404 for
- * everything else, another school's id included. Parents are not a role here.
+ * `readMaterialFile` decides who that is — the student's own section, a
+ * parent's own children's sections, the teacher who took the class, or the
+ * school office — and answers 404 for everything else, another school's id
+ * included.
  *
  * `?download=1` asks the browser to save it; otherwise it opens in place.
  */
 export const GET = apiRoute<{ materialId: string }>(
-  { roles: ["STUDENT", "TEACHER", "SCHOOL_ADMIN"] },
+  { roles: ["STUDENT", "PARENT", "TEACHER", "SCHOOL_ADMIN", "PRINCIPAL"] },
   async ({ request, params, ctx }) => {
     const file = await readMaterialFile(ctx, params.materialId);
     const disposition = request.nextUrl.searchParams.get("download") ? "attachment" : "inline";

@@ -128,8 +128,8 @@ export async function chargeSectionAction(_p: Result, formData: FormData): Promi
     async () => {
       const ctx = await accounts();
       const { installmentCount, installmentEveryMonths, ...input } = parseFormData(chargeSectionSchema, formData);
-      const { charged } = await chargeSection(ctx, { ...input, installments: installmentDates(input.dueOn, installmentCount, installmentEveryMonths) });
-      return successResult(charged === 1 ? "Charged 1 student." : `Charged ${charged} students.`);
+      const { charged, skipped } = await chargeSection(ctx, { ...input, installments: installmentDates(input.dueOn, installmentCount, installmentEveryMonths) });
+      return successResult(`${charged === 1 ? "Charged 1 student." : `Charged ${charged} students.`}${skipped ? ` ${skipped} already had this fee and ${skipped === 1 ? "was" : "were"} left unchanged — correct ${skipped === 1 ? "that student" : "them"} one by one.` : ""}`);
     },
     { revalidate: FINANCE_PAGES },
   );

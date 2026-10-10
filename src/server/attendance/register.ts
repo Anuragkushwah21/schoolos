@@ -191,8 +191,10 @@ export async function getRegister(ctx: TenantContext, sectionId: string, date: D
 
   const [enrollments, marks, closure, state, settings] = await Promise.all([
     ctx.db.studentEnrollment.findMany({
-      where: { sectionId: section.id, status: "ACTIVE", student: { status: "ACTIVE" } },
-      select: { rollNumber: true, student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true } } },
+      // A student on long leave is still on the roll and is marked (usually
+      // "Leave") — leaving them out would make the register look complete.
+      where: { sectionId: section.id, status: "ACTIVE", student: { status: { in: ["ACTIVE", "ON_LEAVE"] } } },
+      select: { rollNumber: true, student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true, status: true } } },
     }),
     ctx.db.studentAttendance.findMany({
       where: { sectionId: section.id, date },
@@ -219,8 +221,8 @@ export async function getRegister(ctx: TenantContext, sectionId: string, date: D
         rollNumber: enrollment.rollNumber,
         status: mark?.status ?? null,
         remarks: mark?.remarks ?? null,
-        /** The reason, when the student is on approved leave today. */
-        leave: onLeave.get(enrollment.student.id) ?? null,
+        /** The reason, when the student is on approved leave today (or on long leave). */
+        leave: onLeave.get(enrollment.student.id) ?? (enrollment.student.status === "ON_LEAVE" ? "On long leave (student status)" : null),
       };
     });
 

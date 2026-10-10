@@ -21,11 +21,11 @@ export async function schoolGrowth(actor: SessionUser, months = 12) {
 
   const [registered, approved] = await Promise.all([
     prisma.school.findMany({
-      where: { createdAt: { gte: start } },
+      where: { createdAt: { gte: start }, isDemo: false },
       select: { createdAt: true },
     }),
     prisma.school.findMany({
-      where: { reviewedAt: { gte: start }, status: "ACTIVE" },
+      where: { reviewedAt: { gte: start }, status: "ACTIVE", isDemo: false },
       select: { reviewedAt: true },
     }),
   ]);
@@ -67,7 +67,7 @@ export async function schoolGrowth(actor: SessionUser, months = 12) {
 export async function schoolsByStatus(actor: SessionUser) {
   assertRole(actor, "SUPER_ADMIN");
 
-  const rows = await prisma.school.groupBy({ by: ["status"], _count: { _all: true } });
+  const rows = await prisma.school.groupBy({ by: ["status"], where: { isDemo: false }, _count: { _all: true } });
   const count = (status: string) => rows.find((row) => row.status === status)?._count._all ?? 0;
 
   return {
@@ -110,10 +110,11 @@ export async function platformTotals(actor: SessionUser) {
   assertRole(actor, "SUPER_ADMIN");
 
   const [students, teachers, parents, users, liveTokens] = await Promise.all([
-    prisma.student.count({ where: { status: "ACTIVE" } }),
-    prisma.teacher.count({ where: { status: { in: ["ACTIVE", "ON_LEAVE"] } } }),
-    prisma.parent.count(),
-    prisma.user.count({ where: { isActive: true } }),
+    // Live Demo sandboxes are fictional: never part of the platform's figures.
+    prisma.student.count({ where: { status: "ACTIVE", school: { isDemo: false } } }),
+    prisma.teacher.count({ where: { status: { in: ["ACTIVE", "ON_LEAVE"] }, school: { isDemo: false } } }),
+    prisma.parent.count({ where: { school: { isDemo: false } } }),
+    prisma.user.count({ where: { isActive: true, OR: [{ schoolId: null }, { school: { isDemo: false } }] } }),
     prisma.apiToken.count({ where: { revokedAt: null } }),
   ]);
 
@@ -125,7 +126,7 @@ export async function largestSchools(actor: SessionUser, take = 6) {
   assertRole(actor, "SUPER_ADMIN");
 
   const schools = await prisma.school.findMany({
-    where: { status: "ACTIVE" },
+    where: { status: "ACTIVE", isDemo: false },
     select: {
       id: true,
       name: true,
@@ -163,6 +164,7 @@ export async function schoolTracker(actor: SessionUser, filters: { q?: string | 
     prisma.school.findMany({
       where: {
         status: { not: "REJECTED" },
+        isDemo: false,
         ...(q
           ? {
               OR: [
@@ -213,7 +215,7 @@ export async function schoolTracker(actor: SessionUser, filters: { q?: string | 
         },
       },
     }),
-    prisma.feePayment.groupBy({ by: ["schoolId"], where: { voidedAt: null }, _sum: { amountMinor: true } }),
+    prisma.feePayment.groupBy({ by: ["schoolId"], where: { voidedAt: null, school: { isDemo: false } }, _sum: { amountMinor: true } }),
   ]);
 
   const revenueBySchool = new Map(revenue.map((row) => [row.schoolId, row._sum.amountMinor ?? 0]));
@@ -267,7 +269,7 @@ export type TrackedSchool = Awaited<ReturnType<typeof schoolTracker>>["rows"][nu
 /** How many active schools have each optional module. */
 export async function moduleAdoption(actor: SessionUser) {
   assertRole(actor, "SUPER_ADMIN");
-  const schools = await prisma.school.findMany({ where: { status: "ACTIVE" }, select: { optionalModules: true } });
+  const schools = await prisma.school.findMany({ where: { status: "ACTIVE", isDemo: false }, select: { optionalModules: true } });
   const byModule: Record<string, number> = {};
   for (const school of schools) for (const key of cleanModules(school.optionalModules)) byModule[key] = (byModule[key] ?? 0) + 1;
   return { activeSchools: schools.length, byModule };
@@ -276,13 +278,14 @@ export async function moduleAdoption(actor: SessionUser) {
 /** Academic sessions marked current in active schools. */
 export async function activeSessionCount(actor: SessionUser): Promise<number> {
   assertRole(actor, "SUPER_ADMIN");
-  return prisma.academicSession.count({ where: { isCurrent: true, school: { status: "ACTIVE" } } });
+  return prisma.academicSession.count({ where: { isCurrent: true, school: { status: "ACTIVE", isDemo: false } } });
 }
 
 /** The most recent registrations, newest first, with their admin and requested plan. */
 export async function recentRegistrations(actor: SessionUser, take = 8) {
   assertRole(actor, "SUPER_ADMIN");
   const schools = await prisma.school.findMany({
+    where: { isDemo: false },
     orderBy: { createdAt: "desc" },
     take,
     select: {

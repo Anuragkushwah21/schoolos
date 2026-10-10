@@ -1,7 +1,12 @@
 import "server-only";
 
+import { assertNotDemo } from "@/server/demo/guard";
+
+import type { Prisma } from "@/generated/prisma/client";
+import { campusAllowanceText, quote } from "@/lib/plan-catalog";
+import { PUBLIC_PLAN_SELECT, presentPublicPlan } from "@/server/platform/marketing";
+
 import { ConflictError, NotFoundError } from "@/lib/errors";
-import { cleanModules } from "@/lib/school-modules";
 import { cleanRoles } from "@/lib/school-roles";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
@@ -20,20 +25,26 @@ import { setSubscription } from "@/server/platform/schools";
  * One open request per school at a time.
  */
 
-const PLAN_SELECT = { id: true, tier: true, name: true, description: true, priceMinor: true, currency: true, maxStudents: true, maxTeachers: true, roleLimits: true, availableRoles: true, optionalModules: true, campusLimit: true, isActive: true } as const;
-
-function presentPlan(plan: { id: string; tier: string; name: string; description: string | null; priceMinor: number; currency: string; maxStudents: number | null; maxTeachers: number | null; roleLimits: unknown; availableRoles: string[]; optionalModules: string[]; campusLimit: number }) {
-  return { ...plan, modules: cleanModules(plan.optionalModules), roles: cleanRoles(plan.availableRoles), limits: planLimits(plan), multiCampus: plan.campusLimit > 1 };
+function presentPlan(plan: Prisma.PlanGetPayload<{ select: typeof PUBLIC_PLAN_SELECT & { roleLimits: true; availableRoles: true; isActive: true; status: true } }>, campuses: number) {
+  const base = presentPublicPlan(plan);
+  return { ...base, roles: cleanRoles(plan.availableRoles), limits: planLimits(plan), multiCampus: plan.campusLimit > 1 || plan.extraCampusAllowed, quote: quote(base, campuses), allowance: campusAllowanceText(base) };
 }
 
-/** What the Upgrade Plan page shows: the current plan and entitlement, the plans on offer, and requests. */
+const OVERVIEW_SELECT = { ...PUBLIC_PLAN_SELECT, roleLimits: true, availableRoles: true, isActive: true, status: true } as const;
+
+/**
+ * What the Plan & billing page shows: the current plan and entitlement, the
+ * published plans with a full price breakdown for this organization's
+ * campuses, and requests. SchoolOS has no payment gateway — a price shown is
+ * what SchoolOS will bill after approval, never a charge already taken.
+ */
 export async function planOverview(ctx: TenantContext) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
   const schoolId = ctx.user.homeSchoolId ?? ctx.schoolId;
   const organizationId = await ensureOrganization(schoolId);
   const [current, plans, requests, campus, campuses] = await Promise.all([
     currentPlanOf(schoolId),
-    prisma.plan.findMany({ where: { isActive: true }, orderBy: { priceMinor: "asc" }, select: PLAN_SELECT }),
+    prisma.plan.findMany({ where: { isActive: true, status: "PUBLISHED" }, orderBy: [{ displayOrder: "asc" }, { priceMinor: "asc" }], select: OVERVIEW_SELECT }),
     prisma.planChangeRequest.findMany({
       where: { schoolId },
       orderBy: { createdAt: "desc" },
@@ -43,21 +54,23 @@ export async function planOverview(ctx: TenantContext) {
     campusLimitOf(organizationId),
     campusCount(organizationId),
   ]);
-  const currentRow = current ? await prisma.plan.findUnique({ where: { id: current.id }, select: PLAN_SELECT }) : null;
+  // The current plan is shown even when it is closed or archived for new customers.
+  const currentRow = current ? await prisma.plan.findUnique({ where: { id: current.id }, select: OVERVIEW_SELECT }) : null;
   return {
-    current: currentRow ? presentPlan(currentRow) : null,
-    plans: plans.map(presentPlan),
+    current: currentRow ? presentPlan(currentRow, campuses) : null,
+    plans: plans.map((plan) => presentPlan(plan, campuses)),
     requests,
     open: requests.find((request) => request.status === "PENDING") ?? null,
-    campus: { limit: campus.limit, used: campuses, overridden: campus.overridden },
+    campus: { limit: campus.limit, included: campus.included, used: campuses, overridden: campus.overridden },
   };
 }
 
 export async function requestPlanChange(ctx: TenantContext, input: { planId: string; note: string | null }) {
   assertRole(ctx.user, "SCHOOL_ADMIN");
+  assertNotDemo(ctx.user, "Plan changes");
   const schoolId = ctx.user.homeSchoolId ?? ctx.schoolId;
   const [plan, current, open] = await Promise.all([
-    prisma.plan.findFirst({ where: { id: input.planId, isActive: true }, select: { id: true, name: true } }),
+    prisma.plan.findFirst({ where: { id: input.planId, isActive: true, status: "PUBLISHED" }, select: { id: true, name: true } }),
     currentPlanOf(schoolId),
     prisma.planChangeRequest.findFirst({ where: { schoolId, status: "PENDING" }, select: { id: true } }),
   ]);
@@ -108,7 +121,15 @@ export async function approvePlanChange(actor: SessionUser, requestId: string, r
   // Claim it first, so a double approval changes the plan once.
   const { count } = await prisma.planChangeRequest.updateMany({ where: { id: row.id, status: "PENDING" }, data: { status: "APPROVED", reviewedById: actor.id, reviewedAt: new Date(), reviewNote } });
   if (!count) throw new ConflictError("This request is no longer waiting.");
-  await setSubscription(actor, { schoolId: row.schoolId, planId: row.requestedPlanId, status: "ACTIVE", startsAt: new Date(), endsAt: null, notes: `Plan request ${row.id.slice(-8).toUpperCase()} approved.` });
+  // One plan for the organization: `setSubscription` moves every campus
+  // together, in one transaction. If it fails, the request goes back to
+  // waiting — never "approved" with the old plan still in place.
+  try {
+    await setSubscription(actor, { schoolId: row.schoolId, planId: row.requestedPlanId, status: "ACTIVE", startsAt: new Date(), endsAt: null, notes: `Plan request ${row.id.slice(-8).toUpperCase()} approved.` });
+  } catch (error) {
+    await prisma.planChangeRequest.updateMany({ where: { id: row.id, status: "APPROVED" }, data: { status: "PENDING", reviewedById: null, reviewedAt: null, reviewNote: null } });
+    throw error;
+  }
   await recordAudit({ action: "PLAN_CHANGE_APPROVED", entityType: "PlanChangeRequest", entityId: row.id, schoolId: row.schoolId, actorId: actor.id, summary: `Plan request approved: now on ${row.requestedPlan.name}.${reviewNote ? ` ${reviewNote}` : ""}` });
 }
 

@@ -1,21 +1,25 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { SparklesIcon } from "lucide-react";
 
 import { ActionButton } from "@/components/forms/action-button";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge, type Tone } from "@/components/shared/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { cancelPlanChangeAction } from "@/features/campuses/plan-actions";
-import { RequestPlanForm } from "@/features/campuses/plan-forms";
+import { cancelPlanChangeAction, requestPlanChangeAction } from "@/features/campuses/plan-actions";
+import { CampusModulesForm } from "@/features/campuses/plan-forms";
+import { ComparisonTable, PlanPrice, QuoteBreakdown, extraCampusText } from "@/features/plans/plan-display";
 import { formatDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/format";
-import { moduleLabel } from "@/lib/school-modules";
+import { campusAllowanceText, featureLabel, periodLabel, quote } from "@/lib/plan-catalog";
+import { OPTIONAL_MODULES, moduleLabel } from "@/lib/school-modules";
 import { describeLimits, roleLabel } from "@/lib/school-roles";
 import { cn } from "@/lib/utils";
 import { requireTenant } from "@/server/auth/current-user";
+import { campusModulesOverview } from "@/server/campuses/modules";
 import { planOverview } from "@/server/platform/plan-requests";
 
-export const metadata: Metadata = { title: "Upgrade plan" };
+export const metadata: Metadata = { title: "Plan & billing" };
 
 const STATUS: Record<string, { label: string; tone: Tone }> = {
   PENDING: { label: "Waiting for SchoolOS", tone: "warning" },
@@ -24,41 +28,54 @@ const STATUS: Record<string, { label: string; tone: Tone }> = {
   CANCELLED: { label: "Withdrawn", tone: "neutral" },
 };
 
+const LABELS = Object.fromEntries(OPTIONAL_MODULES.map((module) => [module.key, { label: module.label, hint: module.hint }]));
+
 /**
- * Upgrade Plan: the current plan and campus entitlement, the plans on offer,
- * and requests. Online payment is not part of SchoolOS yet — choosing a plan
- * sends a request, and nothing changes until SchoolOS approves it.
+ * Plan & billing: the organization's plan, campus allowance and price
+ * breakdown; the published plans to move to; and which eligible modules each
+ * campus has switched on. Online payment is not part of SchoolOS — choosing
+ * a plan sends a request, and nothing changes (or is charged) until SchoolOS
+ * approves it.
  */
-export default async function UpgradePlanPage() {
+export default async function PlanPage() {
   const ctx = await requireTenant("SCHOOL_ADMIN");
-  const data = await planOverview(ctx);
+  const [data, modules] = await Promise.all([planOverview(ctx), campusModulesOverview(ctx)]);
   const current = data.current;
-  const rank = (priceMinor: number) => (current ? priceMinor - current.priceMinor : priceMinor);
+  const campuses = data.campus.used;
 
   return (
     <>
-      <PageHeader icon={SparklesIcon} tone="purple" title="Upgrade Plan" description="See what each plan includes and ask SchoolOS to move your school to another plan. Online payment is not available yet: SchoolOS confirms every change, and your plan stays the same until then." />
+      <PageHeader icon={SparklesIcon} tone="purple" title="Plan & billing" description="Your plan, what it costs for your campuses, and which modules each campus uses. SchoolOS does not take online payments: every change is a request that SchoolOS confirms." />
 
-      <div className="mb-6 grid gap-4 md:grid-cols-2">
+      <div className="mb-6 grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>{current ? `Current plan: ${current.name}` : "No plan yet"}</CardTitle>
-            <CardDescription>{current ? `${formatMoney(current.priceMinor, current.currency)} / year` : "SchoolOS has not set a plan for your school."}</CardDescription>
+            <CardDescription>{current ? campusAllowanceText(current) : "SchoolOS has not set a plan for your school yet."}</CardDescription>
           </CardHeader>
           {current ? (
-            <CardContent className="flex flex-col gap-1.5 text-sm">
-              <p>{`Modules: ${current.modules.map(moduleLabel).join(", ") || "core only"}`}</p>
-              <p>{`Roles: ${current.roles.map(roleLabel).join(", ") || "core only"}`}</p>
-              <p>{`Limits: ${describeLimits(current.limits)}`}</p>
+            <CardContent className="flex flex-col gap-3 text-sm">
+              <QuoteBreakdown plan={current} campuses={campuses} />
+              <p>{`Modules in the plan: ${current.optionalModules.map(moduleLabel).join(", ") || "core only"}`}</p>
+              {current.features.length ? <p>{`Also includes: ${current.features.map(featureLabel).join(", ")}`}</p> : null}
+              <p className="text-muted-foreground text-xs">{`Roles: ${current.roles.map(roleLabel).join(", ") || "core only"} · Limits: ${describeLimits(current.limits)}`}</p>
             </CardContent>
           ) : null}
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Campus entitlement</CardTitle>
-            <CardDescription>{`${data.campus.used} of ${data.campus.limit} campus${data.campus.limit === 1 ? "" : "es"} in use${data.campus.overridden ? " (set for your organization by SchoolOS)" : ""}.`}</CardDescription>
+            <CardTitle>Campuses</CardTitle>
+            <CardDescription>{`${campuses} campus${campuses === 1 ? "" : "es"} · ${data.campus.included} included in your plan${data.campus.limit === null ? "" : ` · up to ${data.campus.limit}`}${data.campus.overridden ? " (set for your organization by SchoolOS)" : ""}.`}</CardDescription>
           </CardHeader>
-          <CardContent className="text-sm">{data.campus.limit > 1 ? "Multi-campus is on: request another school/campus from My Schools." : "Single school. A plan with more campuses lets SchoolOS open another school for you — you can send a campus request at any time."}</CardContent>
+          <CardContent className="flex flex-col gap-2 text-sm">
+            {current ? <p>{extraCampusText(current)}</p> : null}
+            <p>
+              <Link href="/school-admin/campuses/request" className="text-primary font-medium hover:underline">
+                Request another campus
+              </Link>{" "}
+              — the price is shown before you send it.
+            </p>
+          </CardContent>
         </Card>
       </div>
 
@@ -71,31 +88,75 @@ export default async function UpgradePlanPage() {
         </div>
       ) : null}
 
+      <h2 className="mb-3 text-base font-semibold">Modules by campus</h2>
+      <p className="text-muted-foreground mb-3 text-sm">{`Your ${modules.planName ?? ""} plan makes these modules available. Switch on only what each campus needs — an upgrade never switches anything on by itself.`.replace("  ", " ")}</p>
+      <div className="mb-8 grid gap-4 xl:grid-cols-2">
+        {modules.campuses.map((campus) => (
+          <Card key={campus.id}>
+            <CardHeader>
+              <CardTitle>{campus.name}</CardTitle>
+              <CardDescription>{campus.city ?? ""}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <CampusModulesForm schoolId={campus.id} campusName={campus.name} eligible={modules.eligible} enabled={campus.enabled} labels={LABELS} />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {modules.notInPlan.length ? (
+        <div className="bg-muted/40 mb-8 rounded-xl border p-4 text-sm">
+          <p className="font-semibold">Not in your plan</p>
+          <ul className="mt-2 flex flex-col gap-1">
+            {modules.notInPlan.map((row) => (
+              <li key={row.key}>{`${row.label}${row.plans.length ? ` — comes with ${row.plans.join(" and ")}` : " — ask SchoolOS"}`}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <h2 className="mb-3 text-base font-semibold">Plans</h2>
-      <div className="mb-8 grid gap-4 lg:grid-cols-3">
+      <div className="mb-6 grid gap-4 lg:grid-cols-3">
         {data.plans.map((plan) => {
           const isCurrent = current?.id === plan.id;
-          const higher = rank(plan.priceMinor) > 0;
+          const q = quote(plan, campuses);
+          const breakdown = q.onRequest
+            ? "The price for this plan is agreed with SchoolOS."
+            : `${plan.name}: ${formatMoney(q.planFeeMinor!)} / ${periodLabel(q.billingPeriod)} for ${q.includedCampuses} campus${q.includedCampuses === 1 ? "" : "es"}${q.extraCampuses ? (q.extraEachMinor === null ? `. You run ${campuses} campuses but this plan allows ${plan.campusLimit} — SchoolOS will discuss it with you.` : ` + ${q.extraCampuses} extra × ${formatMoney(q.extraEachMinor)} = ${formatMoney(q.extraTotalMinor!)} / ${periodLabel(q.extraPeriod)}`) : ""}. It replaces your current plan fee.`;
           return (
             <Card key={plan.id} className={cn(isCurrent && "ring-primary ring-2")}>
               <CardHeader>
                 <CardTitle className="flex flex-wrap items-center gap-2">
                   {plan.name}
-                  {isCurrent ? <StatusBadge status="CURRENT" label="Your plan" tone="info" /> : higher ? <StatusBadge status="UP" label="Upgrade" tone="positive" /> : null}
+                  {isCurrent ? <StatusBadge status="CURRENT" label="Your plan" tone="info" /> : null}
                 </CardTitle>
-                <CardDescription>{`${formatMoney(plan.priceMinor, plan.currency)} / year · ${plan.campusLimit > 1 ? `up to ${plan.campusLimit} campuses` : "1 campus"}`}</CardDescription>
+                <CardDescription>{campusAllowanceText(plan)}</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 text-sm">
+                <PlanPrice plan={plan} />
                 {plan.description ? <p className="text-muted-foreground">{plan.description}</p> : null}
-                <p>{`Modules: ${plan.modules.map(moduleLabel).join(", ") || "core only"}`}</p>
-                <p>{`Roles: ${plan.roles.map(roleLabel).join(", ") || "core only"}`}</p>
-                <p>{`Limits: ${describeLimits(plan.limits)}`}</p>
-                {!isCurrent && !data.open ? <RequestPlanForm planId={plan.id} planName={plan.name} /> : null}
+                <QuoteBreakdown plan={plan} campuses={campuses} />
+                {!isCurrent && !data.open ? (
+                  <ActionButton
+                    action={requestPlanChangeAction}
+                    fields={{ planId: plan.id, note: "" }}
+                    size="default"
+                    confirm={{ title: `Request the ${plan.name} plan?`, description: `${breakdown} Nothing is charged now: SchoolOS confirms the change and bills you afterwards. Your modules stay as they are — switch on newly available ones yourself after approval.`, confirmLabel: "Send request" }}
+                  >
+                    {`Request ${plan.name}`}
+                  </ActionButton>
+                ) : null}
               </CardContent>
             </Card>
           );
         })}
       </div>
+      <details className="mb-8">
+        <summary className="text-primary cursor-pointer text-sm font-semibold">Compare all features</summary>
+        <div className="mt-4">
+          <ComparisonTable plans={data.plans} />
+        </div>
+      </details>
 
       <h2 className="mb-3 text-base font-semibold">Plan requests</h2>
       {data.requests.length ? (

@@ -187,8 +187,11 @@ type Tx = Parameters<Parameters<TenantContext["db"]["$transaction"]>[0]>[0];
 /**
  * Write one head for one student as its instalments (1…n), in whole paise
  * that add up exactly to the total. Raising the head again corrects it: the
- * instalments are rewritten, and any beyond the new count go — unless money
- * has already been applied to them, which is refused.
+ * instalments are rewritten, and any beyond the new count go. An instalment
+ * that carries a concession is never removed this way — the concession (an
+ * approved, audited decision) would vanish with it — so that is refused.
+ * Payments are taken against the account, not an instalment, so money
+ * received is never lost: it simply covers the remaining instalments.
  */
 async function writeHeadCharges(
   tx: Tx,
@@ -213,6 +216,10 @@ async function writeHeadCharges(
   });
   if (extras.length) {
     const extraIds = extras.map((row) => row.id);
+    const withConcession = await tx.feeConcession.count({ where: { feeChargeId: { in: extraIds } } });
+    if (withConcession) {
+      throw new AppError("CONFLICT", `Instalment ${input.dates.length + 1} or later has a concession. Remove the concession first, or keep ${extras.length === 1 ? "that instalment" : "those instalments"}.`);
+    }
     await tx.feeCharge.deleteMany({ where: { lateFeeForId: { in: extraIds } } });
     await tx.feeCharge.deleteMany({ where: { id: { in: extraIds } } });
   }
@@ -267,11 +274,16 @@ export async function chargeStudent(
  * in one go or in instalments. One row per child and instalment, because that
  * is where a charge lands — so a single child's amount can be corrected
  * afterwards. Written in one transaction: the whole class or nobody.
+ *
+ * A child who already has this head this session is left as they are — their
+ * amount may have been corrected one by one (a sibling discount, a late
+ * joiner), and charging the class again must not undo that. Correct those
+ * children individually. Returns how many were charged and skipped.
  */
 export async function chargeSection(
   ctx: TenantContext,
   input: { sectionId: string; feeHeadId: string; amountMinor: number; dueOn: Date; installments?: Date[] | null },
-): Promise<{ charged: number }> {
+): Promise<{ charged: number; skipped: number }> {
   await assertAdminOrStaffPermission(ctx, "fees.manage");
   const session = await requireCurrentSession(ctx);
 
@@ -294,10 +306,15 @@ export async function chargeSection(
   ]);
   if (!section || !head) throw new NotFoundError("That section or fee head was not found.");
 
-  const enrolled = await ctx.db.studentEnrollment.findMany({
+  const allEnrolled = await ctx.db.studentEnrollment.findMany({
     where: { sectionId: section.id, academicSessionId: session.id, status: "ACTIVE" },
     select: { studentId: true },
   });
+  const already = new Set(
+    (await ctx.db.feeCharge.findMany({ where: { academicSessionId: session.id, feeHeadId: head.id, studentId: { in: allEnrolled.map((row) => row.studentId) } }, select: { studentId: true }, distinct: ["studentId"] })).map((row) => row.studentId),
+  );
+  const enrolled = allEnrolled.filter((row) => !already.has(row.studentId));
+  const skipped = allEnrolled.length - enrolled.length;
 
   await ctx.db.$transaction(
     async (tx) => {
@@ -314,11 +331,11 @@ export async function chargeSection(
     entityId: section.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${head.name} of ${formatMinor(input.amountMinor)} charged to ${enrolled.length} students in ${sectionLabel(section)}${dates.length > 1 ? `, in ${dates.length} instalments` : ""}.`,
-    metadata: { feeHeadId: head.id, amountMinor: input.amountMinor, installments: dates.length, students: enrolled.length },
+    summary: `${head.name} of ${formatMinor(input.amountMinor)} charged to ${enrolled.length} students in ${sectionLabel(section)}${dates.length > 1 ? `, in ${dates.length} instalments` : ""}.${skipped ? ` ${skipped} already had it and were left unchanged.` : ""}`,
+    metadata: { feeHeadId: head.id, amountMinor: input.amountMinor, installments: dates.length, students: enrolled.length, skipped },
   });
 
-  return { charged: enrolled.length };
+  return { charged: enrolled.length, skipped };
 }
 
 /**

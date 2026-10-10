@@ -4,6 +4,7 @@ import { cache } from "react";
 import { FeeReceipt, type ReceiptFormat } from "@/features/finance/receipt";
 import { ReceiptToolbar } from "@/features/finance/receipt-toolbar";
 import { param } from "@/lib/search-params";
+import { DemoWatermark } from "@/components/shared/demo-watermark";
 import { requireTenant } from "@/server/auth/current-user";
 import { getReceipt } from "@/server/finance/receipts";
 import { orNotFound } from "@/server/page-helpers";
@@ -60,6 +61,7 @@ export default async function ReceiptPage(props: PageProps<"/receipts/[paymentId
 
   return (
     <main className="receipt-page min-h-screen bg-neutral-100 px-4 py-6 text-neutral-900 sm:py-10">
+      {ctx.user.isDemo ? <DemoWatermark what="receipt" /> : null}
       <style>{PRINT_CSS(format)}</style>
       <ReceiptToolbar
         backHref={back.href}

@@ -1,9 +1,14 @@
 "use client";
 
+import { useState } from "react";
+
+import { ActionButton } from "@/components/forms/action-button";
 import { ActionForm } from "@/components/forms/action-form";
 import { SubmitButton, TextareaField, TextField } from "@/components/forms/fields";
 
-import { approvePlanChangeAction, rejectPlanChangeAction, requestPlanChangeAction } from "./plan-actions";
+import { cn } from "@/lib/utils";
+
+import { approvePlanChangeAction, rejectPlanChangeAction, requestPlanChangeAction, setCampusModulesAction } from "./plan-actions";
 
 /** "Request this plan" on a plan card. */
 export function RequestPlanForm({ planId, planName }: { planId: string; planName: string }) {
@@ -38,6 +43,61 @@ export function PlanDecisionForms({ requestId }: { requestId: string }) {
           </SubmitButton>
         </div>
       </ActionForm>
+    </div>
+  );
+}
+
+/**
+ * One campus's modules: eligible ones can be switched on or off; a module the
+ * plan no longer includes but the campus still has is shown as kept, and
+ * can be switched off (not back on). Saving asks for confirmation.
+ */
+export function CampusModulesForm({ schoolId, campusName, eligible, enabled, labels }: { schoolId: string; campusName: string; eligible: string[]; enabled: string[]; labels: Record<string, { label: string; hint: string }> }) {
+  const [selected, setSelected] = useState<string[]>(enabled);
+  const shown = [...eligible, ...enabled.filter((key) => !eligible.includes(key))];
+  const added = selected.filter((key) => !enabled.includes(key));
+  const removed = enabled.filter((key) => !selected.includes(key));
+  const fields: Record<string, string | string[]> = { schoolId, modules: selected };
+  return (
+    <div className="flex flex-col gap-3">
+      <ul className="grid gap-2 sm:grid-cols-2">
+        {shown.map((key) => {
+          const kept = !eligible.includes(key);
+          const on = selected.includes(key);
+          return (
+            <li key={key}>
+              <label className={cn("flex h-full items-start gap-2.5 rounded-lg border p-2.5 text-sm", on ? "border-success/40 bg-success-soft/50" : "bg-muted/30", kept && !on ? "opacity-60" : "cursor-pointer")}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={kept && !on}
+                  onChange={(event) => setSelected(event.target.checked ? [...selected, key] : selected.filter((row) => row !== key))}
+                  className="mt-0.5 size-4"
+                />
+                <span>
+                  <span className="block font-medium">{labels[key]?.label ?? key}</span>
+                  <span className="text-muted-foreground block text-xs">{kept ? "Not in your current plan — kept for now; once switched off it needs the plan again." : enabled.includes(key) ? `On · ${labels[key]?.hint ?? ""}` : "Included in your plan — off for this campus. Tick to switch it on."}</span>
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {!shown.length ? <p className="text-muted-foreground text-sm">Your plan has no optional modules. Core modules are always on.</p> : null}
+      <div>
+        <ActionButton
+          action={setCampusModulesAction}
+          fields={fields}
+          disabled={!added.length && !removed.length}
+          confirm={{
+            title: `Change modules for ${campusName}?`,
+            description: `${added.length ? `Switch on: ${added.map((key) => labels[key]?.label ?? key).join(", ")}. ` : ""}${removed.length ? `Switch off: ${removed.map((key) => labels[key]?.label ?? key).join(", ")} — its pages close for everyone at this campus; records are kept. ` : ""}This does not change your plan or your bill.`,
+            confirmLabel: "Save modules",
+          }}
+        >
+          Save modules
+        </ActionButton>
+      </div>
     </div>
   );
 }

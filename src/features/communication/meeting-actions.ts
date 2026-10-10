@@ -8,6 +8,7 @@ import { id } from "@/lib/validation/common";
 import { cancelMeetingSchema, meetingSchema } from "@/lib/validation/meetings";
 import { requireTenantForAction } from "@/server/auth/current-user";
 import { cancelMeeting, deleteMeeting, saveMeeting } from "@/server/communication/meetings";
+import { recordPtmAttendance, respondToPtm } from "@/server/communication/ptm";
 import { performAction } from "@/server/perform-action";
 import { isSchoolLeader } from "@/lib/permissions";
 
@@ -53,5 +54,39 @@ export async function deleteMeetingAction(_p: Result, formData: FormData): Promi
       return successResult("Meeting deleted.");
     },
     { revalidate: PAGES, redirectTo: "/school-admin/meetings" },
+  );
+}
+
+const ptmResponseSchema = z.object({ meetingId: id, studentId: id, response: z.enum(["WILL_ATTEND", "UNABLE_TO_ATTEND"]) });
+
+/** A parent's answer for one child (they can change it until the PTM ends). */
+export async function respondToPtmAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("PARENT");
+      await respondToPtm(ctx, parseFormData(ptmResponseSchema, formData));
+      return successResult("Thank you — your answer is saved. You can change it until the meeting ends.");
+    },
+    { revalidate: PAGES },
+  );
+}
+
+const ptmAttendanceSchema = z.object({
+  meetingId: id,
+  studentId: id,
+  attendance: z.enum(["ATTENDED", "DID_NOT_ATTEND", "RESCHEDULED"]),
+  remarks: z.string().trim().max(2000).optional().transform((value) => value || null),
+  followUp: z.string().trim().max(2000).optional().transform((value) => value || null),
+});
+
+/** Record what happened for one family (class teacher, School Admin or Principal). */
+export async function recordPtmAttendanceAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
+      await recordPtmAttendance(ctx, parseFormData(ptmAttendanceSchema, formData));
+      return successResult("Saved.");
+    },
+    { revalidate: PAGES },
   );
 }

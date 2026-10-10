@@ -63,7 +63,7 @@ beforeAll(async () => {
   await prisma.user.deleteMany({ where: { email: { contains: PREFIX } } });
   const user = await prisma.user.create({ data: { email: `super@${PREFIX}.test`, passwordHash: "x", role: "SUPER_ADMIN", firstName: "Platform", lastName: "Owner" } });
   superAdmin = { id: user.id, email: user.email, role: "SUPER_ADMIN", firstName: "Platform", lastName: "Owner", schoolId: null, schoolSlug: null, schoolName: null, schoolStatus: null };
-  const plan = await prisma.plan.upsert({ where: { tier: "PRO" }, update: {}, create: { tier: "PRO", name: "Pro", priceMinor: 100 } });
+  const plan = await prisma.plan.upsert({ where: { tier: "PRO" }, update: {}, create: { tier: "PRO", slug: "pro", name: "Pro", priceMinor: 100 } });
   planId = plan.id;
   planBefore = { campusLimit: plan.campusLimit, availableRoles: plan.availableRoles, optionalModules: plan.optionalModules, maxStudents: plan.maxStudents, roleLimits: plan.roleLimits };
   ownerToken = (await createSession(schoolA.adminUserId)).token;
@@ -189,9 +189,10 @@ describe("the owner works across campuses", () => {
     expect(await switchableCampuses(otherUser)).toEqual([]);
     const token = (await createSession(other.id)).token;
     await expect(switchCampus(otherUser, token, newCampusId)).rejects.toBeInstanceOf(ForbiddenError);
-    // School B's admin sees nothing of A's organization.
+    // School B's owner has no plan with the organization dashboard: refused,
+    // and never shown anything of A's organization either way.
     const ownerB = (await validateSessionToken((await createSession(schoolB.adminUserId)).token))!;
-    expect((await allCampusesSummary(ownerB)).campuses.map((campus) => campus.id)).toEqual([schoolB.schoolId]);
+    await expect(allCampusesSummary(ownerB)).rejects.toThrow(/Organization dashboard is not part of your plan/);
   });
 });
 
@@ -228,5 +229,16 @@ describe("each campus's own roles, modules and limits", () => {
     // A Principal cannot switch campus at all.
     const principalUser = { ...owner, id: principal.id, role: "PRINCIPAL" as const };
     await expect(switchCampus(principalUser, ownerToken, newCampusId)).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});
+
+describe("approving at the limit, with the Super Admin's say-so", () => {
+  it("ticking “raise the limit” raises it by exactly one and creates the campus, audited", async () => {
+    const organizationId = (await myOrganization(owner)).id;
+    const pending = await prisma.campusRequest.findFirstOrThrow({ where: { name: `${PREFIX} Third`, status: "PENDING" }, select: { id: true } });
+    const { schoolId } = await approveCampusRequest(superAdmin, pending.id, { modules: [], roles: [], limits: {}, reviewNote: null, raiseLimit: true });
+    expect(await prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { organizationId: true } })).toEqual({ organizationId });
+    expect((await prisma.organization.findUniqueOrThrow({ where: { id: organizationId } })).campusLimitOverride).toBe(3);
+    expect(await prisma.auditLog.count({ where: { action: "ORGANIZATION_CAMPUS_LIMIT_CHANGED", actorId: superAdmin.id } })).toBe(2);
   });
 });

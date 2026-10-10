@@ -69,6 +69,7 @@ export const TENANT_MODELS = new Set([
   "MeetingRecipient",
   "MeetingSection",
   "MeetingStudent",
+  "PtmFamily",
   "ParentStudent",
   "ProfilePhoto",
   "RegisterCover",

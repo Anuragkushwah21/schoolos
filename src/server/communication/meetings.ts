@@ -384,7 +384,7 @@ export async function saveMeeting(ctx: TenantContext, input: MeetingInput): Prom
   if (input.supportId && !isSchoolLeader(ctx.user.role)) throw new ForbiddenError("Extra classes are arranged by the School Admin.");
   const clock = schoolNow();
 
-  let existing: { id: string; title: string; cancelled: boolean } | null = null;
+  let existing: { id: string; title: string; cancelled: boolean; date: Date; startMinute: number; endMinute: number | null } | null = null;
   if (input.meetingId) {
     const row = await ctx.db.meeting.findFirst({
       where: { id: input.meetingId },
@@ -430,6 +430,11 @@ export async function saveMeeting(ctx: TenantContext, input: MeetingInput): Prom
         tx.meetingStudent.deleteMany({ where: { meetingId: existing.id } }),
       ]);
       meetingId = existing.id;
+      // A PTM moved to another day or time: the families' earlier answers were
+      // for the old time, so they are cleared and families answer again.
+      if (existing.date.getTime() !== input.date.getTime() || existing.startMinute !== input.startMinute || existing.endMinute !== input.endMinute) {
+        await tx.ptmFamily.updateMany({ where: { meetingId: existing.id, response: { not: null } }, data: { response: null, respondedById: null, respondedAt: null } });
+      }
     } else {
       meetingId = (
         await tx.meeting.create({

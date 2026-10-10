@@ -4,6 +4,7 @@ import { cache } from "react";
 import { PrintToolbar } from "@/components/shared/print-toolbar";
 import { ReportCard } from "@/features/exams/report-card";
 import { param } from "@/lib/search-params";
+import { DemoWatermark } from "@/components/shared/demo-watermark";
 import { requireTenant } from "@/server/auth/current-user";
 import { getReportCard } from "@/server/exams/results";
 import { orNotFound } from "@/server/page-helpers";
@@ -51,6 +52,7 @@ export default async function ReportCardPage(props: PageProps<"/report-cards/[ex
 
   return (
     <main className="print-page min-h-screen bg-neutral-100 px-4 py-6 text-neutral-900 sm:py-10">
+      {ctx.user.isDemo ? <DemoWatermark what="report card" /> : null}
       <style>{PRINT_CSS}</style>
       <PrintToolbar backHref={back.href} backLabel={back.label} autoPrint={param(search.print) === "1"} />
       <ReportCard card={card} />

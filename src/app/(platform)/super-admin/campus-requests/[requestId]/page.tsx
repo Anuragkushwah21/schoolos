@@ -12,6 +12,8 @@ import { ApproveCampusForm, CampusLimitForm, RejectCampusForm } from "@/features
 import { REQUEST_STATUS } from "@/features/campuses/status";
 import { RequestHistory, RequestedVsApproved } from "@/features/campuses/request-views";
 import { formatDate } from "@/lib/dates";
+import { periodLabel } from "@/lib/plan-catalog";
+import { formatMoney } from "@/lib/format";
 import { NotFoundError } from "@/lib/errors";
 import { moduleLabel } from "@/lib/school-modules";
 import { cleanLimits, describeLimits, roleLabel } from "@/lib/school-roles";
@@ -30,7 +32,7 @@ export default async function CampusRequestPage(props: PageProps<"/super-admin/c
   const status = REQUEST_STATUS[row.status]!;
   const open = row.status === "PENDING" || row.status === "UNDER_REVIEW";
   const asked = cleanLimits(row.requestedLimits);
-  const atLimit = row.campusCount >= row.campusLimit;
+  const atLimit = row.campusLimit !== null && row.campusCount >= row.campusLimit;
 
   return (
     <>
@@ -43,7 +45,8 @@ export default async function CampusRequestPage(props: PageProps<"/super-admin/c
               <CardDescription>{`${row.organization.name}${row.organization.owner ? ` · ${row.organization.owner.firstName} ${row.organization.owner.lastName} (${row.organization.owner.email})` : " · no owner yet"}`}</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3 text-sm">
-              <p>{`Current plan: ${row.plan.planName ?? "none"} · campuses ${row.campusCount} of ${row.campusLimit}`}</p>
+              <p>{`Current plan: ${row.plan.planName ?? "none"} · ${row.campusCount} campus${row.campusCount === 1 ? "" : "es"} · ${row.campusIncluded} included${row.campusLimit === null ? ", no cap" : `, cap ${row.campusLimit}`}`}</p>
+              {row.quotedExtraFeeMinor !== null ? <p className="bg-warning-soft text-warning-strong rounded-lg px-3 py-2">{`Extra campus quoted to the school: ${formatMoney(row.quotedExtraFeeMinor)} per ${periodLabel(row.quotedExtraPeriod ?? "YEARLY")}. Bill it manually after approval — SchoolOS collects nothing.`}</p> : null}
               <ul className="list-disc pl-5">
                 {row.organization.schools.map((school) => (
                   <li key={school.id}>
@@ -115,7 +118,7 @@ export default async function CampusRequestPage(props: PageProps<"/super-admin/c
             <Card>
               <CardHeader>
                 <CardTitle>Approve</CardTitle>
-                <CardDescription>{atLimit ? `This organization is at its campus limit (${row.campusLimit}). Raise its campus limit to approve.` : "Approve as asked, or change what this campus gets."}</CardDescription>
+                <CardDescription>{atLimit ? `This organization is at its campus limit (${row.campusLimit}). Tick “Raise the campus limit” below to approve in one step.` : "Approve as asked, or change what this campus gets."}</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
                 {row.status === "PENDING" ? (
@@ -125,7 +128,7 @@ export default async function CampusRequestPage(props: PageProps<"/super-admin/c
                     </ActionButton>
                   </div>
                 ) : null}
-                <ApproveCampusForm requestId={row.id} modules={row.requestedModules} roles={row.requestedRoles} limits={asked} />
+                <ApproveCampusForm requestId={row.id} modules={row.requestedModules} roles={row.requestedRoles} limits={asked} raiseLimitTo={atLimit ? row.campusCount + 1 : null} />
               </CardContent>
             </Card>
             <Card>

@@ -7,12 +7,13 @@ import { PageHeader } from "@/components/shared/page-header";
 import { SetupNotice } from "@/components/shared/setup-notice";
 import { StatCard } from "@/components/shared/stat-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { AttentionSettingsForm } from "@/features/exams/attention-forms";
-import { AttentionRule, AttentionTable } from "@/features/exams/attention-table";
+import { AttentionSettingsForm, SignalSettingsForm } from "@/features/exams/attention-forms";
+import { AttentionByClassTable, AttentionRule, AttentionTable, SignalTable } from "@/features/exams/attention-table";
 import { param } from "@/lib/search-params";
 import { getCurrentSession, listSubjects, sectionOptions } from "@/server/academics/structure";
 import { requireTenant } from "@/server/auth/current-user";
 import { needsAttention } from "@/server/exams/attention";
+import { attendanceHomeworkSignals, attentionByClass } from "@/server/exams/student-signals";
 
 export const metadata: Metadata = { title: "Student performance" };
 
@@ -27,10 +28,12 @@ export default async function PerformancePage(props: PageProps<"/school-admin/ex
   const search = await props.searchParams;
   const sectionId = param(search.section);
   const subjectId = param(search.subject);
-  const [{ rows, settings, rule }, sections, subjects] = await Promise.all([
+  const [{ rows, settings, rule }, sections, subjects, signals, byClass] = await Promise.all([
     needsAttention(ctx, { sectionId, subjectId }),
     sectionOptions(ctx, session.id),
     listSubjects(ctx),
+    attendanceHomeworkSignals(ctx, { sectionId }),
+    attentionByClass(ctx),
   ]);
   const students = new Set(rows.map((row) => row.studentId)).size;
 
@@ -42,6 +45,7 @@ export default async function PerformancePage(props: PageProps<"/school-admin/ex
         <StatCard tone="amber" icon={HeartPulseIcon} label="Subjects flagged" value={rows.length} />
         <StatCard tone="green" icon={HeartPulseIcon} label="With support open" value={rows.filter((row) => row.supportId).length} />
       </div>
+      <h2 className="mb-2 text-base font-semibold">Marks</h2>
       <AttentionRule rule={rule} />
       <FilterBar
         action="/school-admin/exams/performance"
@@ -57,6 +61,20 @@ export default async function PerformancePage(props: PageProps<"/school-admin/ex
           Students appear here when their submitted results fall below the rule, or when a teacher opens support.
         </EmptyState>
       )}
+      <h2 className="mt-8 mb-2 text-base font-semibold">Attendance and homework</h2>
+      <AttentionRule rule={signals.rule} />
+      {signals.rows.length ? (
+        <SignalTable rows={signals.rows} studentHref={(row) => `/school-admin/students/${row.studentId}`} supportBase="/school-admin/support" />
+      ) : (
+        <p className="text-muted-foreground text-sm">No student&apos;s attendance or homework needs attention right now.</p>
+      )}
+      {byClass.length ? (
+        <>
+          <h2 className="mt-8 mb-2 text-base font-semibold">By class</h2>
+          <p className="text-muted-foreground mb-3 text-sm">How many students each signal flags, and support opened this session.</p>
+          <AttentionByClassTable rows={byClass} />
+        </>
+      ) : null}
       <Card className="mt-8 max-w-3xl">
         <CardHeader>
           <CardTitle>The rule</CardTitle>
@@ -64,7 +82,10 @@ export default async function PerformancePage(props: PageProps<"/school-admin/ex
         </CardHeader>
         <CardContent>
           {ctx.user.role === "SCHOOL_ADMIN" ? (
-            <AttentionSettingsForm percent={settings.percent} repeat={settings.repeat} />
+            <div className="flex flex-col gap-6">
+              <AttentionSettingsForm percent={settings.percent} repeat={settings.repeat} />
+              <SignalSettingsForm percent={signals.settings.percent} days={signals.settings.days} />
+            </div>
           ) : (
             <p className="text-sm">{`A student needs attention below ${settings.percent}% in a subject, or when ${settings.repeat} of their last three tests are below it. The School Admin sets this rule.`}</p>
           )}

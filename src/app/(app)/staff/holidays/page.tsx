@@ -16,7 +16,7 @@ export default async function CalendarPage(props: PageProps<"/staff/holidays">) 
   return (
     <>
       <PageHeader icon={CalendarRangeIcon} tone="orange" title="Calendar" description="A date overview: holidays, school events and your meetings." />
-      <HolidaysScreen ctx={ctx} basePath="/staff/holidays" monthParam={param(search.month)} />
+      <HolidaysScreen ctx={ctx} basePath="/staff/holidays" monthParam={param(search.month)} dayParam={param(search.day)} />
     </>
   );
 }

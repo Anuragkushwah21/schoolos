@@ -4,10 +4,11 @@ import { HeartPulseIcon } from "lucide-react";
 import { EmptyState } from "@/components/shared/empty-state";
 import { NoSessionNotice } from "@/components/shared/no-session-notice";
 import { PageHeader } from "@/components/shared/page-header";
-import { AttentionRule, AttentionTable } from "@/features/exams/attention-table";
+import { AttentionByClassTable, AttentionRule, AttentionTable, SignalTable } from "@/features/exams/attention-table";
 import { getCurrentSession } from "@/server/academics/structure";
 import { requireTenant } from "@/server/auth/current-user";
 import { needsAttention } from "@/server/exams/attention";
+import { attendanceHomeworkSignals, attentionByClass } from "@/server/exams/student-signals";
 
 export const metadata: Metadata = { title: "Student performance" };
 
@@ -18,7 +19,7 @@ export const metadata: Metadata = { title: "Student performance" };
 export default async function TeacherAttentionPage() {
   const ctx = await requireTenant("TEACHER");
   if (!(await getCurrentSession(ctx))) return <NoSessionNotice title="Student performance" />;
-  const { rows, rule } = await needsAttention(ctx);
+  const [{ rows, rule }, signals, byClass] = await Promise.all([needsAttention(ctx), attendanceHomeworkSignals(ctx), attentionByClass(ctx)]);
 
   return (
     <>
@@ -31,6 +32,19 @@ export default async function TeacherAttentionPage() {
           Students appear here when submitted results fall below the school&apos;s rule, or when support is opened.
         </EmptyState>
       )}
+      <h2 className="mt-8 mb-2 text-base font-semibold">Attendance and homework</h2>
+      <AttentionRule rule={signals.rule} />
+      {signals.rows.length ? (
+        <SignalTable rows={signals.rows} studentHref={(row) => `/teacher/students/${row.studentId}`} supportBase="/teacher/support" />
+      ) : (
+        <p className="text-muted-foreground text-sm">No student&apos;s attendance or homework needs attention in your classes right now.</p>
+      )}
+      {byClass.length ? (
+        <>
+          <h2 className="mt-8 mb-2 text-base font-semibold">Your classes</h2>
+          <AttentionByClassTable rows={byClass} />
+        </>
+      ) : null}
     </>
   );
 }

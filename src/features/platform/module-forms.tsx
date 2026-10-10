@@ -156,8 +156,8 @@ export function SchoolModulesForm({ schoolId, planName, planModules, current, cu
             className="mt-0.5 size-4"
           />
           <span>
-            <span className="block font-medium">{`Follow the ${planName} plan`}</span>
-            <span className="text-muted-foreground block text-xs">Untick to choose this school&apos;s modules yourself. Only this school changes.</span>
+            <span className="block font-medium">{`Switch on everything in the ${planName} plan`}</span>
+            <span className="text-muted-foreground block text-xs">Untick to choose this campus&apos;s modules yourself. A module outside the plan is an exception for this campus only. Only this campus changes.</span>
           </span>
         </label>
       ) : null}

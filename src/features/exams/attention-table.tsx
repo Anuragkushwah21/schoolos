@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDate } from "@/lib/dates";
 import type { AttentionRow } from "@/server/exams/attention";
+import type { SignalRow } from "@/server/exams/student-signals";
 
 /** The rule, in words, beside every Needs Attention list — nothing hidden. */
 export function AttentionRule({ rule }: { rule: string }) {
@@ -92,6 +93,89 @@ export function AttentionTable({
                   </Button>
                 )}
               </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** Attendance and homework signals: one row per student, each reason in words. */
+export function SignalTable({ rows, studentHref, supportBase }: { rows: SignalRow[]; studentHref: (row: SignalRow) => string; supportBase: "/school-admin/support" | "/teacher/support" }) {
+  return (
+    <div className="bg-card shadow-card overflow-hidden rounded-2xl border border-border/70">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Student</TableHead>
+            <TableHead>Class</TableHead>
+            <TableHead>What was seen</TableHead>
+            <TableHead className="text-right">Support</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={row.studentId}>
+              <TableCell>
+                <Link href={studentHref(row) as Route} className="font-medium hover:underline">
+                  {row.student}
+                </Link>
+                <span className="text-muted-foreground block text-xs">{row.admissionNumber}</span>
+              </TableCell>
+              <TableCell>{row.section}</TableCell>
+              <TableCell>
+                <ul className="flex flex-col gap-0.5 text-xs">
+                  {row.reasons.map((reason) => (
+                    <li key={reason.code}>{reason.text}</li>
+                  ))}
+                </ul>
+              </TableCell>
+              <TableCell className="text-right">
+                {row.supportId ? (
+                  <Button asChild size="sm" variant="outline">
+                    <Link href={`${supportBase}/${row.supportId}` as Route}>View support</Link>
+                  </Button>
+                ) : (
+                  <Button asChild size="sm">
+                    <Link href={`${supportBase}/new?student=${row.studentId}` as Route}>Start support</Link>
+                  </Button>
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** Class-wise counts: who each signal flags, and support open or resolved. */
+export function AttentionByClassTable({ rows }: { rows: Array<{ sectionId: string; section: string; students: number; marks: number; attendance: number; homework: number; supportOpen: number; supportResolved: number }> }) {
+  return (
+    <div className="bg-card shadow-card overflow-x-auto rounded-2xl border border-border/70">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Class</TableHead>
+            <TableHead className="text-right">Students</TableHead>
+            <TableHead className="text-right">Marks</TableHead>
+            <TableHead className="text-right">Attendance</TableHead>
+            <TableHead className="text-right">Homework</TableHead>
+            <TableHead className="text-right">Support open</TableHead>
+            <TableHead className="text-right">Resolved</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={row.sectionId}>
+              <TableCell className="font-medium">{row.section}</TableCell>
+              <TableCell className="text-right tabular-nums">{row.students}</TableCell>
+              <TableCell className="text-right tabular-nums">{row.marks}</TableCell>
+              <TableCell className="text-right tabular-nums">{row.attendance}</TableCell>
+              <TableCell className="text-right tabular-nums">{row.homework}</TableCell>
+              <TableCell className="text-right tabular-nums">{row.supportOpen}</TableCell>
+              <TableCell className="text-right tabular-nums">{row.supportResolved}</TableCell>
             </TableRow>
           ))}
         </TableBody>

@@ -37,6 +37,7 @@ import { attendanceTrend, genderSplit, registersOutstanding } from "@/server/ana
 import { needsAttention } from "@/server/analytics/today";
 import { todayOverview } from "@/server/attendance/service";
 import type { TenantContext } from "@/server/auth/current-user";
+import { classStrengthReport } from "@/server/reports/exports";
 import { getIntlLocale, getT } from "@/server/i18n";
 import { attendedDays } from "@/lib/attendance";
 import { cn } from "@/lib/utils";
@@ -145,7 +146,7 @@ async function financeSnapshotLite(ctx: TenantContext) {
 // -----------------------------------------------------------------------------
 
 export async function StudentsSection({ ctx, sessionId }: { ctx: TenantContext; sessionId: string }) {
-  const [bands, gender] = await Promise.all([studentBands(ctx, sessionId), genderSplit(ctx)]);
+  const [bands, gender, strength] = await Promise.all([studentBands(ctx, sessionId), genderSplit(ctx), classStrengthReport(ctx)]);
   const total = bands.reduce((sum, band) => sum + band.value, 0);
   const genderSegments = [
     { key: "boys", label: "Boys", value: gender.boys, color: "var(--viz-accent)" },
@@ -171,6 +172,33 @@ export async function StudentsSection({ ctx, sessionId }: { ctx: TenantContext; 
           >
             <StackedBar segments={genderSegments} emptyMessage="No students yet." />
           </ChartFigure>
+          {strength.rows.length ? (
+            <div>
+              <p className="mb-2 text-sm font-medium">By class</p>
+              <div className="max-h-72 overflow-y-auto rounded-xl border">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-muted-foreground sticky top-0 text-xs">
+                    <tr>
+                      <th className="px-3 py-1.5 text-left font-medium">Class</th>
+                      <th className="px-3 py-1.5 text-right font-medium">Boys</th>
+                      <th className="px-3 py-1.5 text-right font-medium">Girls</th>
+                      <th className="px-3 py-1.5 text-right font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {strength.rows.map((row) => (
+                      <tr key={row.name}>
+                        <td className="px-3 py-1.5">{row.name}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{row.boys}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{row.girls}</td>
+                        <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{row.total}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </section>

@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChildTabs } from "@/features/parent/child-nav";
+import { MATERIAL_KIND_LABEL, MaterialActions } from "@/features/student/material-actions";
 import { formatDate } from "@/lib/dates";
 import { pluralize } from "@/lib/format";
 import { requireTenant } from "@/server/auth/current-user";
@@ -14,6 +15,7 @@ import { getChildHomework } from "@/server/parent/child";
 export const metadata: Metadata = { title: "Homework" };
 
 type Entry = {
+  resources: Array<{ id: string; kind: string; url: string | null; fileName: string | null; fileSize: number | null }>;
   id: string;
   title: string;
   description: string | null;
@@ -104,6 +106,16 @@ export default async function ChildHomeworkPage(
                         <p className="text-muted-foreground text-xs">
                           Set {formatDate(entry.assignedOn)} by {entry.teacher}
                         </p>
+                        {entry.resources.length ? (
+                          <div className="flex flex-col gap-1.5">
+                            {entry.resources.map((resource) => (
+                              <div key={resource.id} className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-medium">{MATERIAL_KIND_LABEL[resource.kind] ?? "Material"}</span>
+                                <MaterialActions material={resource} />
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

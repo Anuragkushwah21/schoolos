@@ -26,6 +26,7 @@ import {
   verifyExam,
 } from "@/server/exams/service";
 import { saveAttentionSettings } from "@/server/exams/attention";
+import { saveSignalSettings } from "@/server/exams/student-signals";
 import { parseComponents, saveResultScheme } from "@/server/exams/final-results";
 import { saveGradingRules } from "@/server/exams/grading";
 import { performAction } from "@/server/perform-action";
@@ -238,6 +239,23 @@ export async function saveAttentionSettingsAction(_p: Result, formData: FormData
       const ctx = await admin();
       await saveAttentionSettings(ctx, parseFormData(attentionSettingsSchema, formData));
       return successResult("Needs Attention rule saved.");
+    },
+    { revalidate: EXAM_PAGES },
+  );
+}
+
+const signalSettingsSchema = z.object({
+  percent: z.coerce.number().int().min(1, "At least 1%").max(99, "At most 99%"),
+  days: z.coerce.number().int().min(7, "At least 7 days").max(120, "At most 120 days"),
+});
+
+/** The attendance part of Needs Attention (the School Admin's setting). */
+export async function saveSignalSettingsAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await admin();
+      await saveSignalSettings(ctx, parseFormData(signalSettingsSchema, formData));
+      return successResult("Attendance rule saved.");
     },
     { revalidate: EXAM_PAGES },
   );

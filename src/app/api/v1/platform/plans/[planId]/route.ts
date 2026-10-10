@@ -1,16 +1,20 @@
 import { apiSuccess, platformRoute, readJson } from "@/server/api/handler";
-import { planSchema } from "@/lib/validation/platform";
-import { listPlans, updatePlan } from "@/server/platform/plans";
+import { planDraftSchema } from "@/lib/validation/platform";
+import { savePlanDraft } from "@/server/platform/plans";
 
-/** Prices are entered in rupees and stored in paise, as integers. */
+/**
+ * Save a plan's draft (rupees in, paise stored). Like the Plan Builder, this
+ * never publishes: publishing is a separate, reviewed step in the UI.
+ */
 export const PUT = platformRoute<{ planId: string }>(
   { roles: ["SUPER_ADMIN"] },
   async ({ request, actor, params }) => {
-    const { planId, priceRupees, ...rest } = await readJson(request, planSchema, {
-      planId: params.planId,
+    const { planId, priceRupees, extraCampusRupees, ...rest } = await readJson(request, planDraftSchema, { planId: params.planId });
+    const { problems } = await savePlanDraft(actor.user, planId, {
+      ...rest,
+      priceMinor: Math.round((priceRupees ?? 0) * 100),
+      extraCampusPriceMinor: extraCampusRupees === undefined ? null : Math.round(extraCampusRupees * 100),
     });
-    await updatePlan(actor.user, planId, { ...rest, priceMinor: Math.round(priceRupees * 100) });
-    const plans = await listPlans(actor.user);
-    return apiSuccess(plans.find((plan) => plan.id === planId) ?? null);
+    return apiSuccess({ planId, draftSaved: true, problems });
   },
 );

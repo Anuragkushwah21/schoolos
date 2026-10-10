@@ -260,11 +260,11 @@ describe("what the student sees", () => {
     expect((await getMyMaterials(studentOf(schoolB))).materials).toEqual([]);
   });
 
-  it("does not serve lesson files to parents", async () => {
+  it("serves a lesson file to a parent of a child in that section, and to no other parent", async () => {
     const document = (await getMyLesson(studentOf(schoolA), lessonId)).lesson.materials[0]!;
-    await expect(
-      readMaterialFile(contextFor(schoolA, schoolA.parentUserId, "PARENT"), document.id),
-    ).rejects.toBeInstanceOf(ForbiddenError);
+    const file = await readMaterialFile(contextFor(schoolA, schoolA.parentUserId, "PARENT"), document.id);
+    expect(file.bytes.length).toBeGreaterThan(0);
+    await expect(readMaterialFile(contextFor(schoolB, schoolB.parentUserId, "PARENT"), document.id)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
 

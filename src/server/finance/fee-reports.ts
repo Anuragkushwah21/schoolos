@@ -250,3 +250,50 @@ export async function readStudentLedger(ctx: TenantContext, studentId: string, a
     },
   };
 }
+
+/**
+ * One day at the fee desk: every non-void payment taken on `date`, totalled
+ * by payment method and by who took it. A family payment counts as one
+ * receipt; its per-child shares add up to its total. Void payments are left
+ * out and listed separately, so the drawer can be reconciled.
+ */
+export async function dailyCollection(ctx: TenantContext, date: Date = today()) {
+  await assertAdminOrStaffPermission(ctx, [...READ]);
+  const [payments, voided] = await Promise.all([
+    ctx.db.feePayment.findMany({
+      where: { paidOn: date, voidedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, amountMinor: true, method: true, receiptNo: true, familyPaymentId: true, recordedById: true, familyPayment: { select: { receiptNo: true } }, student: { select: { firstName: true, lastName: true } } },
+    }),
+    ctx.db.feePayment.count({ where: { paidOn: date, voidedAt: { not: null } } }),
+  ]);
+  const recorders = new Map(
+    (await ctx.db.user.findMany({ where: { id: { in: [...new Set(payments.flatMap((row) => (row.recordedById ? [row.recordedById] : [])))] } }, select: { id: true, firstName: true, lastName: true } })).map((user) => [user.id, fullName(user)]),
+  );
+  const byMethod = new Map<string, { amountMinor: number; receipts: Set<string> }>();
+  const byCollector = new Map<string, { amountMinor: number; receipts: Set<string> }>();
+  const receipts = new Set<string>();
+  let totalMinor = 0;
+  for (const row of payments) {
+    const receipt = row.familyPaymentId ?? row.id;
+    receipts.add(receipt);
+    totalMinor += row.amountMinor;
+    const method = byMethod.get(row.method) ?? { amountMinor: 0, receipts: new Set() };
+    method.amountMinor += row.amountMinor;
+    method.receipts.add(receipt);
+    byMethod.set(row.method, method);
+    const who = row.recordedById ? (recorders.get(row.recordedById) ?? "Former staff") : "Not recorded";
+    const collector = byCollector.get(who) ?? { amountMinor: 0, receipts: new Set() };
+    collector.amountMinor += row.amountMinor;
+    collector.receipts.add(receipt);
+    byCollector.set(who, collector);
+  }
+  return {
+    date,
+    totalMinor,
+    receipts: receipts.size,
+    voided,
+    byMethod: [...byMethod.entries()].map(([method, value]) => ({ method, amountMinor: value.amountMinor, receipts: value.receipts.size })).sort((a, b) => b.amountMinor - a.amountMinor),
+    byCollector: [...byCollector.entries()].map(([name, value]) => ({ name, amountMinor: value.amountMinor, receipts: value.receipts.size })).sort((a, b) => b.amountMinor - a.amountMinor),
+  };
+}

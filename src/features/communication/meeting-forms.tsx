@@ -117,8 +117,8 @@ export function MeetingForm({
         <TextField name="endMinute" label="Ends" type="time" defaultValue={d?.endMinute} hint="Optional. Without it, the meeting runs to the end of the day." />
       </FieldRow>
       <FieldRow>
-        <TextField name="location" label="Location" placeholder="School auditorium" defaultValue={d?.location} />
-        <TextField name="meetingLink" label="Online meeting link" type="url" placeholder="https://" defaultValue={d?.meetingLink} />
+        <TextField name="location" label="Location (optional)" placeholder="School auditorium" defaultValue={d?.location} />
+        <TextField name="meetingLink" label="Online meeting link (optional)" inputMode="url" autoComplete="url" placeholder="meet.google.com/abc-defg-hij" hint="Leave empty for a meeting at school." defaultValue={d?.meetingLink} />
       </FieldRow>
 
       <fieldset className="flex flex-col gap-2">

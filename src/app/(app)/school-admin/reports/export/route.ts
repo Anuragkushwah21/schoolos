@@ -127,7 +127,7 @@ export async function GET(request: NextRequest) {
 
   switch (kind) {
     case "students":
-      return csvResponse(`${school}-students-${stamp}.csv`, await studentListReport(ctx, { sectionId: params.get("section"), classId: params.get("class"), status: params.get("status"), q: params.get("q") }));
+      return csvResponse(`${school}-students-${stamp}.csv`, await studentListReport(ctx, { sectionId: params.get("section"), classId: params.get("class"), status: params.get("status"), q: params.get("q"), gender: (["MALE", "FEMALE", "OTHER"] as const).find((value) => value === params.get("gender")) ?? null, admitted: params.get("admitted") === "NEW" ? "NEW" : /^\d{4}$/.test(params.get("admitted") ?? "") ? Number(params.get("admitted")) : null }));
     case "teachers":
       return csvResponse(`${school}-teachers-${stamp}.csv`, await teacherListReport(ctx));
     case "class-strength":

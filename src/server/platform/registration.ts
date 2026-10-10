@@ -1,10 +1,9 @@
 import "server-only";
 
-import type { PlanTier } from "@/generated/prisma/enums";
 import { RateLimitedError } from "@/lib/errors";
 import { slugify } from "@/lib/format";
 import type { RegisterSchoolInput } from "@/lib/validation/platform";
-import { ConflictError } from "@/lib/errors";
+import { ConflictError, ValidationError } from "@/lib/errors";
 import { recordAudit } from "@/server/audit/log";
 import { hashPassword } from "@/server/auth/password";
 import { PUBLIC_FORM_RATE_LIMIT, rateLimit } from "@/server/auth/rate-limit";
@@ -107,12 +106,16 @@ export async function registerSchool(
     }
   }
 
+  // Only a published plan open for new schools; checked here, not trusted from the form.
   const plan = input.plan
     ? await prisma.plan.findFirst({
-        where: { tier: input.plan as PlanTier, isActive: true },
+        where: { slug: input.plan, isActive: true, status: "PUBLISHED" },
         select: { id: true },
       })
     : null;
+  if (input.plan && !plan) {
+    throw new ValidationError("That plan is no longer available. Choose another plan, or “Not sure yet”.", { plan: ["Choose another plan"] });
+  }
 
   const [firstName, ...rest] = input.contactName.trim().split(/\s+/);
   const passwordHash = await hashPassword(input.password);

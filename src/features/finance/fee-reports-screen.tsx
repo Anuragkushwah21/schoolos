@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/dates";
 import type { TenantContext } from "@/server/auth/current-user";
-import { classFeeSummary, overdueInstallments, sessionFeeSummary } from "@/server/finance/fee-reports";
+import { classFeeSummary, dailyCollection, overdueInstallments, sessionFeeSummary } from "@/server/finance/fee-reports";
 import { lateFeePolicy } from "@/server/finance/late-fees";
 
 import { applyLateFeesAction } from "./actions";
@@ -28,7 +28,7 @@ function Money({ minor, strong = false }: { minor: number; strong?: boolean }) {
  * (server/finance/fee-reports.ts); each report also downloads as CSV.
  */
 export async function FeeReportsScreen({ ctx, exportBase, canApplyLateFees, canSetPolicy }: { ctx: TenantContext; exportBase: string; canApplyLateFees: boolean; canSetPolicy: boolean }) {
-  const [byClass, bySession, overdue, policy] = await Promise.all([classFeeSummary(ctx), sessionFeeSummary(ctx), overdueInstallments(ctx), lateFeePolicy(ctx)]);
+  const [byClass, bySession, overdue, policy, day] = await Promise.all([classFeeSummary(ctx), sessionFeeSummary(ctx), overdueInstallments(ctx), lateFeePolicy(ctx), dailyCollection(ctx)]);
   const csv = (kind: string) => `${exportBase}?kind=${kind}` as Route;
   const total = byClass.total;
   return (
@@ -41,6 +41,38 @@ export async function FeeReportsScreen({ ctx, exportBase, canApplyLateFees, canS
         <StatCard tone="amber" label="Pending" value={rupees(total.pendingMinor)} hint={`${total.students} students`} />
         <StatCard tone="red" label="Overdue" value={rupees(overdue.totalMinor)} hint={`${overdue.rows.length} instalments`} />
       </div>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>{`Today at the fee desk · ${formatDate(day.date)}`}</CardTitle>
+          <CardDescription>{`${rupees(day.totalMinor)} in ${day.receipts} receipt${day.receipts === 1 ? "" : "s"}${day.voided ? ` · ${day.voided} voided payment${day.voided === 1 ? "" : "s"} not counted` : ""}. Payments recorded by staff — SchoolOS takes no online payments.`}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-6 md:grid-cols-2">
+          {[
+            { title: "By method", rows: day.byMethod.map((row) => ({ key: row.method, label: row.method === "UPI" ? "UPI" : row.method.charAt(0) + row.method.slice(1).toLowerCase().replaceAll("_", " "), amountMinor: row.amountMinor, receipts: row.receipts })) },
+            { title: "By who took it", rows: day.byCollector.map((row) => ({ key: row.name, label: row.name, amountMinor: row.amountMinor, receipts: row.receipts })) },
+          ].map((group) => (
+            <div key={group.title}>
+              <p className="mb-2 text-sm font-semibold">{group.title}</p>
+              {group.rows.length ? (
+                <table className="w-full text-sm">
+                  <tbody className="divide-y">
+                    {group.rows.map((row) => (
+                      <tr key={row.key}>
+                        <td className="px-3 py-2">{row.label}</td>
+                        <td className="text-muted-foreground px-3 py-2 text-right tabular-nums">{`${row.receipts} receipt${row.receipts === 1 ? "" : "s"}`}</td>
+                        <Money minor={row.amountMinor} strong />
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="text-muted-foreground text-sm">Nothing collected yet today.</p>
+              )}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
       <Card className="mb-6">
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">

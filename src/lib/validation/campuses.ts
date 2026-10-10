@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { id, optionalInt, optionalText, requiredEmail, requiredPhone, requiredText } from "@/lib/validation/common";
+import { checkbox, id, optionalInt, optionalText, requiredEmail, requiredPhone, requiredText } from "@/lib/validation/common";
 
 const list = z.preprocess((value) => (Array.isArray(value) ? value : value === undefined || value === null || value === "" ? [] : [value]), z.array(z.string().max(40)).max(40));
 
@@ -28,7 +28,7 @@ export type CampusRequestInput = z.infer<typeof campusRequestSchema>;
 export const campusRequestEditSchema = campusRequestSchema.extend({ requestId: id });
 
 /** The Super Admin's decision on a request. */
-export const campusApproveSchema = z.object({ requestId: id, modules: list, roles: list, reviewNote: optionalText(1000) });
+export const campusApproveSchema = z.object({ requestId: id, modules: list, roles: list, reviewNote: optionalText(1000), raiseLimit: checkbox });
 export const campusRejectSchema = z.object({ requestId: id, reason: requiredText("a reason (the school is told)", 1000) });
 export const campusReviewSchema = z.object({ requestId: id });
 export const campusSwitchSchema = z.object({ schoolId: z.string().max(64).optional().transform((value) => value || null) });
@@ -39,3 +39,6 @@ export const planRequestSchema = z.object({ planId: id, note: optionalText(500) 
 export const planRequestIdSchema = z.object({ requestId: id });
 export const planApproveSchema = z.object({ requestId: id, reviewNote: optionalText(500) });
 export const planRejectSchema = z.object({ requestId: id, reason: requiredText("a reason (the school is told)", 500) });
+
+/** One campus's switched-on optional modules (unknown keys are dropped by the service). */
+export const campusModulesSchema = z.object({ schoolId: id, modules: list });

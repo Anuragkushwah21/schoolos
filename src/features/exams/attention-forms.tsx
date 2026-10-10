@@ -3,7 +3,7 @@
 import { ActionForm } from "@/components/forms/action-form";
 import { FieldRow, SelectField, SubmitButton, TextField } from "@/components/forms/fields";
 
-import { saveAttentionSettingsAction } from "./actions";
+import { saveAttentionSettingsAction, saveSignalSettingsAction } from "./actions";
 
 /** School Admin: the Needs Attention threshold and how many of the last three tests count. */
 export function AttentionSettingsForm({ percent, repeat }: { percent: number; repeat: number }) {
@@ -25,6 +25,21 @@ export function AttentionSettingsForm({ percent, repeat }: { percent: number; re
       </FieldRow>
       <div>
         <SubmitButton variant="outline">Save rule</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** School Admin: the attendance threshold and the window it is measured over. */
+export function SignalSettingsForm({ percent, days }: { percent: number; days: number }) {
+  return (
+    <ActionForm action={saveSignalSettingsAction}>
+      <FieldRow>
+        <TextField name="percent" label="Attendance needs attention below (%)" type="number" min={1} max={99} defaultValue={String(percent)} required />
+        <TextField name="days" label="Over the last (days)" type="number" min={7} max={120} defaultValue={String(days)} required />
+      </FieldRow>
+      <div>
+        <SubmitButton variant="outline">Save attendance rule</SubmitButton>
       </div>
     </ActionForm>
   );

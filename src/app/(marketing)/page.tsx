@@ -5,18 +5,21 @@ import {
   Faq,
   Features,
   Hero,
+  MultiCampus,
   OffersSection,
   Pricing,
+  Problems,
   Roles,
   Security,
+  Solutions,
   Steps,
 } from "@/features/marketing/sections";
 import { getHomepageCatalogue } from "@/server/platform/marketing";
 
 export const metadata: Metadata = {
-  title: { absolute: "SchoolOS — School management for every school you run" },
+  title: { absolute: "SchoolOS — Your Entire School. One Smart Platform." },
   description:
-    "Admissions, students, teachers, timetable, attendance and a public website for schools from Nursery to Class 12, with each school's data kept private.",
+    "Students, attendance, exams and report cards, fees and receipts, timetable, notices and a parent portal for schools from Nursery to Class 12. Try the Live Demo.",
 };
 
 /**
@@ -45,11 +48,14 @@ export default async function HomePage() {
   return (
     <main className="flex flex-1 flex-col">
       <Hero offer={offers[0]} />
-      <OffersSection offers={offers} upcoming={upcoming} />
+      <Problems />
+      <Solutions />
       <Features />
       <Roles />
-      <Steps />
+      <MultiCampus />
       <Security />
+      <Steps />
+      <OffersSection offers={offers} upcoming={upcoming} />
       <Pricing plans={plans} />
       <Faq />
       <ClosingCta />

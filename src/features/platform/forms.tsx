@@ -1,10 +1,7 @@
 "use client";
 
-import { useState } from "react";
-
 import { ActionForm } from "@/components/forms/action-form";
 import { LimitFields, RoleChecks } from "@/features/campuses/forms";
-import { OptionalModuleChecks } from "@/features/platform/module-forms";
 import { CheckboxField, FieldRow, PhoneField, SelectField, SubmitButton, TextField, TextareaField, type SelectOption } from "@/components/forms/fields";
 
 import {
@@ -12,9 +9,9 @@ import {
   reasonTransitionAction,
   resetAdminPasswordAction,
   saveOfferAction,
+  renameSchoolAction,
   setSchoolRolesAction,
   setSubscriptionAction,
-  updatePlanAction,
 } from "./actions";
 
 export function ReasonForm({
@@ -150,76 +147,6 @@ export function OfferForm({
   );
 }
 
-export function PlanForm({
-  plan,
-}: {
-  plan: {
-    id: string;
-    name: string;
-    description: string | null;
-    priceRupees: number;
-    maxStudents: number | null;
-    maxTeachers: number | null;
-    maxAdmins: number | null;
-    storageMb: number | null;
-    isActive: boolean;
-    optionalModules: string[];
-    campusLimit: number;
-    availableRoles: string[];
-    roleLimits: Record<string, number | undefined>;
-  };
-}) {
-  return (
-    <ActionForm action={updatePlanAction}>
-      <input type="hidden" name="planId" value={plan.id} />
-      <FieldRow>
-        <TextField name="name" label="Name" defaultValue={plan.name} required />
-        <TextField name="priceRupees" label="Price per year (₹)" inputMode="decimal" defaultValue={plan.priceRupees} required />
-      </FieldRow>
-      <TextareaField name="description" label="Description" defaultValue={plan.description ?? ""} rows={2} />
-      <p className="text-muted-foreground text-xs">Leave a limit blank for unlimited.</p>
-      <FieldRow>
-        <TextField name="maxStudents" label="Max students" inputMode="numeric" defaultValue={plan.maxStudents ?? ""} />
-        <TextField name="maxTeachers" label="Max teachers" inputMode="numeric" defaultValue={plan.maxTeachers ?? ""} />
-      </FieldRow>
-      <FieldRow>
-        <TextField name="maxAdmins" label="Max admins" inputMode="numeric" defaultValue={plan.maxAdmins ?? ""} />
-        <TextField name="storageMb" label="Storage (MB)" inputMode="numeric" defaultValue={plan.storageMb ?? ""} />
-      </FieldRow>
-      <div className="flex flex-col gap-2">
-        <p className="text-sm font-medium">Optional modules in this plan</p>
-        <p className="text-muted-foreground text-xs">Core modules are in every plan. Schools that follow this plan get the change; schools adjusted by hand keep theirs.</p>
-        <PlanModuleChecks initial={plan.optionalModules} />
-      </div>
-      <div className="flex flex-col gap-2">
-        <p className="text-sm font-medium">Roles available</p>
-        <p className="text-muted-foreground text-xs">School Admin, Teacher, Parent and Student are always available. The School Admin decides who gets these.</p>
-        <RoleChecks name="availableRoles" initial={plan.availableRoles} />
-      </div>
-      <div className="flex flex-col gap-2">
-        <p className="text-sm font-medium">Role & staff limits (per campus)</p>
-        <p className="text-muted-foreground text-xs">Blank means unlimited. Students and teachers use the fields above.</p>
-        <LimitFields initial={plan.roleLimits} keys={["STAFF", "PRINCIPAL", "ACCOUNTANT", "RECEPTIONIST", "LIBRARIAN", "DRIVER", "SECURITY"]} />
-      </div>
-      <TextField name="campusLimit" label="Campus limit (per owner)" inputMode="numeric" defaultValue={plan.campusLimit} hint="1 = single school (multi-campus off)." required />
-      <CheckboxField
-        name="isActive"
-        label="Offered to new schools"
-        hint="Hiding a plan does not affect schools already on it."
-        defaultChecked={plan.isActive}
-      />
-      <div>
-        <SubmitButton>Save plan</SubmitButton>
-      </div>
-    </ActionForm>
-  );
-}
-
-function PlanModuleChecks({ initial }: { initial: string[] }) {
-  const [modules, setModules] = useState(initial);
-  return <OptionalModuleChecks selected={modules} onChange={setModules} />;
-}
-
 /** Super Admin: which roles one school may use, and its own limits (blank = the plan's). */
 export function SchoolRolesForm({ schoolId, roles, followPlan, limits }: { schoolId: string; roles: string[]; followPlan: boolean; limits: Record<string, number | undefined> }) {
   return (
@@ -234,6 +161,21 @@ export function SchoolRolesForm({ schoolId, roles, followPlan, limits }: { schoo
       </div>
       <div>
         <SubmitButton variant="outline">Save roles & limits</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+/** Super Admin: correct the school's name (the campus shows it everywhere). */
+export function RenameSchoolForm({ schoolId, name }: { schoolId: string; name: string }) {
+  return (
+    <ActionForm action={renameSchoolAction} className="gap-2">
+      <input type="hidden" name="schoolId" value={schoolId} />
+      <TextField name="name" label="School / campus name" defaultValue={name} required />
+      <div>
+        <SubmitButton size="sm" variant="outline">
+          Save name
+        </SubmitButton>
       </div>
     </ActionForm>
   );

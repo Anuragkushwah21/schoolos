@@ -11,7 +11,9 @@ import { OpenCampusButton } from "@/features/campuses/forms";
 import { rupees } from "@/features/finance/money";
 import { requireTenant } from "@/server/auth/current-user";
 import { campusRequestOverview } from "@/server/campuses/requests";
+import { periodLabel } from "@/lib/plan-catalog";
 import { allCampusesSummary, myOrganization } from "@/server/platform/campuses";
+import { hasPlanFeature } from "@/server/platform/entitlements";
 
 export const metadata: Metadata = { title: "My Schools" };
 
@@ -26,7 +28,9 @@ const pct = (value: number | null) => (value === null ? "—" : `${Math.round(va
 export default async function CampusesPage() {
   const ctx = await requireTenant("SCHOOL_ADMIN");
   const organization = await myOrganization(ctx.user);
-  const [overview, summary] = await Promise.all([campusRequestOverview(ctx), organization.isOwner && organization.schools.length > 1 ? allCampusesSummary(ctx.user) : Promise.resolve(null)]);
+  // The organization dashboard is a plan feature; checked on the server again inside allCampusesSummary.
+  const orgDashboard = await hasPlanFeature(organization.id, "ORG_DASHBOARD");
+  const [overview, summary] = await Promise.all([campusRequestOverview(ctx), organization.isOwner && organization.schools.length > 1 && orgDashboard ? allCampusesSummary(ctx.user) : Promise.resolve(null)]);
   const openRequests = overview.requests.filter((request) => request.status === "PENDING" || request.status === "UNDER_REVIEW").length;
 
   return (
@@ -39,8 +43,13 @@ export default async function CampusesPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline">
-              <Link href={"/school-admin/plan" as Route}>Upgrade Plan</Link>
+              <Link href={"/school-admin/plan" as Route}>Plan &amp; billing</Link>
             </Button>
+            {organization.isOwner ? (
+              <Button asChild variant="outline">
+                <Link href={"/school-admin/feature-requests" as Route}>Feature requests</Link>
+              </Button>
+            ) : null}
             <Button asChild variant="outline">
               <Link href={"/school-admin/campuses/requests" as Route}>{overview.requests.length ? `My Campus Requests (${overview.requests.length})` : "My Campus Requests"}</Link>
             </Button>
@@ -54,10 +63,12 @@ export default async function CampusesPage() {
       <div className="mb-6 grid gap-4 md:grid-cols-3">
         <StatCard tone="blue" icon={Building2Icon} label="Current school" value={ctx.schoolName} hint={organization.schools.length > 1 ? `${organization.schools.length} schools in ${organization.name}` : "your only school"} />
         <StatCard tone="purple" icon={SparklesIcon} label="Current plan" value={overview.plan.planName ?? "Not set"} hint={`${overview.plan.modules.length} optional modules · ${overview.plan.roles.length} optional roles`} href={"/school-admin/plan" as Route} />
-        <StatCard tone={overview.withinEntitlement ? "green" : "amber"} icon={LayersIcon} label="Campus entitlement" value={`${organization.count} / ${organization.limit}`} hint={overview.pending ? `${overview.pending} request${overview.pending === 1 ? "" : "s"} waiting` : organization.limit > 1 ? "multi-campus on" : "single school plan"} />
+        <StatCard tone={overview.withinEntitlement ? "green" : "amber"} icon={LayersIcon} label="Campuses" value={`${organization.count} of ${organization.included} included`} hint={overview.pending ? `${overview.pending} request${overview.pending === 1 ? "" : "s"} waiting` : organization.extraAllowed ? `more at an extra charge${organization.limit !== null ? `, up to ${organization.limit}` : ""}` : organization.limit !== null && organization.limit > organization.included ? `up to ${organization.limit} allowed for you` : organization.included > 1 ? "multi-campus on" : "single school plan"} href={"/school-admin/plan" as Route} />
       </div>
 
       {overview.entitlement ? <p className="bg-info-soft text-info-strong mb-6 rounded-xl border px-4 py-3 text-sm">{overview.entitlement}</p> : null}
+      {overview.extraFee ? <p className="bg-warning-soft text-warning-strong mb-6 rounded-xl border px-4 py-3 text-sm">{`Your plan includes ${overview.included === 1 ? "1 campus" : `${overview.included} campuses`}. Another campus would be ${rupees(overview.extraFee.amountMinor)} per ${periodLabel(overview.extraFee.period)}, billed by SchoolOS after approval — nothing is charged now.`}</p> : null}
+      {organization.isOwner && organization.schools.length > 1 && !orgDashboard ? <p className="bg-muted/50 mb-6 rounded-xl border px-4 py-3 text-sm">The All Campuses summary comes with plans that include the organization dashboard. Each campus still works on its own — open it from the list below.</p> : null}
 
       {summary ? (
         <>
@@ -116,13 +127,28 @@ export default async function CampusesPage() {
       ) : (
         <Card className="mb-8">
           <CardHeader>
-            <CardTitle>{ctx.schoolName}</CardTitle>
+            <CardTitle>{organization.schools.length > 1 ? "Your schools / campuses" : "Your school"}</CardTitle>
             <CardDescription>
-              {organization.schools.length > 1 || !organization.isOwner
-                ? `Part of ${organization.name}. The owner${organization.owner ? `, ${organization.owner.firstName} ${organization.owner.lastName},` : ""} sees all campuses.`
-                : "Your school. When SchoolOS enables more campuses for your plan, you can request another school here and switch between them."}
+              {organization.isOwner
+                ? organization.schools.length > 1
+                  ? `${organization.name} · ${organization.schools.length} campuses`
+                  : "Your first campus is the school you registered. When SchoolOS enables more campuses for your plan, you can request another school here and switch between them."
+                : `Part of ${organization.name}. The owner${organization.owner ? `, ${organization.owner.firstName} ${organization.owner.lastName},` : ""} sees all campuses.`}
             </CardDescription>
           </CardHeader>
+          <CardContent>
+            <ul className="divide-y text-sm">
+              {organization.schools.map((school) => (
+                <li key={school.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                  <span className="font-medium">{school.name}</span>
+                  {school.id === ctx.schoolId ? <StatusBadge status="CURRENT" label="You are here" tone="info" /> : null}
+                  {school.status !== "ACTIVE" ? <StatusBadge status={school.status} /> : null}
+                  <span className="text-muted-foreground ml-auto text-xs">{[school.city, school.state].filter(Boolean).join(", ") || "Location not set"}</span>
+                  {organization.isOwner && school.status === "ACTIVE" && school.id !== ctx.schoolId ? <OpenCampusButton schoolId={school.id} /> : null}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
         </Card>
       )}
 

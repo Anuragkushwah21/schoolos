@@ -1,6 +1,7 @@
 import "server-only";
 
 import { NotFoundError, ValidationError } from "@/lib/errors";
+import { assertNotDemo } from "@/server/demo/guard";
 import { recordAudit } from "@/server/audit/log";
 import { hashPassword, verifyPassword } from "@/server/auth/password";
 import { hashSessionToken, type SessionUser } from "@/server/auth/session";
@@ -18,6 +19,8 @@ export async function changePassword(
   currentSessionToken: string,
   input: { currentPassword: string; newPassword: string },
 ): Promise<void> {
+  // The demo people's passwords are nobody's to change.
+  assertNotDemo(user, "Changing the password");
   const account = await prisma.user.findUnique({
     where: { id: user.id },
     select: { passwordHash: true },

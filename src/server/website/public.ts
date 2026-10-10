@@ -14,7 +14,8 @@ import { prisma } from "@/server/db/prisma";
 
 export const getPublicSchool = cache(async (slug: string) => {
   return prisma.school.findFirst({
-    where: { slug, status: "ACTIVE" },
+    // Live Demo sandboxes have no public website.
+    where: { slug, status: "ACTIVE", isDemo: false },
     select: {
       id: true,
       slug: true,

@@ -16,7 +16,6 @@ import { assertAdminOrStaffPermission, staffHolds } from "@/server/auth/staff-ac
 import { isUniqueViolation } from "@/server/db/errors";
 import { type AdmissionResult, createStudent, phoneKey } from "@/server/people/students";
 import { assertCan } from "@/server/auth/permissions";
-import { isSchoolLeader } from "@/lib/permissions";
 
 /**
  * Family enquiries — a lead, never an admission or a fee.
@@ -148,7 +147,9 @@ export async function createEnquiry(ctx: TenantContext, asked: CreateEnquiryInpu
   await assertAdminOrStaffPermission(ctx, "enquiries.manage");
   // The fee discussion needs its own permission; without it a new enquiry is
   // taken with no fee figures, whatever the form sent.
-  const input = isSchoolLeader(ctx.user.role) || (await staffHolds(ctx, "enquiries.fees")) ? asked : withoutFees(asked);
+  // Same rule as editing the fee discussion later (`saveChildFee`): the School
+  // Admin or staff with `enquiries.fees` — not the Principal, who never sets fees.
+  const input = ctx.user.role === "SCHOOL_ADMIN" || (await staffHolds(ctx, "enquiries.fees")) ? asked : withoutFees(asked);
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true, name: true } });
   if (!session) throw new AppError("CONFLICT", "Set up the current academic session first.");
 
@@ -861,6 +862,9 @@ export async function applyDiscussedConcessions(
   input: { enquiryId: string; confirm: boolean; items: Array<{ childId: string; chargeId: string; amountMinor: number; formIndex?: number }> },
 ): Promise<{ applied: number }> {
   assertCan(ctx, "students", "EDIT");
+  // Turning a discussed discount into a real concession changes a fee record:
+  // the same permission as a concession at the fee desk (never the Principal).
+  await assertAdminOrStaffPermission(ctx, "fees.concessions");
   if (!input.confirm) throw new ValidationError(INVALID, { confirm: ["Tick to confirm before any fee record is changed"] });
   if (!input.items.length) throw new ValidationError(INVALID, { _form: ["Choose at least one child"] });
   const plan = await concessionPlan(ctx, input.enquiryId);

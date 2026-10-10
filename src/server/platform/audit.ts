@@ -32,7 +32,7 @@ export async function listAuditLog(
 
   const page = Math.max(1, filters.page ?? 1);
   const where: Prisma.AuditLogWhereInput = {
-    AND: [PLATFORM_AUDIT_WHERE],
+    AND: [PLATFORM_AUDIT_WHERE, { OR: [{ schoolId: null }, { school: { isDemo: false } }] }],
     ...(filters.action ? { action: filters.action } : {}),
     ...(filters.schoolId ? { schoolId: filters.schoolId } : {}),
     ...(filters.q ? { summary: { contains: filters.q, mode: "insensitive" } } : {}),

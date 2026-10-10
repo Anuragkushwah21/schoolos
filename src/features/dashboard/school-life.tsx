@@ -1,11 +1,12 @@
 import type { Route } from "next";
 import Link from "next/link";
-import { CalendarOffIcon, ChevronRightIcon, HandshakeIcon, type LucideIcon, MegaphoneIcon, PartyPopperIcon } from "lucide-react";
+import { CalendarDaysIcon, CalendarOffIcon, ChevronRightIcon, HandshakeIcon, type LucideIcon, MegaphoneIcon, PartyPopperIcon } from "lucide-react";
 
 import { type AccentTone, TONE_SOLID } from "@/components/shared/tones";
-import { formatDate } from "@/lib/dates";
+import { addDays, formatDate, formatMinutes, today } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { studentLeaveSummary } from "@/server/attendance/student-leave";
+import { upcomingEntries } from "@/server/calendar/entries";
 import type { TenantContext } from "@/server/auth/current-user";
 import { eventSummary } from "@/server/communication/events";
 import { meetingSummary } from "@/server/communication/meetings";
@@ -83,14 +84,24 @@ export async function SchoolLifeCards({
   const leader = role === "SCHOOL_ADMIN" || role === "PRINCIPAL";
   const leavePath = leader ? "/school-admin/student-leave" : role === "TEACHER" ? "/teacher/student-leave" : `${base}/leave`;
 
-  const [events, meetings, notices, leave, staffPending] = await Promise.all([
+  const calendarBase = leader ? "/school-admin" : base;
+  const [events, meetings, notices, leave, staffPending, comingUp] = await Promise.all([
     eventSummary(ctx),
     meetingSummary(ctx),
     unreadNoticeSummary(ctx),
     // The Principal has no leave desk: the row is left out for them.
     role === "NON_TEACHING_STAFF" ? myLeaveSummary(ctx) : studentLeaveSummary(ctx),
     leader ? pendingStaffLeaveCount(ctx) : Promise.resolve(0),
+    // The reminder: what is on the calendar for this person in the next 7 days.
+    upcomingEntries(ctx, 7, calendarBase),
   ]);
+  const now = today();
+  const whenOf = (entry: (typeof comingUp)[number]) => {
+    const time = entry.startMinute !== null ? ` · ${formatMinutes(entry.startMinute)}` : "";
+    if (entry.startDate <= now && now <= entry.endDate) return `Today${time}`;
+    if (entry.startDate.getTime() === addDays(now, 1).getTime()) return `Tomorrow${time}`;
+    return `${formatDate(entry.startDate)}${time}`;
+  };
 
   const leaveHighlight: Highlight | null = (() => {
     const item = leave?.highlight;
@@ -110,6 +121,36 @@ export async function SchoolLifeCards({
       <h2 id="school-updates" className="border-b px-4 py-3 text-base font-semibold">
         School updates
       </h2>
+      <div className="border-b px-4 py-3" aria-labelledby="coming-up-week">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 id="coming-up-week" className="flex items-center gap-2 text-sm font-semibold">
+            <CalendarDaysIcon className="text-primary size-4" aria-hidden />
+            Coming up this week
+          </h3>
+          <Link href={`${calendarBase}/holidays` as Route} className="text-primary text-xs font-medium hover:underline">
+            Open calendar
+          </Link>
+        </div>
+        {comingUp.length ? (
+          <ul className="flex flex-col gap-1.5">
+            {comingUp.slice(0, 5).map((entry) => (
+              <li key={entry.key} className="flex items-baseline gap-2 text-sm">
+                <span className={cn("shrink-0 rounded px-1.5 text-[11px] font-semibold", entry.startDate <= now && now <= entry.endDate ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{whenOf(entry)}</span>
+                {entry.href ? (
+                  <Link href={entry.href as Route} className="min-w-0 truncate hover:underline">
+                    {entry.title}
+                  </Link>
+                ) : (
+                  <span className="min-w-0 truncate">{entry.title}</span>
+                )}
+              </li>
+            ))}
+            {comingUp.length > 5 ? <li className="text-muted-foreground text-xs">{`+${comingUp.length - 5} more on the calendar`}</li> : null}
+          </ul>
+        ) : (
+          <p className="text-muted-foreground text-xs">Nothing on your calendar in the next 7 days.</p>
+        )}
+      </div>
       <ul className={cn("divide-y", !narrow && "sm:grid sm:grid-cols-2 sm:divide-y-0 sm:[&>li]:border-b sm:[&>li:nth-child(odd)]:border-r")}>
         <UpdateRow
           label="Notices"

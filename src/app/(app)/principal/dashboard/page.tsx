@@ -39,6 +39,7 @@ import { academicSnapshot, financeSnapshot, staffToday, studentBands } from "@/s
 import { getPrincipalAlerts } from "@/server/alerts/feeds";
 import { todayOverview } from "@/server/attendance/service";
 import { requireTenant } from "@/server/auth/current-user";
+import { signalSettings } from "@/server/exams/student-signals";
 import { getIntlLocale, getT } from "@/server/i18n";
 import { hasModule } from "@/server/platform/modules";
 import { classPerformance, principalInsights } from "@/server/principal/overview";
@@ -105,7 +106,9 @@ export default async function PrincipalDashboardPage() {
   const attended = attendedDays(overview.counts);
   const scored = classes.filter((row) => row.averageScore !== null);
   const progress = scored.length ? scored.reduce((sum, row) => sum + row.averageScore!, 0) / scored.length : null;
-  const lowAttendance = classes.filter((row) => row.attendance !== null && row.attendance < 0.75).sort((a, b) => a.attendance! - b.attendance!);
+  // The school's own attendance rule (School Admin → Student performance).
+  const cutoff = (await signalSettings(ctx)).percent;
+  const lowAttendance = classes.filter((row) => row.attendance !== null && row.attendance < cutoff / 100).sort((a, b) => a.attendance! - b.attendance!);
   const watch = [...classes].filter((row) => row.attendance !== null || row.averageScore !== null).sort((a, b) => (a.averageScore ?? 1) - (b.averageScore ?? 1)).slice(0, 6);
   const trend = insights.trend.filter((day) => day.rate !== null);
 
@@ -175,7 +178,7 @@ export default async function PrincipalDashboardPage() {
             <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Figure label="Academic progress" value={pct(progress)} />
               <Figure label="Lessons taught" value={insights.lessons.due ? `${pct(insights.lessons.rate)}` : "—"} />
-              <Figure label="Weak students" value={academic.needsAttention} warn={academic.needsAttention > 0} />
+              <Figure label="Needing attention" value={academic.needsAttention} warn={academic.needsAttention > 0} />
               <Figure label="Tests coming" value={academic.upcomingTests} />
             </div>
             <div className="grid gap-6 md:grid-cols-2">
@@ -224,7 +227,7 @@ export default async function PrincipalDashboardPage() {
           </Section>
 
           {/* E. Attendance */}
-          <Section title="Attendance" description="Classes under 75% over 30 days, and students absent 3+ days this week." href="/school-admin/attendance" linkLabel="Attendance">
+          <Section title="Attendance" description={`Classes under ${cutoff}% over 30 days, and students absent 3+ days this week.`} href="/school-admin/attendance" linkLabel="Attendance">
             {trend.length ? (
               <div className="mb-4 flex items-end gap-2" aria-label="Attendance over the last 7 days">
                 {trend.map((day) => (
@@ -249,7 +252,7 @@ export default async function PrincipalDashboardPage() {
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-muted-foreground text-sm">No class is below 75%.</p>
+                  <p className="text-muted-foreground text-sm">{`No class is below ${cutoff}%.`}</p>
                 )}
               </div>
               <div>

@@ -3,6 +3,7 @@ import "server-only";
 import { cache } from "react";
 
 import { AppError, ForbiddenError } from "@/lib/errors";
+import { type PlanFeature, campusPolicy, cleanFeatures, featureLabel } from "@/lib/plan-catalog";
 import { cleanModules, type OptionalModule } from "@/lib/school-modules";
 import { type LimitKey, type Limits, type OptionalRole, OPTIONAL_ROLE_KEYS, cleanLimits, cleanRoles, limitLabel, roleLabel } from "@/lib/school-roles";
 import { CURRENT_EMPLOYEE } from "@/lib/validation/lifecycle";
@@ -27,7 +28,7 @@ export const currentPlanOf = cache(async (schoolId: string) => {
   const subscription = await prisma.subscription.findFirst({
     where: { schoolId, status: { in: [...LIVE] } },
     orderBy: { createdAt: "desc" },
-    select: { plan: { select: { id: true, name: true, maxStudents: true, maxTeachers: true, roleLimits: true, availableRoles: true, optionalModules: true, campusLimit: true } } },
+    select: { plan: { select: { id: true, name: true, maxStudents: true, maxTeachers: true, roleLimits: true, availableRoles: true, optionalModules: true, campusLimit: true, features: true, extraCampusAllowed: true, extraCampusPriceMinor: true, extraCampusPeriod: true, maxCampuses: true, priceMinor: true, priceOnRequest: true, billingPeriod: true } } },
   });
   return subscription?.plan ?? null;
 });
@@ -98,4 +99,86 @@ export async function assertWithinLimit(ctx: { schoolId: string }, key: LimitKey
     "CONFLICT",
     `Your ${capacity.plan ? `${capacity.plan} plan` : "school"} allows up to ${capacity.limit} ${limitLabel(key).toLowerCase()} (${capacity.used} in use). Contact SchoolOS to raise the limit.`,
   );
+}
+
+// -----------------------------------------------------------------------------
+// Organization level: one plan for the owner's organization
+// -----------------------------------------------------------------------------
+
+/**
+ * The organization's plan is the plan of its first live campus (each campus
+ * carries a subscription row on the same plan — a plan change is applied to
+ * all of them together, see `approvePlanChange`).
+ */
+export const organizationPlanOf = cache(async (organizationId: string) => {
+  const primary = await prisma.school.findFirst({ where: { organizationId, status: { in: ["PENDING", "UNDER_REVIEW", "ACTIVE", "SUSPENDED"] } }, orderBy: { createdAt: "asc" }, select: { id: true } });
+  return primary ? currentPlanOf(primary.id) : null;
+});
+
+/**
+ * Everything one organization may use, kept apart so a refusal can say why:
+ * the plan (`plan`), which modules it makes eligible (`eligibleModules`),
+ * which organization-level features it includes (`features`), and its
+ * campus allowance. What each campus has switched on is per campus
+ * (`campusModules`).
+ */
+export const organizationEntitlements = cache(async (organizationId: string) => {
+  const [plan, organization, campuses] = await Promise.all([
+    organizationPlanOf(organizationId),
+    prisma.organization.findUnique({ where: { id: organizationId }, select: { campusLimitOverride: true } }),
+    prisma.school.count({ where: { organizationId, status: { in: ["PENDING", "UNDER_REVIEW", "ACTIVE", "SUSPENDED"] } } }),
+  ]);
+  const policy = campusPolicy(plan ?? { campusLimit: 1, extraCampusAllowed: false, extraCampusPriceMinor: null, extraCampusPeriod: "YEARLY", maxCampuses: null }, organization?.campusLimitOverride ?? null);
+  const features = cleanFeatures(plan?.features ?? []);
+  // An organization the Super Admin has allowed several campuses manages
+  // them from the organization dashboard, whatever its plan says.
+  if ((organization?.campusLimitOverride ?? 0) > 1 && !features.includes("ORG_DASHBOARD")) features.push("ORG_DASHBOARD");
+  return {
+    planId: plan?.id ?? null,
+    planName: plan?.name ?? null,
+    eligibleModules: cleanModules(plan?.optionalModules ?? []),
+    features,
+    campuses,
+    ...policy,
+    canAddCampus: policy.cap === null || campuses < policy.cap,
+  };
+});
+
+export async function hasPlanFeature(organizationId: string, feature: PlanFeature): Promise<boolean> {
+  return (await organizationEntitlements(organizationId)).features.includes(feature);
+}
+
+/** Refuse an organization-level feature the plan does not include, naming the plans that do. */
+export async function assertPlanFeature(organizationId: string, feature: PlanFeature): Promise<void> {
+  if (await hasPlanFeature(organizationId, feature)) return;
+  const plans = await prisma.plan.findMany({ where: { status: "PUBLISHED", isActive: true, features: { has: feature } }, orderBy: { displayOrder: "asc" }, select: { name: true } });
+  throw new ForbiddenError(`${featureLabel(feature)} is not part of your plan.${plans.length ? ` It comes with ${plans.map((plan) => plan.name).join(" and ")}.` : ""}`);
+}
+
+/**
+ * Why a module is or is not available on one campus — for an honest message
+ * instead of an unexplained refusal. Role permissions are checked separately
+ * (`assertCan`), demo restrictions by `assertNotDemo`.
+ */
+export async function moduleStatus(schoolId: string, module: OptionalModule): Promise<{ enabled: boolean; eligible: boolean; reason: "ENABLED" | "NOT_ENABLED_FOR_CAMPUS" | "NOT_IN_PLAN" | "NO_SUBSCRIPTION" }> {
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { optionalModules: true, organizationId: true } });
+  const enabled = cleanModules(school?.optionalModules ?? []).includes(module);
+  const plan = school?.organizationId ? await organizationPlanOf(school.organizationId) : await currentPlanOf(schoolId);
+  const eligible = cleanModules(plan?.optionalModules ?? []).includes(module);
+  if (enabled) return { enabled, eligible, reason: "ENABLED" };
+  if (!plan) return { enabled, eligible, reason: "NO_SUBSCRIPTION" };
+  return { enabled, eligible, reason: eligible ? "NOT_ENABLED_FOR_CAMPUS" : "NOT_IN_PLAN" };
+}
+
+/**
+ * Modules this campus's plan includes but the campus has not switched on —
+ * shown as "available to switch on" (sidebar badge, dashboard notice, Plan &
+ * billing), never switched on by themselves.
+ */
+export async function modulesAvailableToEnable(schoolId: string): Promise<{ planName: string | null; modules: OptionalModule[] }> {
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { optionalModules: true, organizationId: true } });
+  if (!school) return { planName: null, modules: [] };
+  const plan = school.organizationId ? await organizationPlanOf(school.organizationId) : await currentPlanOf(schoolId);
+  const enabled = cleanModules(school.optionalModules);
+  return { planName: plan?.name ?? null, modules: cleanModules(plan?.optionalModules ?? []).filter((key) => !enabled.includes(key)) };
 }

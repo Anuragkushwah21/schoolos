@@ -15,6 +15,7 @@ import { requireCurrentSession, sectionLabel } from "@/server/academics/structur
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
+import { requireStreamTeaching } from "@/server/academics/stream-scope";
 import { requireSubjectAssignment, requireTeacherSelf } from "@/server/auth/teacher-access";
 import { assertCan } from "@/server/auth/permissions";
 import { gradingRules } from "@/server/exams/grading";
@@ -733,7 +734,10 @@ async function requirePaper(ctx: TenantContext, assessmentId: string) {
     if (!paper.exam && paper.teacherId !== me.id) {
       throw new ForbiddenError("This test belongs to another teacher. Only the teacher who set it, or the school office, can change its marks.");
     }
-    if (paper.exam) await requireSubjectAssignment(ctx, paper.sectionId, paper.subjectId, paper.academicSessionId);
+    // An exam paper for one stream: only a teacher of that stream (or of the
+    // whole section) may mark it — not a teacher of the same subject in another stream.
+    if (paper.exam && paper.streamId) await requireStreamTeaching(ctx, { sectionId: paper.sectionId, subjectId: paper.subjectId, streamId: paper.streamId, academicSessionId: paper.academicSessionId });
+    else if (paper.exam) await requireSubjectAssignment(ctx, paper.sectionId, paper.subjectId, paper.academicSessionId);
     else await requireTeachingAssignment(ctx, paper.sectionId, paper.subjectId, paper.streamId, paper.academicSessionId);
   }
   return paper;

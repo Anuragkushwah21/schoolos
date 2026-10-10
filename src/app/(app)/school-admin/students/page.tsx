@@ -68,7 +68,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
               items={[
                 { href: "/school-admin/students/import", label: "Import from a spreadsheet" },
                 { href: "/school-admin/students/bulk", label: "Promote / move / change many" },
-                { href: `/school-admin/reports/export?${new URLSearchParams({ kind: "students", ...(sectionId ? { section: sectionId } : {}), ...(classId ? { class: classId } : {}), ...(statusParam ? { status: statusParam } : {}), ...(q ? { q } : {}) }).toString()}`, label: sectionId || classId || q || statusParam ? "Download this list (CSV)" : "Download list (CSV)", download: true },
+                { href: `/school-admin/reports/export?${new URLSearchParams({ kind: "students", ...(sectionId ? { section: sectionId } : {}), ...(classId ? { class: classId } : {}), ...(statusParam ? { status: statusParam } : {}), ...(q ? { q } : {}), ...(gender ? { gender } : {}), ...(admittedParam ? { admitted: admittedParam } : {}) }).toString()}`, label: sectionId || classId || q || statusParam || gender || admittedParam ? "Download this list (CSV)" : "Download list (CSV)", download: true },
               ]}
             />
             <Button asChild>

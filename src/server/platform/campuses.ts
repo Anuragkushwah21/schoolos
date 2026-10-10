@@ -1,5 +1,7 @@
 import "server-only";
 
+import { assertNotDemo } from "@/server/demo/guard";
+
 import { today } from "@/lib/dates";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 import { recordAudit } from "@/server/audit/log";
@@ -9,7 +11,8 @@ import { hashSessionToken } from "@/server/auth/session";
 import { prisma } from "@/server/db/prisma";
 import { financeSnapshot } from "@/server/analytics/admin-dashboard";
 import type { TenantContext } from "@/server/auth/current-user";
-import { currentPlanOf } from "@/server/platform/entitlements";
+import { type BillingPeriodKey, campusPolicy } from "@/lib/plan-catalog";
+import { assertPlanFeature, currentPlanOf } from "@/server/platform/entitlements";
 import { forSchool } from "@/server/tenancy/scope";
 
 /**
@@ -38,8 +41,28 @@ export async function ensureOrganization(schoolId: string) {
   return organization.id;
 }
 
-/** The organization's campus limit: the Super Admin's override, else the plan of its first campus. */
-export async function campusLimitOf(organizationId: string): Promise<{ limit: number; planName: string | null; overridden: boolean }> {
+/**
+ * A school was renamed: the campus shows its new name everywhere at once (it
+ * is read from the School row). The organization follows only while it is a
+ * single-campus organization still named after this school — an owner's group
+ * name for several campuses is never overwritten.
+ */
+export async function syncOrganizationName(schoolId: string, previousName: string, nextName: string): Promise<void> {
+  if (previousName === nextName) return;
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { organizationId: true } });
+  if (!school?.organizationId) return;
+  const campuses = await campusCount(school.organizationId);
+  if (campuses > 1) return;
+  await prisma.organization.updateMany({ where: { id: school.organizationId, name: previousName }, data: { name: nextName } });
+}
+
+/**
+ * How many campuses the organization may run. `included` campuses come with
+ * the plan fee; past them, more are possible only if the plan allows extra
+ * campuses (at its extra-campus price), up to `limit` (null = no cap). The
+ * Super Admin's override for one organization is a hard cap.
+ */
+export async function campusLimitOf(organizationId: string): Promise<{ limit: number | null; included: number; extraAllowed: boolean; extraPriceMinor: number | null; extraPeriod: BillingPeriodKey; planName: string | null; overridden: boolean }> {
   const organization = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: { campusLimitOverride: true, schools: { where: { status: { in: [...COUNTED] } }, orderBy: { createdAt: "asc" }, take: 1, select: { id: true } } },
@@ -47,8 +70,8 @@ export async function campusLimitOf(organizationId: string): Promise<{ limit: nu
   if (!organization) throw new NotFoundError();
   const primary = organization.schools[0];
   const plan = primary ? await currentPlanOf(primary.id) : null;
-  if (organization.campusLimitOverride !== null) return { limit: organization.campusLimitOverride, planName: plan?.name ?? null, overridden: true };
-  return { limit: plan?.campusLimit ?? 1, planName: plan?.name ?? null, overridden: false };
+  const policy = campusPolicy(plan ?? { campusLimit: 1, extraCampusAllowed: false, extraCampusPriceMinor: null, extraCampusPeriod: "YEARLY", maxCampuses: null }, organization.campusLimitOverride);
+  return { limit: policy.cap, included: policy.included, extraAllowed: policy.extraAllowed && !policy.overridden, extraPriceMinor: policy.extraPriceMinor, extraPeriod: policy.extraPeriod, planName: plan?.name ?? null, overridden: policy.overridden };
 }
 
 /** Campuses that count towards the limit (live, waiting or suspended — not rejected or closed). */
@@ -83,9 +106,11 @@ export async function myOrganization(user: SessionUser) {
     // Only the owner sees every campus; another School Admin sees their own.
     schools: isOwner ? organization.schools : organization.schools.filter((school) => school.id === homeId),
     limit: limit.limit,
+    included: limit.included,
+    extraAllowed: limit.extraAllowed,
     planName: limit.planName,
     count,
-    multiCampus: limit.limit > 1,
+    multiCampus: limit.limit === null || limit.limit > 1,
   };
 }
 
@@ -105,6 +130,7 @@ export async function switchableCampuses(user: SessionUser) {
  */
 export async function switchCampus(user: SessionUser, sessionToken: string, schoolId: string | null): Promise<{ name: string }> {
   assertRole(user, "SCHOOL_ADMIN");
+  assertNotDemo(user, "Switching campus");
   const home = user.homeSchoolId ?? user.schoolId;
   let target: { id: string; name: string } | null;
   if (!schoolId || schoolId === home) {
@@ -129,6 +155,7 @@ export async function allCampusesSummary(user: SessionUser) {
     select: { id: true, name: true, schools: { where: { status: { in: [...COUNTED] } }, orderBy: { createdAt: "asc" }, select: { id: true, name: true, city: true, status: true, optionalModules: true } } },
   });
   if (!organization) throw new ForbiddenError("Only the owner sees the All Campuses summary.");
+  await assertPlanFeature(organization.id, "ORG_DASHBOARD");
   const date = today();
   const rows = await Promise.all(
     organization.schools.map(async (school) => {

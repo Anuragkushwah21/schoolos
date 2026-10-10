@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { deleteMeetingAction } from "@/features/communication/meeting-actions";
 import { CancelMeetingForm, MeetingForm } from "@/features/communication/meeting-forms";
 import { MeetingDetails } from "@/features/communication/meeting-views";
+import { PtmFamiliesPanel } from "@/features/communication/ptm-panel";
+import { isSchoolLeader } from "@/lib/permissions";
 import { minutesToTime, today, toDateInput } from "@/lib/dates";
 import type { TenantContext } from "@/server/auth/current-user";
 import { getMeetingForAdmin, meetingTargetOptions } from "@/server/communication/meetings";
@@ -77,6 +79,17 @@ export async function MeetingManageScreen({ ctx, meetingId, base }: { ctx: Tenan
             </Card>
           ) : null}
         </div>
+        {meeting.type === "PTM" && isSchoolLeader(ctx.user.role) ? (
+          <Card id="families" className="scroll-mt-24">
+            <CardHeader>
+              <CardTitle>Families</CardTitle>
+              <CardDescription>Parents&apos; answers (optional), and after the meeting, who came. Remarks are for staff only.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <PtmFamiliesPanel ctx={ctx} meetingId={meeting.id} />
+            </CardContent>
+          </Card>
+        ) : null}
         {options ? (
           <Card id="edit" className="scroll-mt-24">
             <CardHeader>

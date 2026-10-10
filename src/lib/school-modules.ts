@@ -105,7 +105,7 @@ export function hrefAllowed(href: Route | string, enabled: readonly string[]): b
  * Features & Plans; nothing else in the app hard-codes a plan's modules.
  */
 export const DEFAULT_TIER_MODULES: Record<"STARTER" | "STANDARD" | "PRO", OptionalModule[]> = {
-  STARTER: ["FINANCE"],
+  STARTER: ["FINANCE", "EXPENSES"],
   STANDARD: ["FINANCE", "EXPENSES", "PAYROLL", "LIBRARY"],
   PRO: ["FINANCE", "EXPENSES", "PAYROLL", "LIBRARY", "TRANSPORT", "INVENTORY"],
 };

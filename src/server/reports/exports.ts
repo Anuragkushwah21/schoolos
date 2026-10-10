@@ -4,6 +4,7 @@ import type { Gender } from "@/generated/prisma/enums";
 import { formatDate } from "@/lib/dates";
 import { fullName } from "@/lib/format";
 import { sectionLabel } from "@/server/academics/structure";
+import { admittedWhere, studentSearchWhere } from "@/server/people/student-search";
 import type { TenantContext } from "@/server/auth/current-user";
 import { classFeeSummary, overdueInstallments, sessionFeeSummary, studentLedger } from "@/server/finance/fee-reports";
 import { assertAdminOrStaffPermission } from "@/server/auth/staff-access";
@@ -29,10 +30,10 @@ const GENDER_LABEL: Record<Gender, string> = { MALE: "Boy", FEMALE: "Girl", OTHE
 
 /** Every student placed this session, with class, section and primary guardian. */
 /** The student list as CSV — the whole session, or the same filters the Students page shows (class, section, status, search). */
-export async function studentListReport(ctx: TenantContext, filters: { sectionId?: string | null; classId?: string | null; status?: string | null; q?: string | null } = {}): Promise<ReportTable> {
+export async function studentListReport(ctx: TenantContext, filters: { sectionId?: string | null; classId?: string | null; status?: string | null; q?: string | null; gender?: Gender | null; admitted?: "NEW" | number | null } = {}): Promise<ReportTable> {
   assertCan(ctx, "reports", "VIEW");
-  const sessionId = await currentSessionId(ctx);
-  const q = filters.q?.trim();
+  const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true, startDate: true } });
+  const sessionId = session?.id ?? null;
   const statusWhere = filters.status === "CURRENT" ? { status: { in: ["ACTIVE", "ON_LEAVE"] as Array<"ACTIVE" | "ON_LEAVE"> } } : filters.status && filters.status !== "ALL" ? { status: filters.status as "ACTIVE" } : {};
   const enrollments = sessionId
     ? await ctx.db.studentEnrollment.findMany({
@@ -42,7 +43,9 @@ export async function studentListReport(ctx: TenantContext, filters: { sectionId
           ...(filters.classId ? { classId: filters.classId } : {}),
           student: {
             ...statusWhere,
-            ...(q ? { OR: [{ firstName: { contains: q, mode: "insensitive" } }, { lastName: { contains: q, mode: "insensitive" } }, { admissionNumber: { contains: q, mode: "insensitive" } }] } : {}),
+            ...(filters.gender ? { gender: filters.gender } : {}),
+            ...admittedWhere(filters.admitted, session?.startDate),
+            ...studentSearchWhere(filters.q),
           },
         },
         orderBy: [{ class: { level: "asc" } }, { section: { name: "asc" } }, { rollNumber: "asc" }],
@@ -132,18 +135,27 @@ function humanGender(gender: Gender): string {
   return gender === "MALE" ? "Male" : gender === "FEMALE" ? "Female" : "Other";
 }
 
-/** Students per class this session, split into boys and girls. */
+/**
+ * Students per class this session (Nursery to Class 12), split into boys and
+ * girls. Students on long leave are still on the roll and are counted; every
+ * class the school offers is listed, an empty one as 0.
+ */
 export async function classStrengthReport(ctx: TenantContext) {
   assertCan(ctx, "reports", "VIEW");
   const sessionId = await currentSessionId(ctx);
   if (!sessionId) return { rows: [], totals: { boys: 0, girls: 0, other: 0, total: 0 } };
 
-  const enrollments = await ctx.db.studentEnrollment.findMany({
-    where: { academicSessionId: sessionId, status: "ACTIVE", student: { status: "ACTIVE" } },
-    select: { class: { select: { id: true, name: true, level: true } }, student: { select: { gender: true } } },
-  });
+  const [enrollments, classes] = await Promise.all([
+    ctx.db.studentEnrollment.findMany({
+      where: { academicSessionId: sessionId, status: "ACTIVE", student: { status: { in: ["ACTIVE", "ON_LEAVE"] } } },
+      select: { class: { select: { id: true, name: true, level: true } }, student: { select: { gender: true } } },
+    }),
+    ctx.db.class.findMany({ where: { isActive: true }, select: { id: true, name: true, level: true } }),
+  ]);
 
-  const byClass = new Map<string, { name: string; level: number; boys: number; girls: number; other: number; total: number }>();
+  const byClass = new Map<string, { name: string; level: number; boys: number; girls: number; other: number; total: number }>(
+    classes.map((row) => [row.id, { name: row.name, level: row.level, boys: 0, girls: 0, other: 0, total: 0 }]),
+  );
   for (const row of enrollments) {
     const entry = byClass.get(row.class.id) ?? { name: row.class.name, level: row.class.level, boys: 0, girls: 0, other: 0, total: 0 };
     if (row.student.gender === "MALE") entry.boys += 1;

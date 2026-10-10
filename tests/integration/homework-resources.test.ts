@@ -260,11 +260,11 @@ describe("what the student sees", () => {
     await expect(readMaterialFile(studentOf(schoolB), resources[0]!.id)).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it("does not serve homework files to a parent", async () => {
+  it("serves a homework file to a parent of a child in that section, and to no other parent", async () => {
     const { resources } = await getTeacherHomework(teacherOf(schoolA), homeworkId);
-    await expect(
-      readMaterialFile(contextFor(schoolA, schoolA.parentUserId, "PARENT"), resources[0]!.id),
-    ).rejects.toBeInstanceOf(ForbiddenError);
+    const file = await readMaterialFile(contextFor(schoolA, schoolA.parentUserId, "PARENT"), resources[0]!.id);
+    expect(file.bytes.length).toBeGreaterThan(0);
+    await expect(readMaterialFile(contextFor(schoolB, schoolB.parentUserId, "PARENT"), resources[0]!.id)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
 

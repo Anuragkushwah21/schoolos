@@ -148,7 +148,7 @@ export function OfferForm({
 }
 
 /** Super Admin: which roles one school may use, and its own limits (blank = the plan's). */
-export function SchoolRolesForm({ schoolId, roles, followPlan, limits }: { schoolId: string; roles: string[]; followPlan: boolean; limits: Record<string, number | undefined> }) {
+export function SchoolRolesForm({ schoolId, roles, followPlan, limits, planLimits, used }: { schoolId: string; roles: string[]; followPlan: boolean; limits: Record<string, number | undefined>; planLimits?: Record<string, number | undefined>; used?: Record<string, number | undefined> }) {
   return (
     <ActionForm action={setSchoolRolesAction} className="gap-4">
       <input type="hidden" name="schoolId" value={schoolId} />
@@ -156,8 +156,8 @@ export function SchoolRolesForm({ schoolId, roles, followPlan, limits }: { schoo
       <RoleChecks initial={roles} />
       <div className="flex flex-col gap-2">
         <p className="text-sm font-medium">Limits for this school</p>
-        <p className="text-muted-foreground text-xs">Blank: the plan&apos;s limit applies.</p>
-        <LimitFields initial={limits} />
+        <p className="text-muted-foreground text-xs">How many of each this school may have. Blank: the plan&apos;s limit applies (no plan limit = unlimited). A limit below the people already in a role keeps them, but no one more can be added.</p>
+        <LimitFields initial={limits} max={planLimits} used={used} />
       </div>
       <div>
         <SubmitButton variant="outline">Save roles & limits</SubmitButton>

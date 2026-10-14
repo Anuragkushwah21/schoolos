@@ -169,7 +169,12 @@ export function PlanBuilderForm({ planId, config, templateKey, disabled }: { pla
               <TextField name="maxCampuses" label="Most campuses in all (blank = no cap)" inputMode="numeric" defaultValue={config.maxCampuses ?? ""} />
             </>
           ) : (
-            <input type="hidden" name="extraCampusPeriod" value={config.extraCampusPeriod} />
+            <>
+              {/* Kept while extra campuses are off, so switching them back on later brings the saved price and cap back. */}
+              <input type="hidden" name="extraCampusPeriod" value={config.extraCampusPeriod} />
+              <input type="hidden" name="extraCampusRupees" value={config.extraCampusPriceMinor === null ? "" : config.extraCampusPriceMinor / 100} />
+              <input type="hidden" name="maxCampuses" value={config.maxCampuses ?? ""} />
+            </>
           )}
         </div>
 
@@ -336,7 +341,8 @@ export function PlanLifecycleButtons({ planId, name, status, isActive, hasDraft,
   );
 }
 
-export function CreatePlanForm() {
+/** A new draft plan from a template, a copy of one plan (its published settings), or the highest plan. */
+export function CreatePlanForm({ plans = [] }: { plans?: Array<{ id: string; name: string }> }) {
   return (
     <ActionForm action={createPlanAction} className="flex-row flex-wrap items-end gap-3" resetOnSuccess>
       <TextField name="name" label="New plan name" placeholder="e.g. Pro Plus" required className="min-w-56" />
@@ -344,7 +350,11 @@ export function CreatePlanForm() {
         name="templateKey"
         label="Start from"
         defaultValue="growth"
-        options={[...PLAN_TEMPLATE_KEYS.map((key) => ({ value: key, label: `${PLAN_TEMPLATES[key].label} template` })), { value: "", label: "Copy of the highest plan" }]}
+        options={[
+          ...PLAN_TEMPLATE_KEYS.map((key) => ({ value: key, label: `${PLAN_TEMPLATES[key].label} template` })),
+          { value: "", label: "Copy of the highest plan" },
+          ...plans.map((plan) => ({ value: "copy:" + plan.id, label: `Copy of ${plan.name}` })),
+        ]}
       />
       <SubmitButton variant="outline" pendingLabel="Creating…">
         Create draft plan

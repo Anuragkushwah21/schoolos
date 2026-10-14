@@ -175,7 +175,18 @@ export const planDraftSchema = z.object({
 
 export const planIdSchema = z.object({ planId: id });
 const templateKeyField = z.preprocess((value) => (value === "" || value === undefined ? null : value), z.enum(["starter", "growth", "pro"]).nullable());
-export const planCreateSchema = z.object({ name: requiredText("a name", 60), templateKey: templateKeyField });
+/** "Start from": a template key, `copy:<planId>` for a copy of that plan, or "" for a copy of the highest plan. */
+export const planCreateSchema = z
+  .object({ name: requiredText("a name", 60), templateKey: z.string().trim().max(80).optional() })
+  .transform(({ name, templateKey }, ctx) => {
+    if (templateKey?.startsWith("copy:")) return { name, templateKey: null, copyFromPlanId: templateKey.slice(5) || null };
+    const parsed = templateKeyField.safeParse(templateKey);
+    if (!parsed.success) {
+      ctx.addIssue({ code: "custom", path: ["templateKey"], message: "Choose a template or a plan to copy" });
+      return z.NEVER;
+    }
+    return { name, templateKey: parsed.data, copyFromPlanId: null };
+  });
 export const planActiveSchema = z.object({ planId: id, active: z.enum(["true", "false"]).transform((value) => value === "true") });
 
 /** One school's optional modules: follow the plan, or the ticked set. */
@@ -237,3 +248,38 @@ export const schoolRolesSchema = z.object({
     z.array(z.string().max(40)).max(50),
   ).transform((values) => cleanRoles(values)),
 });
+
+// -----------------------------------------------------------------------------
+// SchoolOS's own collection (bills to organizations, payments received) —
+// entered by hand; SchoolOS takes no online payments. Rupees in, paise stored.
+// -----------------------------------------------------------------------------
+
+const platformRupees = (label: string) =>
+  z
+    .preprocess((value) => (value === "" || value === null || value === undefined ? undefined : value), z.coerce.number({ error: `Enter ${label}` }).gt(0, `${label} must be more than 0`).max(100_000_000, "That amount is too large"))
+    .transform((value) => Math.round(value * 100));
+
+export const PLATFORM_PAYMENT_METHODS = ["CASH", "CHEQUE", "BANK_TRANSFER", "UPI", "CARD", "OTHER"] as const;
+
+export const platformBillSchema = z
+  .object({
+    organizationId: id,
+    amount: platformRupees("The amount"),
+    dueOn: requiredDate("a due date"),
+    periodStart: optionalDate,
+    periodEnd: optionalDate,
+    description: optionalText(200),
+  })
+  .refine((data) => !data.periodStart || !data.periodEnd || data.periodEnd >= data.periodStart, { message: "The period must end on or after it starts", path: ["periodEnd"] });
+
+export const platformPaymentSchema = z.object({
+  billId: id,
+  amount: platformRupees("The amount"),
+  receivedOn: requiredDate("the date received"),
+  method: z.enum(PLATFORM_PAYMENT_METHODS),
+  referenceNo: optionalText(80),
+  notes: optionalText(300),
+  idempotencyKey: z.string().trim().max(80).optional().transform((value) => value || null),
+});
+
+export const platformReasonSchema = z.object({ id, reason: requiredText("a reason", 300) });

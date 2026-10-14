@@ -137,8 +137,9 @@ export function planConfig(plan: PlanConfig, draft?: unknown): PlanConfig {
 /**
  * Problems with a plan's configuration, given the other published plans.
  * Plans are a ladder by display order: each must keep everything the plan
- * below it makes eligible (modules and features), every plan keeps the
- * essential modules, and dependencies must be present.
+ * below it makes eligible (modules and features), no two plans share a
+ * place in the order, every plan keeps the essential modules, and
+ * dependencies must be present.
  */
 export function planProblems(
   config: PlanConfig,
@@ -157,9 +158,14 @@ export function planProblems(
   }
   if (!config.priceOnRequest && config.priceMinor <= 0) problems.push("Set a price, or mark the plan “Price on request”.");
   if (config.extraCampusAllowed && (config.extraCampusPriceMinor === null || config.extraCampusPriceMinor < 0)) problems.push("Set the price of an extra campus (0 if extra campuses are free).");
-  if (config.maxCampuses !== null && config.maxCampuses < config.campusLimit) problems.push("The campus cap cannot be lower than the included campuses.");
+  // The cap only counts when extra campuses are allowed (`campusPolicy`).
+  if (config.extraCampusAllowed && config.maxCampuses !== null && config.maxCampuses < config.campusLimit) problems.push("The campus cap cannot be lower than the included campuses.");
 
   const ladder = others.filter((row) => row.id !== selfId);
+  // Two plans at the same place have no "below" or "above", so the ladder
+  // rule could not be checked between them.
+  const sameOrder = ladder.filter((row) => row.displayOrder === config.displayOrder);
+  if (sameOrder.length) problems.push(`Display order ${config.displayOrder} is already used by ${sameOrder.map((row) => row.name).join(" and ")}. Give each plan its own place in the order.`);
   const below = ladder.filter((row) => row.displayOrder < config.displayOrder).sort((a, b) => b.displayOrder - a.displayOrder)[0];
   const above = ladder.filter((row) => row.displayOrder > config.displayOrder).sort((a, b) => a.displayOrder - b.displayOrder)[0];
   if (below) {

@@ -19,6 +19,7 @@ import {
   ShieldCheckIcon,
   SparklesIcon,
   UserCogIcon,
+  FileBadgeIcon,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/shared/page-header";
@@ -35,6 +36,7 @@ const ITEMS: Array<{ href: Route; icon: LucideIcon; title: MessageKey; hint: Mes
   { href: "/school-admin/academics/classes", icon: LayersIcon, title: "settings.classes", hint: "settings.classesHint" },
   { href: "/school-admin/settings/attendance", icon: ClipboardCheckIcon, title: "settings.attendance", hint: "settings.attendanceHint" },
   { href: "/school-admin/settings/grading" as Route, icon: GraduationCapIcon, title: "settings.grading", hint: "settings.gradingHint" },
+  { href: "/school-admin/settings/documents" as Route, icon: FileBadgeIcon, title: "settings.documents", hint: "settings.documentsHint" },
   { href: "/school-admin/holidays", icon: CalendarOffIcon, title: "settings.calendar", hint: "settings.calendarHint" },
   { href: "/school-admin/finance/receipts", icon: ReceiptIcon, title: "settings.fees", hint: "settings.feesHint" },
   { href: "/school-admin/staff", icon: ShieldCheckIcon, title: "settings.staffAccess", hint: "settings.staffAccessHint" },

@@ -57,7 +57,7 @@ export default async function PlansPage() {
               );
             })}
           </ul>
-          <CreatePlanForm />
+          <CreatePlanForm plans={plans.filter((plan) => plan.status !== "ARCHIVED").map((plan) => ({ id: plan.id, name: plan.live.name }))} />
         </CardContent>
       </Card>
 

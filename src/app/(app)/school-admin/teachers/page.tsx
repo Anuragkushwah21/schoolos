@@ -23,6 +23,8 @@ import { TEACHER_STATUSES } from "@/lib/validation/school";
 import { formatDate } from "@/lib/dates";
 import { requireTenant } from "@/server/auth/current-user";
 import { photoUrlsFor } from "@/server/people/photos";
+import { BulkDocumentsPanel, BulkRowCheckbox } from "@/features/documents/forms";
+import { bulkDocumentOptions } from "@/server/documents/service";
 import { leavingDates } from "@/server/people/lifecycle";
 import { listTeachers } from "@/server/people/teachers";
 
@@ -42,7 +44,7 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
     page: pageParam(search.page),
   });
 
-  const [leftOn, photos] = await Promise.all([leavingDates(ctx, "TEACHER", rows), photoUrlsFor(ctx, "TEACHER", rows.map((row) => row.id))]);
+  const [leftOn, photos, bulkTypes] = await Promise.all([leavingDates(ctx, "TEACHER", rows), photoUrlsFor(ctx, "TEACHER", rows.map((row) => row.id)), bulkDocumentOptions(ctx, "TEACHER")]);
 
   return (
     <>
@@ -86,10 +88,14 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
       />
 
       {rows.length ? (
+        <BulkDocumentsPanel kind="TEACHER" types={bulkTypes}>
         <div className="rounded-xl border">
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-8">
+                  <span className="sr-only">Select</span>
+                </TableHead>
                 <TableHead>Teacher</TableHead>
                 <TableHead>Subjects</TableHead>
                 <TableHead className="hidden md:table-cell">Class teacher of</TableHead>
@@ -100,6 +106,9 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
             <TableBody>
               {rows.map((teacher) => (
                 <TableRow key={teacher.id}>
+                  <TableCell>
+                    <BulkRowCheckbox id={teacher.id} label={`${teacher.firstName} ${teacher.lastName}`} />
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-3">
                       <PersonAvatar name={`${teacher.firstName} ${teacher.lastName}`} photoUrl={photos.get(teacher.id)} fallbackClassName="bg-purple-soft text-purple-strong" />
@@ -134,6 +143,7 @@ export default async function TeachersPage(props: PageProps<"/school-admin/teach
             </TableBody>
           </Table>
         </div>
+        </BulkDocumentsPanel>
       ) : (
         <EmptyState
           title="No teachers match"

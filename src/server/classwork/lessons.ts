@@ -4,7 +4,7 @@ import { requireParentSelf } from "@/server/parent/access";
 
 import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { AppError, ForbiddenError, NotFoundError } from "@/lib/errors";
-import { visibleToStream } from "@/server/academics/stream-scope";
+import { visibleToStream, visibleToStudent } from "@/server/academics/stream-scope";
 import { sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
 import { assertRole } from "@/server/auth/assert";
@@ -346,11 +346,12 @@ export async function readMaterialFile(ctx: TenantContext, materialId: string) {
             },
           },
         },
-        // A homework resource: only published work set for their own section.
+        // A homework resource: only published work set for their own section
+        // (and, when set for selected students, for them).
         {
           homework: {
             sectionId: me.placement.sectionId,
-            AND: [visibleToStream(me.placement.streamId)],
+            AND: [visibleToStream(me.placement.streamId), visibleToStudent(me.student.id)],
             academicSessionId: me.placement.sessionId,
             status: "PUBLISHED" as const,
           },
@@ -363,14 +364,14 @@ export async function readMaterialFile(ctx: TenantContext, materialId: string) {
     const parent = await requireParentSelf(ctx);
     const placements = await ctx.db.studentEnrollment.findMany({
       where: { status: "ACTIVE", academicSession: { isCurrent: true }, student: { parents: { some: { parentId: parent.id } } } },
-      select: { sectionId: true, streamId: true, academicSessionId: true },
+      select: { studentId: true, sectionId: true, streamId: true, academicSessionId: true },
     });
     if (!placements.length) throw new NotFoundError("That file was not found.");
     where = {
       id: materialId,
       OR: placements.flatMap((placement) => [
         { classSession: { timetableSlot: { sectionId: placement.sectionId, AND: [visibleToStream(placement.streamId)], academicSessionId: placement.academicSessionId } } },
-        { homework: { sectionId: placement.sectionId, AND: [visibleToStream(placement.streamId)], academicSessionId: placement.academicSessionId, status: "PUBLISHED" as const } },
+        { homework: { sectionId: placement.sectionId, AND: [visibleToStream(placement.streamId), visibleToStudent(placement.studentId)], academicSessionId: placement.academicSessionId, status: "PUBLISHED" as const } },
       ]),
     };
   } else if (ctx.user.role === "TEACHER") {

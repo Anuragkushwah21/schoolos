@@ -17,7 +17,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export function ReportCard({ card }: { card: ReportCardData }) {
+export function ReportCard({ card, photoUrl = null }: { card: ReportCardData; photoUrl?: string | null }) {
   const { school, exam, student, subjects } = card;
   const accent = /^#[0-9a-f]{6}$/i.test(school.primaryColor) ? school.primaryColor : "#1e40af";
 
@@ -29,8 +29,10 @@ export function ReportCard({ card }: { card: ReportCardData }) {
     >
       <header className="flex items-start gap-4 border-b-2 pb-4" style={{ borderColor: accent }}>
         {school.logoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element -- a school-supplied https link
-          <img src={school.logoUrl} alt={`${school.name} logo`} className="size-16 shrink-0 object-contain" />
+          <span className="flex size-16 shrink-0 items-center justify-center">
+            {/* eslint-disable-next-line @next/next/no-img-element -- a school-supplied https link; the whole logo, never cropped or stretched */}
+            <img src={school.logoUrl} alt={`${school.name} logo`} className="max-h-full max-w-full object-contain" />
+          </span>
         ) : null}
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl leading-tight font-bold" style={{ color: accent }}>
@@ -60,7 +62,14 @@ export function ReportCard({ card }: { card: ReportCardData }) {
         </p>
       ) : null}
 
-      <div className="grid gap-x-8 gap-y-1 sm:grid-cols-2">
+      <div className="keep-together flex items-start gap-5">
+      {photoUrl ? (
+        <span className="h-[34mm] w-[27mm] shrink-0 overflow-hidden rounded border border-neutral-300 bg-neutral-100">
+          {/* eslint-disable-next-line @next/next/no-img-element -- a private photo served after an access check; cover, anchored near the top so the face stays */}
+          <img src={photoUrl} alt="" className="size-full object-cover object-[50%_22%]" />
+        </span>
+      ) : null}
+      <div className="grid min-w-0 flex-1 gap-x-8 gap-y-1 sm:grid-cols-2">
         <dl className="flex flex-col gap-1">
           <Row label="Student" value={student.name} />
           <Row label="Admission no." value={student.admissionNumber} />
@@ -75,8 +84,17 @@ export function ReportCard({ card }: { card: ReportCardData }) {
           <Row label="Exam dates" value={`${formatDate(exam.startDate)} – ${formatDate(exam.endDate)}`} />
         </dl>
       </div>
+      </div>
 
-      <table className="report-table mt-5 w-full border-collapse">
+      <table className="report-table mt-5 w-full table-fixed border-collapse">
+        <colgroup>
+          <col className="w-[30%]" />
+          <col className="w-[10%]" />
+          <col className="w-[10%]" />
+          <col className="w-[13%]" />
+          <col className="w-[10%]" />
+          <col />
+        </colgroup>
         <thead>
           <tr className="border-y border-neutral-300 bg-neutral-50 text-left">
             <th className="px-2 py-1.5 font-semibold">Subject</th>
@@ -90,7 +108,7 @@ export function ReportCard({ card }: { card: ReportCardData }) {
         <tbody>
           {subjects.map((row) => (
             <tr key={row.assessmentId} className="border-b border-neutral-200">
-              <td className="px-2 py-1.5">{row.subject}</td>
+              <td className="px-2 py-1.5 break-words">{row.subject}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{row.maxMarks}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{row.passMark}</td>
               <td className="px-2 py-1.5 text-right font-medium tabular-nums">
@@ -98,7 +116,7 @@ export function ReportCard({ card }: { card: ReportCardData }) {
                 {row.outcome === "FAIL" ? <span className="text-red-700"> *</span> : null}
               </td>
               <td className="px-2 py-1.5">{row.grade ?? "—"}</td>
-              <td className="px-2 py-1.5 text-neutral-700">{row.remark ?? ""}</td>
+              <td className="px-2 py-1.5 break-words text-neutral-700">{row.remark ?? ""}</td>
             </tr>
           ))}
           <tr className="border-b-2 border-neutral-400 font-semibold">
@@ -112,7 +130,7 @@ export function ReportCard({ card }: { card: ReportCardData }) {
         </tbody>
       </table>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="keep-together mt-4 grid grid-cols-3 gap-3">
         <div className="rounded border border-neutral-300 p-3">
           <p className="text-neutral-500">Percentage</p>
           <p className="text-lg font-bold tabular-nums">{card.percent === null ? "—" : `${card.percent}%`}</p>
@@ -151,7 +169,7 @@ export function ReportCard({ card }: { card: ReportCardData }) {
         {`AB = absent (counts as zero). EX = exempt (not counted). * = below the pass mark. A paper without its own pass mark passes at ${card.grading.passPercent}%. Grades: ${card.grading.key}.`}
       </p>
 
-      <footer className="mt-14 grid grid-cols-3 gap-6 text-center text-neutral-600">
+      <footer className="keep-together mt-14 grid grid-cols-3 gap-6 text-center text-neutral-600">
         {["Class teacher", "Principal", "Parent / guardian"].map((label) => (
           <div key={label}>
             <p className="mb-1 min-h-5 font-medium text-neutral-800">{label === "Class teacher" ? card.classTeacher ?? "" : ""}</p>

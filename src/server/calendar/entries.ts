@@ -20,7 +20,8 @@ import { audienceLabel, visibleMeetingWhere } from "@/server/communication/meeti
  *   * Events — published ones for everyone (the School Admin and Principal
  *     also see drafts, marked as drafts). Events have no audience of their own.
  *   * Meetings and PTMs — only for those invited (`visibleMeetingWhere`: role
- *     groups, whole school / sections / chosen people). Cancelled ones stay on
+ *     groups, whole school / sections / chosen people) and the person who
+ *     scheduled it, so the organizer is reminded too. Cancelled ones stay on
  *     the day, marked cancelled, and drop out of everything "upcoming".
  *   * Exams — dates only (marks stay behind the publish switch): leaders all;
  *     a teacher the sections they teach; a student or parent their own

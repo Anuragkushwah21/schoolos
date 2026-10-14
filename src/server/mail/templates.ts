@@ -146,3 +146,58 @@ export function passwordResetEmail(input: { to: string; name: string; link: stri
     ].join("\n"),
   };
 }
+
+/**
+ * A reminder from SchoolOS that a membership (plan or trial) is ending or has
+ * ended. It never says anything has been paid or charged: SchoolOS bills by
+ * hand, so the next step is always to contact SchoolOS.
+ */
+export function membershipReminderEmail(input: {
+  to: string;
+  name: string;
+  organization: string;
+  plan: string;
+  status: "ACTIVE" | "TRIALING" | "PAST_DUE";
+  /** The end date as text, or null when none is set. */
+  endsOn: string | null;
+  /** Days from today to the end date (negative = ended). */
+  daysLeft: number | null;
+}): Mail {
+  const trial = input.status === "TRIALING";
+  const ended = input.daysLeft !== null && input.daysLeft < 0;
+  const subject =
+    input.status === "PAST_DUE"
+      ? "Reminder: your SchoolOS membership has a payment due"
+      : trial
+        ? ended
+          ? "Reminder: your SchoolOS trial has ended"
+          : "Reminder: your SchoolOS trial is ending"
+        : ended
+          ? "Reminder: your SchoolOS membership has ended"
+          : "Reminder: your SchoolOS membership is ending";
+  const line =
+    input.status === "PAST_DUE"
+      ? `This is a reminder from SchoolOS: the ${input.plan} plan for ${input.organization} has a payment due.`
+      : input.daysLeft === null || input.endsOn === null
+        ? `This is a reminder from SchoolOS: the ${input.plan} plan for ${input.organization} is up for renewal.`
+        : ended
+          ? `This is a reminder from SchoolOS: the ${input.plan} ${trial ? "trial" : "plan"} for ${input.organization} ended on ${input.endsOn}.`
+          : input.daysLeft === 0
+            ? `This is a reminder from SchoolOS: the ${input.plan} ${trial ? "trial" : "plan"} for ${input.organization} ends today, ${input.endsOn}.`
+            : `This is a reminder from SchoolOS: the ${input.plan} ${trial ? "trial" : "plan"} for ${input.organization} ends on ${input.endsOn} (days left: ${input.daysLeft}).`;
+  return {
+    to: input.to,
+    subject,
+    text: [
+      `Hello ${input.name},`,
+      "",
+      line,
+      "",
+      "To renew or change your plan, reply to this email or contact SchoolOS.",
+      "You can see your plan under Plan & billing:",
+      "    " + env.APP_URL + "/school-admin/plan",
+      "",
+      "Nothing has been charged by this email. SchoolOS confirms renewals and billing with you directly.",
+    ].join("\n"),
+  };
+}

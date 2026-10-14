@@ -3,7 +3,7 @@ import "server-only";
 import { addDays, dayOfWeek, today, toDateInput } from "@/lib/dates";
 import { NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
-import { visibleToStream } from "@/server/academics/stream-scope";
+import { visibleToStream, visibleToStudent } from "@/server/academics/stream-scope";
 import type { TenantContext } from "@/server/auth/current-user";
 import { type AttendanceCounts, attendedShare, emptyCounts } from "@/server/attendance/service";
 import { monthlyAttendance } from "@/server/analytics/student";
@@ -83,7 +83,7 @@ export async function getChildToday(ctx: TenantContext, studentId: string, date:
     ctx.db.homework.findMany({
       where: {
         sectionId: placement.sectionId,
-        AND: [visibleToStream(placement.streamId)],
+        AND: [visibleToStream(placement.streamId), visibleToStudent(studentId)],
         status: "PUBLISHED",
         dueOn: { gte: date },
       },
@@ -365,7 +365,7 @@ export async function getChildHomework(ctx: TenantContext, studentId: string) {
   const rows = await ctx.db.homework.findMany({
     where: {
       sectionId: child.placement.sectionId,
-      AND: [visibleToStream(child.placement.streamId)],
+      AND: [visibleToStream(child.placement.streamId), visibleToStudent(studentId)],
       academicSessionId: child.placement.sessionId,
       status: "PUBLISHED",
     },
@@ -380,6 +380,8 @@ export async function getChildHomework(ctx: TenantContext, studentId: string) {
       subject: { select: { name: true } },
       teacher: { select: { firstName: true, lastName: true } },
       resources: { select: { id: true, kind: true, url: true, fileName: true, fileSize: true } },
+      // What the teacher recorded for this child after checking — nothing until they do.
+      submissions: { where: { studentId }, select: { status: true, note: true } },
     },
   });
 
@@ -404,6 +406,10 @@ export async function getChildHomework(ctx: TenantContext, studentId: string) {
       teacher: fullName(row.teacher),
       resources: row.resources,
       bucket,
+      /** SUBMITTED, LATE or MISSING as the teacher recorded it; null while only assigned. */
+      submission: row.submissions[0]?.status ?? null,
+      /** The teacher's feedback, once they have checked it. */
+      feedback: row.submissions[0]?.note ?? null,
     };
   });
 
@@ -599,7 +605,7 @@ export async function getChildReport(
     ctx.db.homework.findMany({
       where: {
         sectionId: child.placement.sectionId,
-        AND: [visibleToStream(child.placement.streamId)],
+        AND: [visibleToStream(child.placement.streamId), visibleToStudent(studentId)],
         status: "PUBLISHED",
         assignedOn: { gte: from, lte: to },
       },

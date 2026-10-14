@@ -197,7 +197,9 @@ export async function updateClassTestAction(_p: Result, formData: FormData): Pro
   return performAction(
     async () => {
       const ctx = await requireTenantForAction("SCHOOL_ADMIN", "PRINCIPAL", "TEACHER");
-      await updateClassTest(ctx, parseFormData(updateClassTestSchema, formData));
+      const { syllabusItemId, ...input } = parseFormData(updateClassTestSchema, formData);
+      // Only a form that shows the syllabus choice may change it; others leave the link as it is.
+      await updateClassTest(ctx, formData.has("syllabusItemId") ? { ...input, syllabusItemId } : input);
       return successResult("Test updated.");
     },
     { revalidate: EXAM_PAGES },

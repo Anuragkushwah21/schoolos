@@ -8,6 +8,8 @@ import { MoreActions } from "@/components/shared/more-actions";
 import { PageHeader } from "@/components/shared/page-header";
 import { PersonAvatar } from "@/components/shared/person-avatar";
 import { Pager } from "@/components/shared/pager";
+import { BulkDocumentsPanel, BulkRowCheckbox } from "@/features/documents/forms";
+import { bulkDocumentOptions } from "@/server/documents/service";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,7 +57,12 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
     admissionYears(ctx),
   ]);
 
-  const [leftOn, photos] = await Promise.all([leavingDates(ctx, "STUDENT", rows), photoUrlsFor(ctx, "STUDENT", rows.map((row) => row.id))]);
+  const [leftOn, photos, publishedExams, bulkTypes] = await Promise.all([
+    leavingDates(ctx, "STUDENT", rows),
+    photoUrlsFor(ctx, "STUDENT", rows.map((row) => row.id)),
+    ctx.db.exam.findMany({ where: { academicSession: { isCurrent: true }, papers: { some: {} } }, orderBy: { startDate: "desc" }, select: { id: true, name: true, status: true, section: { select: { name: true, class: { select: { name: true } }, stream: { select: { name: true } } } } } }).then((exams) => exams.map((exam) => ({ value: exam.id, label: `${exam.name} — ${sectionLabel(exam.section)}`, published: exam.status === "PUBLISHED" }))),
+    bulkDocumentOptions(ctx, "STUDENT"),
+  ]);
 
   return (
     <>
@@ -126,7 +133,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
       />
 
       {rows.length ? (
-        <>
+        <BulkDocumentsPanel kind="STUDENT" types={bulkTypes} exams={publishedExams}>
         {/* Phones: one readable card per student instead of a wide table. */}
         <ul className="flex flex-col gap-3 md:hidden">
           {rows.map((student) => {
@@ -135,6 +142,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
             return (
               <li key={student.id} className="bg-card rounded-2xl border p-4 shadow-[0_1px_3px_rgb(15_23_42/0.06)]">
                 <div className="flex items-start justify-between gap-3">
+                  <BulkRowCheckbox id={student.id} label={`${student.firstName} ${student.lastName}`} />
                   <PersonAvatar name={`${student.firstName} ${student.lastName}`} photoUrl={photos.get(student.id)} className="size-10" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-semibold">
@@ -165,6 +173,9 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-8">
+                  <span className="sr-only">Select</span>
+                </TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead className="hidden sm:table-cell">Gender</TableHead>
                 <TableHead>Class</TableHead>
@@ -181,6 +192,9 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
                 const guardian = student.parents[0]?.parent;
                 return (
                   <TableRow key={student.id}>
+                    <TableCell>
+                      <BulkRowCheckbox id={student.id} label={`${student.firstName} ${student.lastName}`} />
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <PersonAvatar name={`${student.firstName} ${student.lastName}`} photoUrl={photos.get(student.id)} />
@@ -258,7 +272,7 @@ export default async function StudentsPage(props: PageProps<"/school-admin/stude
             </TableBody>
           </Table>
         </div>
-        </>
+        </BulkDocumentsPanel>
       ) : (
         <EmptyState
           title={q || sectionId || classId || gender || statusParam ? "No students match these filters." : "No students added yet."}

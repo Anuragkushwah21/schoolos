@@ -8,6 +8,7 @@ import { DemoWatermark } from "@/components/shared/demo-watermark";
 import { requireTenant } from "@/server/auth/current-user";
 import { getReportCard } from "@/server/exams/results";
 import { orNotFound } from "@/server/page-helpers";
+import { photoUrlFor } from "@/server/people/photos";
 
 /**
  * A report card on its own page, with nothing else to print. The School Admin
@@ -34,7 +35,9 @@ const PRINT_CSS = `
   .print-page { padding: 0 !important; background: #fff !important; min-height: 0 !important; }
   .report-sheet { box-shadow: none !important; --tw-ring-shadow: 0 0 #0000 !important; max-width: none !important; padding: 0 !important; }
   .report-sheet * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .report-table tr, .report-sheet footer { break-inside: avoid; }
+  .report-table thead { display: table-header-group; }
+  .report-table tr, .report-sheet footer, .report-sheet section, .keep-together { break-inside: avoid; }
+  .report-sheet header, .report-sheet h2 { break-after: avoid; }
 }
 `;
 
@@ -42,10 +45,12 @@ export default async function ReportCardPage(props: PageProps<"/report-cards/[ex
   const { examId, studentId } = await props.params;
   const search = await props.searchParams;
   const { ctx, card } = await load(examId, studentId);
+  // The photo only if this viewer may see it (the same check as anywhere else); none otherwise.
+  const photoUrl = await photoUrlFor(ctx, { type: "STUDENT", id: studentId }).catch(() => null);
 
   const back =
-    ctx.user.role === "SCHOOL_ADMIN"
-      ? { href: `/school-admin/exams/${examId}`, label: "Exam" }
+    ctx.user.role === "SCHOOL_ADMIN" || ctx.user.role === "PRINCIPAL"
+      ? { href: `/school-admin/students/${studentId}?tab=academics`, label: "Student" }
       : ctx.user.role === "PARENT"
         ? { href: `/parent/children/${studentId}/results`, label: "Results" }
         : { href: "/student/results", label: "My results" };
@@ -55,7 +60,7 @@ export default async function ReportCardPage(props: PageProps<"/report-cards/[ex
       {ctx.user.isDemo ? <DemoWatermark what="report card" /> : null}
       <style>{PRINT_CSS}</style>
       <PrintToolbar backHref={back.href} backLabel={back.label} autoPrint={param(search.print) === "1"} />
-      <ReportCard card={card} />
+      <ReportCard card={card} photoUrl={photoUrl} />
     </main>
   );
 }

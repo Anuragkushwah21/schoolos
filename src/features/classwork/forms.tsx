@@ -16,6 +16,7 @@ import {
   addHomeworkResourceAction,
   addLessonMaterialAction,
   addRemarkAction,
+  markHomeworkAction,
   planLessonAction,
   recordActivityAction,
   removeHomeworkResourceAction,
@@ -25,6 +26,7 @@ import {
 } from "@/features/classwork/actions";
 import type { DayOfWeek } from "@/generated/prisma/enums";
 import { dayOfWeek, parseDateInput } from "@/lib/dates";
+import { pluralize } from "@/lib/format";
 
 /**
  * The forms a teacher fills in.
@@ -56,14 +58,20 @@ const ACTIVITY_STATUS_OPTIONS = [
 /** A period, with the weekday it falls on so the date can filter it. */
 export type PeriodOption = SlotOption & { dayOfWeek: DayOfWeek };
 
+export type TopicOption = { id: string; label: string };
+
+
 export function ClassActivityForm({
   slots,
   defaultSlotId,
   defaultDate,
   earliestDate,
   activity,
+  topicsBySlot = {},
 }: {
   slots: PeriodOption[];
+  /** Syllabus topics per period (its class and subject). Empty when the syllabus is not set up. */
+  topicsBySlot?: Record<string, TopicOption[]>;
   defaultSlotId?: string;
   defaultDate: string;
   /** The oldest day still inside the correction window. */
@@ -77,9 +85,13 @@ export function ClassActivityForm({
     importantPoints: string | null;
     preparation?: string | null;
     homework?: { title: string; description: string | null; dueOn: string } | null;
+    topics?: Array<{ topicId: string; coverage: "COVERED" | "PARTIAL" }>;
   };
 }) {
   const [date, setDate] = useState(activity?.date ?? defaultDate);
+  const [slotId, setSlotId] = useState(activity?.timetableSlotId ?? defaultSlotId ?? "");
+  const topics = topicsBySlot[slotId] ?? [];
+  const recordedTopics = new Map((activity?.topics ?? []).map((row) => [row.topicId, row.coverage]));
 
   // A period belongs to one weekday. Offering Monday's periods against a
   // Wednesday is the one mistake this form could otherwise invite, so the date
@@ -95,18 +107,21 @@ export function ClassActivityForm({
           label="Date"
           type="date"
           value={date}
-          onChange={(event) => setDate(event.target.value)}
+          onChange={(event) => {
+            setDate(event.target.value);
+            // A period from another weekday is not kept behind a list that no longer has it.
+            const next = parseDateInput(event.target.value);
+            if (next && !slots.some((slot) => slot.value === slotId && slot.dayOfWeek === dayOfWeek(next))) setSlotId("");
+          }}
           min={earliestDate}
           max={defaultDate}
           required
         />
         <SelectField
-          // Remounted when the day changes, so a period left over from another
-          // weekday is not still selected behind a list that no longer has it.
-          key={onDay.map((slot) => slot.value).join(",")}
           name="timetableSlotId"
           label="Period"
-          defaultValue={activity?.timetableSlotId ?? defaultSlotId}
+          value={onDay.some((slot) => slot.value === slotId) ? slotId : ""}
+          onChange={(event) => setSlotId(event.target.value)}
           options={onDay}
           placeholder={onDay.length ? "Choose a period" : "Nothing scheduled that day"}
           disabled={onDay.length === 0}
@@ -127,6 +142,27 @@ export function ClassActivityForm({
         placeholder="Quadratic equations"
         hint="What you taught. This is the line a parent report quotes."
       />
+      {topics.length ? (
+        <fieldset className="flex flex-col gap-2 rounded-lg border p-4">
+          <legend className="px-1 text-sm font-medium">Syllabus topics taught (optional)</legend>
+          <input type="hidden" name="topicsSent" value="1" />
+          <p className="text-muted-foreground text-xs">From the class&apos;s syllabus. These measure coverage; leave a topic blank if it was not taught today.</p>
+          <ul className="flex flex-col gap-1.5">
+            {topics.map((topic) => (
+              <li key={`${slotId}-${topic.id}`} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span>{topic.label}</span>
+                <select name={"topic." + topic.id} defaultValue={recordedTopics.get(topic.id) ?? ""} aria-label={`Coverage of ${topic.label}`} className="border-input bg-background h-9 rounded-lg border px-2 text-sm">
+                  <option value="">Not today</option>
+                  <option value="COVERED">Covered</option>
+                  <option value="PARTIAL">Partly covered</option>
+                </select>
+              </li>
+            ))}
+          </ul>
+        </fieldset>
+      ) : slotId ? (
+        <p className="text-muted-foreground text-xs">No syllabus is set up for this class and subject yet, so topics are recorded as free text above.</p>
+      ) : null}
       <TextareaField
         name="notes"
         label="Class notes"
@@ -195,16 +231,33 @@ export type HomeworkSectionOption = SlotOption & {
   subjects: Array<SlotOption & { whole?: boolean; streams?: SlotOption[] }>;
 };
 
+export type HomeworkStudentChoice = { id: string; name: string; rollNumber: string | null; streamId: string | null };
+
+/**
+ * Set or edit homework.
+ *
+ * Besides the class, subject and dates, a teacher chooses who it is for —
+ * the whole class or selected students — and, for new homework, may tick
+ * more classes they teach the same subject to (each becomes its own
+ * homework). "Review" shows a summary first; nothing is saved until the
+ * teacher confirms. The server checks every choice again.
+ */
 export function HomeworkForm({
   sections,
   today,
   homework,
   defaultSectionId,
+  students = {},
+  syllabus = {},
 }: {
   sections: HomeworkSectionOption[];
   today: string;
   /** Pre-selects a class (from the dashboard's class switcher). */
   defaultSectionId?: string;
+  /** Students the teacher may choose from, by section id. */
+  students?: Record<string, HomeworkStudentChoice[]>;
+  /** Syllabus entries per "sectionId:subjectId", for linking the homework to a unit, chapter or topic. */
+  syllabus?: Record<string, Array<{ id: string; label: string }>>;
   homework?: {
     id: string;
     sectionId: string;
@@ -216,6 +269,9 @@ export function HomeworkForm({
     assignedOn: string;
     dueOn: string;
     status: string;
+    audience?: "SECTION" | "SELECTED_STUDENTS";
+    studentIds?: string[];
+    syllabusItemId?: string | null;
   };
 }) {
   const [sectionId, setSectionId] = useState(homework?.sectionId ?? sections.find((section) => section.value === defaultSectionId)?.value ?? sections[0]?.value ?? "");
@@ -226,100 +282,241 @@ export function HomeworkForm({
   const [subjectId, setSubjectId] = useState(homework?.sectionId === sectionId ? homework.subjectId : "");
   const subject = subjects.find((item) => item.value === subjectId);
   const streamOptions = subject?.streams ?? [];
+  const defaultStream = homework?.subjectId === subjectId ? (homework?.streamId ?? "") : subject?.whole ? "" : (streamOptions[0]?.value ?? "");
+  const [streamChoice, setStreamChoice] = useState<{ key: string; value: string } | null>(null);
+  const streamKey = `${sectionId}-${subjectId}`;
+  const streamId = streamOptions.length ? (streamChoice?.key === streamKey ? streamChoice.value : defaultStream) : "";
+  const [extraIds, setExtraIds] = useState<string[]>([]);
+  const [audience, setAudience] = useState<"SECTION" | "SELECTED_STUDENTS">(homework?.audience ?? "SECTION");
+  const [chosen, setChosen] = useState<string[]>(homework?.studentIds ?? []);
+  const [review, setReview] = useState<null | { title: string; dueOn: string; assignedOn: string; status: string }>(null);
+  const wrapper = useRef<HTMLDivElement>(null);
+
+  // More classes: only for new homework for the whole class (not one stream),
+  // in classes where this teacher teaches the same subject to the whole section.
+  const extraOptions = homework || !subjectId || streamId
+    ? []
+    : sections.filter((section) => section.value !== sectionId && section.subjects.some((item) => item.value === subjectId && (item.whole ?? !(item.streams?.length))));
+  const extras = extraIds.filter((id) => extraOptions.some((option) => option.value === id));
+  const chosenSections = [sectionId, ...extras].filter(Boolean);
+  const labelOf = (id: string) => sections.find((section) => section.value === id)?.label ?? "";
+  const pool = chosenSections.map((id) => ({ sectionId: id, label: labelOf(id), students: (students[id] ?? []).filter((student) => !streamId || student.streamId === streamId) }));
+  const poolIds = new Set(pool.flatMap((group) => group.students.map((student) => student.id)));
+  const picked = chosen.filter((id) => poolIds.has(id));
+  const wholeCount = pool.reduce((sum, group) => sum + group.students.length, 0);
+  const toggle = (id: string, on: boolean) => setChosen((list) => (on ? [...list, id] : list.filter((row) => row !== id)));
+
+  const openReview = () => {
+    const form = wrapper.current?.closest("form");
+    if (!form || !form.reportValidity()) return;
+    if (audience === "SELECTED_STUDENTS" && !picked.length) return;
+    const data = new FormData(form);
+    setReview({ title: String(data.get("title") ?? ""), dueOn: String(data.get("dueOn") ?? ""), assignedOn: String(data.get("assignedOn") ?? ""), status: String(data.get("status") ?? "PUBLISHED") });
+  };
 
   return (
     <ActionForm action={saveHomeworkAction} className="max-w-3xl">
+      <div ref={wrapper} className="contents" />
       {homework ? <input type="hidden" name="homeworkId" value={homework.id} /> : null}
-      <FieldRow>
-        <SelectField
-          name="sectionId"
-          label="Class"
-          value={sectionId}
-          onChange={(event) => setSectionId(event.target.value)}
-          options={sections}
-          placeholder={sectionId ? undefined : "Choose a class"}
-          required
-        />
-        <SelectField
-          // The subject list changes with the class, so the previous choice
-          // must not survive as a stale selection.
-          key={sectionId}
-          name="subjectId"
-          label="Subject"
-          value={subjects.some((item) => item.value === subjectId) ? subjectId : ""}
-          onChange={(event) => setSubjectId(event.target.value)}
-          options={subjects}
-          placeholder={subjects.length ? "Choose a subject" : "You teach no subject here"}
-          disabled={subjects.length === 0}
-          hint="Only the subjects you are assigned to this class."
-          required
-        />
-      </FieldRow>
-      {streamOptions.length ? (
-        <SelectField
-          key={`${sectionId}-${subjectId}`}
-          name="streamId"
-          label="Stream"
-          options={streamOptions}
-          placeholder={subject?.whole ? "Whole section" : undefined}
-          defaultValue={homework?.subjectId === subjectId ? (homework?.streamId ?? "") : subject?.whole ? "" : streamOptions[0]?.value}
-          hint={subject?.whole ? "Choose a stream for work only that stream should do." : "You teach this subject to these streams only."}
-          required={!subject?.whole}
-        />
-      ) : null}
-      <TextField
-        name="title"
-        label="Title"
-        defaultValue={homework?.title}
-        placeholder="Exercise 4.2 — Q1 to Q5"
-        required
-      />
-      <TextareaField
-        name="description"
-        label="Details"
-        rows={5}
-        defaultValue={homework?.description ?? ""}
-        hint="What the homework is about."
-      />
-      <TextareaField
-        name="instructions"
-        label="Homework instructions"
-        rows={4}
-        defaultValue={homework?.instructions ?? ""}
-        placeholder="Complete Exercise 4.2, Questions 1-10."
-        hint="Exactly what the student needs to do."
-      />
-      <FieldRow>
+      {/* Locked while reviewing — `inert`, not `disabled`, so the values are still sent on confirm. */}
+      <fieldset inert={review !== null} className={review ? "flex flex-col gap-5 opacity-60" : "flex flex-col gap-5"}>
+        <FieldRow>
+          <SelectField
+            name="sectionId"
+            label="Class"
+            value={sectionId}
+            onChange={(event) => {
+              setSectionId(event.target.value);
+              setExtraIds([]);
+            }}
+            options={sections}
+            placeholder={sectionId ? undefined : "Choose a class"}
+            required
+          />
+          <SelectField
+            // The subject list changes with the class, so the previous choice
+            // must not survive as a stale selection.
+            key={sectionId}
+            name="subjectId"
+            label="Subject"
+            value={subjects.some((item) => item.value === subjectId) ? subjectId : ""}
+            onChange={(event) => setSubjectId(event.target.value)}
+            options={subjects}
+            placeholder={subjects.length ? "Choose a subject" : "You teach no subject here"}
+            disabled={subjects.length === 0}
+            hint="Only the subjects you are assigned to this class."
+            required
+          />
+        </FieldRow>
+        {streamOptions.length ? (
+          <SelectField
+            key={streamKey}
+            name="streamId"
+            label="Stream"
+            options={streamOptions}
+            placeholder={subject?.whole ? "Whole section" : undefined}
+            value={streamId}
+            onChange={(event) => setStreamChoice({ key: streamKey, value: event.target.value })}
+            hint={subject?.whole ? "Choose a stream for work only that stream should do." : "You teach this subject to these streams only."}
+            required={!subject?.whole}
+          />
+        ) : null}
+        {extraOptions.length ? (
+          <div className="flex flex-col gap-2 rounded-xl border p-3">
+            <p className="text-sm font-medium">Also set it for (optional)</p>
+            <p className="text-muted-foreground text-xs">Other classes you teach this subject to. Each gets its own copy, which you can change later on its own.</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {extraOptions.map((option) => (
+                <label key={option.value} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" name="extraSectionIds" value={option.value} checked={extras.includes(option.value)} onChange={(event) => setExtraIds((list) => (event.target.checked ? [...list, option.value] : list.filter((id) => id !== option.value)))} className="size-4" />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex flex-col gap-2 rounded-xl border p-3">
+          <p className="text-sm font-medium">Who is it for?</p>
+          <input type="hidden" name="audience" value={audience} />
+          <div className="flex flex-wrap gap-4 text-sm">
+            <label className="flex items-center gap-2">
+              <input type="radio" name="audienceChoice" checked={audience === "SECTION"} onChange={() => setAudience("SECTION")} className="size-4" />
+              {wholeCount ? `Whole class (${pluralize(wholeCount, "student")})` : "Whole class"}
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="radio" name="audienceChoice" checked={audience === "SELECTED_STUDENTS"} onChange={() => setAudience("SELECTED_STUDENTS")} className="size-4" />
+              Selected students
+            </label>
+          </div>
+          {audience === "SELECTED_STUDENTS" ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <span className="text-muted-foreground">{`${picked.length} of ${wholeCount} chosen`}</span>
+                <button type="button" className="text-primary underline" onClick={() => setChosen((list) => [...new Set([...list, ...poolIds])])}>
+                  Select all
+                </button>
+                <button type="button" className="text-primary underline" onClick={() => setChosen([])}>
+                  Clear
+                </button>
+              </div>
+              {pool.map((group) => (
+                <div key={group.sectionId}>
+                  {pool.length > 1 ? <p className="text-muted-foreground mb-1 text-xs font-semibold">{group.label}</p> : null}
+                  {group.students.length ? (
+                    <ul className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                      {group.students.map((student) => (
+                        <li key={student.id}>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" name="studentIds" value={student.id} checked={picked.includes(student.id)} onChange={(event) => toggle(student.id, event.target.checked)} className="size-4" />
+                            {student.rollNumber ? `${student.rollNumber}. ${student.name}` : student.name}
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted-foreground text-xs">No students placed in this class yet.</p>
+                  )}
+                </div>
+              ))}
+              {!picked.length ? <p className="text-warning-strong text-xs">Choose at least one student.</p> : null}
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-xs">{streamId ? "Everyone placed in this stream of the class sees it, including students who join later." : "Everyone placed in the class sees it, including students who join later."}</p>
+          )}
+        </div>
+
+        {(syllabus[`${sectionId}:${subjectId}`] ?? []).length ? (
+          <SelectField
+            key={"syllabus-" + sectionId + "-" + subjectId}
+            name="syllabusItemId"
+            label="Unit, chapter or topic (optional)"
+            options={(syllabus[`${sectionId}:${subjectId}`] ?? []).map((row) => ({ value: row.id, label: row.label }))}
+            placeholder="Not linked"
+            defaultValue={homework?.subjectId === subjectId ? (homework?.syllabusItemId ?? "") : ""}
+            hint={extras.length ? "Linking works for classes that share this syllabus." : "Counts toward this unit's homework in progress reports."}
+          />
+        ) : null}
         <TextField
-          name="assignedOn"
-          label="Set on"
-          type="date"
-          defaultValue={homework?.assignedOn ?? today}
-          onChange={(event) => setAssignedOn(event.currentTarget.value)}
+          name="title"
+          label="Title"
+          defaultValue={homework?.title}
+          placeholder="Exercise 4.2 — Q1 to Q5"
           required
         />
-        <TextField
-          name="dueOn"
-          label="Due on"
-          type="date"
-          defaultValue={homework?.dueOn ?? today}
-          min={assignedOn || undefined}
+        <TextareaField
+          name="description"
+          label="Details"
+          rows={5}
+          defaultValue={homework?.description ?? ""}
+          hint="What the homework is about."
+        />
+        <TextareaField
+          name="instructions"
+          label="Homework instructions"
+          rows={4}
+          defaultValue={homework?.instructions ?? ""}
+          placeholder="Complete Exercise 4.2, Questions 1-10."
+          hint="Exactly what the student needs to do."
+        />
+        <FieldRow>
+          <TextField
+            name="assignedOn"
+            label="Set on"
+            type="date"
+            defaultValue={homework?.assignedOn ?? today}
+            onChange={(event) => setAssignedOn(event.currentTarget.value)}
+            required
+          />
+          <TextField
+            name="dueOn"
+            label="Due on"
+            type="date"
+            defaultValue={homework?.dueOn ?? today}
+            min={assignedOn || undefined}
+            required
+          />
+        </FieldRow>
+        <SelectField
+          name="status"
+          label="Status"
+          defaultValue={homework?.status ?? "PUBLISHED"}
+          options={HOMEWORK_STATUS_OPTIONS}
           required
         />
-      </FieldRow>
-      <SelectField
-        name="status"
-        label="Status"
-        defaultValue={homework?.status ?? "PUBLISHED"}
-        options={HOMEWORK_STATUS_OPTIONS}
-        required
-      />
-      {homework ? null : <HomeworkResourceBuilder onUploadChange={setHasUpload} />}
-      <div>
-        <SubmitButton pendingLabel={hasUpload ? "Uploading…" : "Saving…"}>
-          {homework ? "Save homework" : "Set homework"}
-        </SubmitButton>
-      </div>
+        {homework ? null : <HomeworkResourceBuilder onUploadChange={setHasUpload} />}
+      </fieldset>
+      {review ? (
+        <div role="region" aria-label="Review homework" className="bg-muted/40 flex flex-col gap-3 rounded-xl border p-4 text-sm">
+          <p className="font-semibold">{homework ? "Check before you save it" : "Check before you set it"}</p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
+            <dt className="text-muted-foreground">Title</dt>
+            <dd>{review.title}</dd>
+            <dt className="text-muted-foreground">Subject</dt>
+            <dd>{subject?.label ?? ""}</dd>
+            <dt className="text-muted-foreground">{chosenSections.length > 1 ? "Classes" : "Class"}</dt>
+            <dd>{`${chosenSections.map(labelOf).join(", ")}${streamId ? ` · ${streamOptions.find((option) => option.value === streamId)?.label ?? ""}` : ""}`}</dd>
+            <dt className="text-muted-foreground">For</dt>
+            <dd>{audience === "SECTION" ? `Whole class — ${pluralize(wholeCount, "student")} now` : pluralize(picked.length, "selected student")}</dd>
+            <dt className="text-muted-foreground">Set on / due</dt>
+            <dd>{`${review.assignedOn} → ${review.dueOn}`}</dd>
+            <dt className="text-muted-foreground">Visible</dt>
+            <dd>{review.status === "PUBLISHED" ? "Straight away, to those students and their parents" : "Not yet — saved as a draft"}</dd>
+          </dl>
+          <div className="flex flex-wrap gap-2">
+            <SubmitButton pendingLabel={hasUpload ? "Uploading…" : "Saving…"}>{homework ? "Confirm and save" : review.status === "PUBLISHED" ? "Confirm and set homework" : "Confirm and save draft"}</SubmitButton>
+            <Button type="button" variant="outline" onClick={() => setReview(null)}>
+              Back to edit
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <Button type="button" onClick={openReview}>
+            {homework ? "Review changes" : "Review homework"}
+          </Button>
+        </div>
+      )}
     </ActionForm>
   );
 }
@@ -874,6 +1071,69 @@ export function LessonMaterialForm({ classSessionId }: { classSessionId: string 
         <SubmitButton variant="outline" pendingLabel={kind === "DOCUMENT" ? "Uploading…" : "Saving…"}>
           Add material
         </SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Who handed it in
+// -----------------------------------------------------------------------------
+
+type MarkValue = "ASSIGNED" | "SUBMITTED" | "LATE" | "MISSING";
+
+/**
+ * After checking the homework: per student, submitted, late or missing.
+ * Leaving a student on "Not checked" keeps it just assigned. Missing is
+ * offered only once the work is due; the server enforces both.
+ */
+export function HomeworkMarksForm({
+  homeworkId,
+  students,
+  canMarkMissing,
+}: {
+  homeworkId: string;
+  students: Array<{ studentId: string; name: string; rollNumber: string | null; status: MarkValue; note?: string | null }>;
+  canMarkMissing: boolean;
+}) {
+  const [marks, setMarks] = useState<Record<string, MarkValue>>(() => Object.fromEntries(students.map((row) => [row.studentId, row.status])));
+  const options: Array<{ value: MarkValue; label: string }> = [
+    { value: "ASSIGNED", label: "Not checked" },
+    { value: "SUBMITTED", label: "Submitted" },
+    { value: "LATE", label: "Submitted late" },
+    ...(canMarkMissing ? [{ value: "MISSING" as const, label: "Missing work" }] : []),
+  ];
+  return (
+    <ActionForm action={markHomeworkAction} className="gap-3">
+      <input type="hidden" name="homeworkId" value={homeworkId} />
+      <div>
+        <Button type="button" variant="outline" size="sm" onClick={() => setMarks((current) => Object.fromEntries(Object.entries(current).map(([id, value]) => [id, value === "ASSIGNED" ? "SUBMITTED" : value])))}>
+          Mark everyone not checked as submitted
+        </Button>
+      </div>
+      <ul className="divide-y rounded-xl border">
+        {students.map((row) => (
+          <li key={row.studentId} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+            <span className="min-w-40 flex-1">{row.rollNumber ? `${row.rollNumber}. ${row.name}` : row.name}</span>
+            <input name={"note." + row.studentId} defaultValue={row.note ?? ""} maxLength={300} placeholder="Feedback (optional)" aria-label={`Feedback for ${row.name}`} className="border-input bg-background h-9 min-w-40 flex-1 rounded-lg border px-2 text-sm" />
+            <select
+              name={"mark." + row.studentId}
+              aria-label={`Status for ${row.name}`}
+              value={marks[row.studentId] ?? "ASSIGNED"}
+              onChange={(event) => setMarks((current) => ({ ...current, [row.studentId]: event.target.value as MarkValue }))}
+              className="border-input bg-background h-9 rounded-lg border px-2 text-sm"
+            >
+              {options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </li>
+        ))}
+      </ul>
+      <div>
+        <SubmitButton pendingLabel="Saving…">Save</SubmitButton>
       </div>
     </ActionForm>
   );

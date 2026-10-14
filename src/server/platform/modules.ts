@@ -5,6 +5,7 @@ import { cache } from "react";
 import { ForbiddenError } from "@/lib/errors";
 import { type OptionalModule, cleanModules, moduleLabel, moduleOfGrant } from "@/lib/school-modules";
 import { prisma } from "@/server/db/prisma";
+import { moduleStatus } from "@/server/platform/entitlements";
 
 /**
  * The optional modules a school has (see `lib/school-modules.ts`), enforced on
@@ -23,11 +24,19 @@ export async function hasModule(ctx: { schoolId: string }, module: OptionalModul
   return (await schoolModules(ctx.schoolId)).includes(module);
 }
 
-/** Refuse when the school does not have this module — for every role, the School Admin included. */
+/**
+ * Refuse when the school does not have this module — for every role, the
+ * School Admin included. The message says which of the two it is: in the
+ * plan but switched off for this campus (the School Admin can switch it on),
+ * or not in the plan at all.
+ */
 export async function assertModuleEnabled(ctx: { schoolId: string }, module: OptionalModule): Promise<void> {
-  if (!(await hasModule(ctx, module))) {
-    throw new ForbiddenError(`${moduleLabel(module)} is not part of your school's plan. Ask SchoolOS to switch it on.`);
+  if (await hasModule(ctx, module)) return;
+  const status = await moduleStatus(ctx.schoolId, module);
+  if (status.reason === "NOT_ENABLED_FOR_CAMPUS") {
+    throw new ForbiddenError(`${moduleLabel(module)} is in your plan but switched off for this campus. A School Admin can switch it on in Plan & billing.`);
   }
+  throw new ForbiddenError(`${moduleLabel(module)} is not part of your school's plan. Ask SchoolOS to switch it on.`);
 }
 
 /** Grants whose module the school has (grants outside optional modules always pass). */

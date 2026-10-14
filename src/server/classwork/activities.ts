@@ -59,6 +59,7 @@ const SLOT_SELECT = {
     select: {
       id: true,
       name: true,
+      classId: true,
       class: { select: { name: true, level: true } },
       stream: { select: { name: true } },
     },
@@ -147,6 +148,11 @@ export type ActivityInput = {
   homeworkTitle?: string | null;
   homeworkDescription?: string | null;
   homeworkDueOn?: Date | null;
+  /**
+   * Syllabus topics taught in this class, fully or partly. Replaces what was
+   * recorded before; left alone when absent. Only for a class that took place.
+   */
+  topics?: Array<{ topicId: string; coverage: "COVERED" | "PARTIAL" }>;
 };
 
 /** A class that did not happen cannot have set homework. */
@@ -187,6 +193,24 @@ export async function recordActivity(
     }
   }
 
+  // Topics come from this class's own syllabus for this subject, this session.
+  let topics: Array<{ topicId: string; coverage: "COVERED" | "PARTIAL" }> | undefined;
+  if (input.topics !== undefined) {
+    const wanted = [...new Map(input.topics.map((row) => [row.topicId, row])).values()];
+    if (wanted.length && !HOMEWORK_STATUSES.includes(input.status)) {
+      throw new AppError("VALIDATION", "Topics can only be recorded for a class that took place.");
+    }
+    if (wanted.length > 50) throw new AppError("VALIDATION", "Record at most 50 topics for one class.");
+    if (wanted.length) {
+      const valid = await ctx.db.syllabusItem.findMany({
+        where: { id: { in: wanted.map((row) => row.topicId) }, level: "TOPIC", classId: slot.section.classId, subjectId: slot.subject.id, academicSessionId: slot.academicSessionId },
+        select: { id: true },
+      });
+      if (valid.length !== wanted.length) throw new AppError("VALIDATION", "Choose topics from this class's syllabus for this subject.");
+    }
+    topics = wanted;
+  }
+
   const record = await ctx.db.classSession.upsert({
     where: {
       schoolId_timetableSlotId_date: {
@@ -220,6 +244,15 @@ export async function recordActivity(
     },
     select: { id: true },
   });
+
+  if (topics !== undefined) {
+    await ctx.db.$transaction(async (tx) => {
+      await tx.lessonTopic.deleteMany({ where: { classSessionId: record.id } });
+      if (topics!.length) {
+        await tx.lessonTopic.createMany({ data: topics!.map((row) => ({ schoolId: ctx.schoolId, classSessionId: record.id, topicId: row.topicId, coverage: row.coverage })) });
+      }
+    });
+  }
 
   // Homework set in the class is an ordinary `Homework` row, so it appears on
   // every homework list that already exists; the link makes re-saving the class
@@ -256,7 +289,7 @@ export async function recordActivity(
     entityId: record.id,
     schoolId: ctx.schoolId,
     actorId: ctx.user.id,
-    summary: `${slot.subject.name} for ${sectionLabel(slot.section)} recorded as ${input.status.toLowerCase()}.`,
+    summary: `${slot.subject.name} for ${sectionLabel(slot.section)} recorded as ${input.status.toLowerCase()}.${topics?.length ? ` Topics: ${topics.length} (${topics.filter((row) => row.coverage === "PARTIAL").length} partly).` : ""}`,
   });
 
   return record;
@@ -445,6 +478,7 @@ export async function getMyActivity(ctx: TenantContext, activityId: string) {
       plannedTopic: true,
       preparation: true,
       timetableSlot: { select: SLOT_SELECT },
+      topics: { select: { topicId: true, coverage: true } },
       materials: {
         orderBy: { createdAt: "asc" },
         select: {

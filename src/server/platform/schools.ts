@@ -568,9 +568,15 @@ export async function setSubscription(
   const [school, plan] = await Promise.all([
     prisma.school.findUnique({ where: { id: input.schoolId }, select: { id: true, name: true, organizationId: true } }),
     // Never a draft: a plan nobody has published cannot carry customers.
-    prisma.plan.findFirst({ where: { id: input.planId, status: { not: "DRAFT" } }, select: { id: true, name: true, optionalModules: true, availableRoles: true } }),
+    prisma.plan.findFirst({ where: { id: input.planId, status: { not: "DRAFT" } }, select: { id: true, name: true, status: true, optionalModules: true, availableRoles: true } }),
   ]);
   if (!school || !plan) throw new NotFoundError();
+  // An archived plan carries the customers already on it (their dates and
+  // status can still be updated) but takes nobody new.
+  if (plan.status === "ARCHIVED") {
+    const onIt = await prisma.subscription.findFirst({ where: { schoolId: school.id }, orderBy: { createdAt: "desc" }, select: { planId: true } });
+    if (onIt?.planId !== plan.id) throw new ConflictError(`${plan.name} is archived. Choose a published plan, or restore ${plan.name} first.`);
+  }
 
   if (input.endsAt && input.endsAt < input.startsAt) {
     throw new ConflictError("The end date must be after the start date.");

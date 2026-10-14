@@ -295,6 +295,92 @@ enum HomeworkStatus {
   PUBLISHED
 }
 
+/// Who homework is for: everyone in its section (or stream), or only the
+/// students listed in HomeworkStudent.
+enum HomeworkAudience {
+  SECTION
+  SELECTED_STUDENTS
+}
+
+/// What the teacher recorded after checking one student's homework. No row
+/// means it is still just assigned — opening it never counts as handing it in.
+enum HomeworkSubmissionStatus {
+  SUBMITTED
+  LATE
+  MISSING
+}
+
+/// A document the school produces for a student, teacher or staff member.
+enum DocumentType {
+  STUDENT_ID_CARD
+  BONAFIDE_CERTIFICATE
+  CHARACTER_CERTIFICATE
+  ATTENDANCE_CERTIFICATE
+  ENROLLMENT_CONFIRMATION
+  TRANSFER_CERTIFICATE
+  MARKSHEET
+  STAFF_ID_CARD
+  APPOINTMENT_LETTER
+  EMPLOYMENT_VERIFICATION
+  EXPERIENCE_CERTIFICATE
+  RELIEVING_LETTER
+  SALARY_CERTIFICATE
+  SERVICE_CERTIFICATE
+  ADMIT_CARD
+}
+
+/// GENERATED: produced to print (ID cards, marksheets) — no official number.
+/// ISSUED: an official certificate or letter with its number. REVOKED and
+/// SUPERSEDED keep the record; nothing issued is ever deleted or rewritten.
+enum DocumentStatus {
+  GENERATED
+  /// A transfer certificate waiting for a second leader's approval (when the
+  /// school requires it): no number yet, and not official.
+  PENDING_APPROVAL
+  ISSUED
+  REVOKED
+  SUPERSEDED
+}
+
+/// Who signs a kind of document, by the school's own policy.
+enum DocumentSignatory {
+  PRINCIPAL
+  SCHOOL_ADMIN
+}
+
+/// A syllabus entry: units hold chapters, chapters hold topics.
+enum SyllabusLevel {
+  UNIT
+  CHAPTER
+  TOPIC
+}
+
+/// How much of a topic a lesson covered, as the teacher recorded it.
+enum TopicCoverage {
+  COVERED
+  PARTIAL
+}
+
+/// Why an academic review exists.
+enum AcademicReviewKind {
+  /// The teacher says a unit's topics are done and asks for review.
+  UNIT_READY
+  /// A test linked to the syllabus averaged below the school's threshold.
+  LOW_PERFORMANCE
+  /// A leader's note or follow-up for a class and subject.
+  NOTE
+}
+
+/// Where a review stands. Revision steps are recorded by the teacher.
+enum AcademicReviewStatus {
+  OPEN
+  UPDATE_REQUESTED
+  REVISION_RECOMMENDED
+  REVISION_PLANNED
+  REVISION_DONE
+  RESOLVED
+}
+
 enum DayOfWeek {
   MONDAY
   TUESDAY
@@ -684,6 +770,7 @@ model User {
   school   School? @relation(fields: [schoolId], references: [id], onDelete: Cascade)
 
   sessions               Session[]
+  principalProfile       PrincipalProfile?
   ownedOrganization      Organization?         @relation("OrganizationOwner")
   campusRequests         CampusRequest[]       @relation("CampusRequester")
   featureRequests        FeatureRequest[]      @relation("FeatureRequester")
@@ -922,42 +1009,62 @@ model School {
   // --- fee receipts ---
   /// Printed under the school's name on every fee receipt, e.g. the board
   /// affiliation or registration number.
-  receiptHeaderNote          String?
+  receiptHeaderNote String?
   /// Printed at the foot of every fee receipt, e.g. "Fees once paid are not
   /// refundable."
-  receiptFooterNote          String?
+  receiptFooterNote String?
+
+  // --- documents (certificates, letters, ID cards) ---
+  /// Printed under the school's name on documents, e.g. affiliation details.
+  documentHeaderNote         String?
+  /// Printed at the foot of every document.
+  documentFooterNote         String?
+  /// The School Admin / MD who signs when the policy says so.
+  adminSignatoryName         String?
+  adminSignatoryTitle        String?
+  /// Approved signature images, kept private (served only to school leaders).
+  principalSignatureKey      String?
+  adminSignatureKey          String?
+  /// Who signs student certificates, and who signs employment documents.
+  certificateSignatory       DocumentSignatory @default(PRINCIPAL)
+  /// A transfer certificate needs a second leader's approval before it is issued.
+  tcApprovalRequired         Boolean           @default(false)
+  employmentSignatory        DocumentSignatory @default(PRINCIPAL)
   /// Library fine per day overdue, in paise. Zero means no fines.
-  libraryFinePerDayMinor     Int     @default(200)
+  libraryFinePerDayMinor     Int               @default(200)
   /// Default loan period for a new issue, in days.
-  libraryLoanDays            Int     @default(14)
+  libraryLoanDays            Int               @default(14)
   /// Books a borrower may hold at once.
-  libraryMaxLoans            Int     @default(3)
+  libraryMaxLoans            Int               @default(3)
   /// The last copy number issued (BK-0001, BK-0002, …).
-  lastBookCopyNumber         Int     @default(0)
+  lastBookCopyNumber         Int               @default(0)
   /// How many days back a student leave request may start. 0: from today only.
-  studentLeaveBackdateDays   Int     @default(7)
+  studentLeaveBackdateDays   Int               @default(7)
   /// Retired 8 Oct 2026 and no longer read or written: students never see
   /// fees. Kept so existing rows and migrations stay intact.
-  showFeesToStudents         Boolean @default(false)
+  showFeesToStudents         Boolean           @default(false)
   /// A subject "needs attention" below this percentage (see server/exams/attention.ts).
-  needsAttentionPercent      Int     @default(40)
+  needsAttentionPercent      Int               @default(40)
   /// …or when this many of the last three tests are below it.
-  needsAttentionRepeat       Int     @default(2)
+  needsAttentionRepeat       Int               @default(2)
+  /// A syllabus-linked test averaging below this percentage is flagged for
+  /// academic review (server/academics/progress.ts). Set by the school.
+  academicReviewPercent      Int               @default(60)
   /// A student's attendance needs attention below this percentage…
-  attendanceAttentionPercent Int     @default(75)
+  attendanceAttentionPercent Int               @default(75)
   /// …over this many most recent days (registers marked in that window).
-  attendanceAttentionDays    Int     @default(30)
+  attendanceAttentionDays    Int               @default(30)
   /// Lets the fee desk take one payment for several siblings, split per child.
-  familyPaymentEnabled       Boolean @default(false)
+  familyPaymentEnabled       Boolean           @default(false)
   /// The school's grading scale: [{"min": 91, "grade": "A1"}, …] from highest
   /// to lowest, the last band starting at 0. Null: the CBSE nine-point scale.
   gradeBands                 Json?
   /// A paper without its own pass mark passes at this percentage.
-  passPercent                Int     @default(33)
+  passPercent                Int               @default(33)
   /// Late fee added once to each instalment still unpaid this many days after
   /// its due date (paise). Zero: no late fees.
-  lateFeeMinor               Int     @default(0)
-  lateFeeGraceDays           Int     @default(0)
+  lateFeeMinor               Int               @default(0)
+  lateFeeGraceDays           Int               @default(0)
 
   /// When the daily register is taken, and whether it submits itself.
   attendanceTiming     RegisterTiming     @default(FIRST_PERIOD)
@@ -1015,6 +1122,8 @@ model School {
   studentAttendance     StudentAttendance[]
   teacherAttendance     TeacherAttendance[]
   homework              Homework[]
+  homeworkStudents      HomeworkStudent[]
+  homeworkSubmissions   HomeworkSubmission[]
   studentRemarks        StudentRemark[]
   admissionDrives       AdmissionDrive[]
   admissionAssignments  AdmissionAssignment[]
@@ -1090,6 +1199,11 @@ model School {
   visitors            Visitor[]
   responsibilities    Responsibility[]
   staffDocuments      StaffDocument[]
+  syllabusItems       SyllabusItem[]
+  lessonTopics        LessonTopic[]
+  academicReviews     AcademicReview[]
+  issuedDocuments     IssuedDocument[]
+  principalProfiles   PrincipalProfile[]
 
   @@index([status])
   @@index([createdAt])
@@ -1581,9 +1695,10 @@ model StaffMember {
   substitutedBy   StaffSubstitution[] @relation("SubstitutionOriginal")
   substitutingFor StaffSubstitution[] @relation("SubstitutionSubstitute")
 
-  documents      StaffDocument[]
-  salaries       TeacherSalary[]
-  salaryPayments SalaryPayment[]
+  documents       StaffDocument[]
+  salaries        TeacherSalary[]
+  salaryPayments  SalaryPayment[]
+  issuedDocuments IssuedDocument[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, employeeId])
@@ -2228,11 +2343,13 @@ model AcademicSession {
 
   attendanceRegisters AttendanceRegister[]
 
-  carriedOut     FeeCarryForward[] @relation("CarryFrom")
-  carriedIn      FeeCarryForward[] @relation("CarryTo")
-  familyPayments FamilyPayment[]
-  enquiries      Enquiry[]
-  resultSchemes  ResultScheme[]
+  carriedOut      FeeCarryForward[] @relation("CarryFrom")
+  carriedIn       FeeCarryForward[] @relation("CarryTo")
+  familyPayments  FamilyPayment[]
+  enquiries       Enquiry[]
+  resultSchemes   ResultScheme[]
+  syllabusItems   SyllabusItem[]
+  academicReviews AcademicReview[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, name])
@@ -2261,8 +2378,9 @@ model Class {
   admissionApplications AdmissionApplication[]
   enquiryChildren       EnquiryChild[]
 
-  supports StudentSupport[]
-  concerns SupportConcern[]
+  supports      StudentSupport[]
+  concerns      SupportConcern[]
+  syllabusItems SyllabusItem[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, name])
@@ -2362,6 +2480,7 @@ model Section {
   attendanceRegisters  AttendanceRegister[]
   registerCovers       RegisterCover[]
   admissionAssignments AdmissionAssignment[]
+  academicReviews      AcademicReview[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, academicSessionId, classId, name])
@@ -2387,6 +2506,8 @@ model Subject {
 
   supports        StudentSupport[]
   supportConcerns SupportConcern[]
+  syllabusItems   SyllabusItem[]
+  academicReviews AcademicReview[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, code])
@@ -2441,6 +2562,7 @@ model Teacher {
 
   registerCovers       RegisterCover[]
   admissionAssignments AdmissionAssignment[]
+  issuedDocuments      IssuedDocument[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, employeeId])
@@ -2512,6 +2634,8 @@ model Student {
   updatedAt             DateTime       @updatedAt
 
   enrollments          StudentEnrollment[]
+  homeworkTargets      HomeworkStudent[]
+  homeworkSubmissions  HomeworkSubmission[]
   parents              ParentStudent[]
   noticeRecipients     NoticeRecipient[]
   attendance           StudentAttendance[]
@@ -2537,6 +2661,7 @@ model Student {
   phone String?
 
   feeCarryForwards FeeCarryForward[]
+  issuedDocuments  IssuedDocument[]
 
   @@unique([schoolId, id])
   @@unique([schoolId, admissionNumber])
@@ -2779,6 +2904,10 @@ model ClassSession {
   actualTeacher    Teacher?      @relation("ClassSessionActualTeacher", fields: [schoolId, actualTeacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
 
   materials LessonMaterial[]
+  /// Syllabus topics the teacher recorded as taught in this lesson.
+  topics    LessonTopic[]
+  /// Reviews whose revision lesson this was.
+  revisions AcademicReview[]
   homework  Homework[]
 
   @@unique([schoolId, id])
@@ -2953,7 +3082,7 @@ model TeacherAttendance {
 /// instead of one per child. Per-student submission and marking would be a
 /// separate table hanging off this one.
 model Homework {
-  id                String         @id @default(cuid())
+  id                String           @id @default(cuid())
   schoolId          String
   academicSessionId String
   sectionId         String
@@ -2968,11 +3097,15 @@ model Homework {
   description       String?
   /// What the student has to do, step by step — "Exercise 4.2, Q1-10".
   instructions      String?
-  assignedOn        DateTime       @db.Date
-  dueOn             DateTime       @db.Date
-  status            HomeworkStatus @default(PUBLISHED)
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  assignedOn        DateTime         @db.Date
+  dueOn             DateTime         @db.Date
+  status            HomeworkStatus   @default(PUBLISHED)
+  /// The whole section (or stream), or only the students in `targets`.
+  audience          HomeworkAudience @default(SECTION)
+  /// The unit, chapter or topic this homework practises, when the syllabus is set up.
+  syllabusItemId    String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   stream          Stream?         @relation(fields: [schoolId, streamId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
@@ -2981,9 +3114,14 @@ model Homework {
   subject         Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   teacher         Teacher         @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   classSession    ClassSession?   @relation(fields: [schoolId, classSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  syllabusItem    SyllabusItem?   @relation(fields: [schoolId, syllabusItemId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
 
   /// Study resources attached to the homework: PDFs, videos, links.
-  resources LessonMaterial[]
+  resources   LessonMaterial[]
+  /// The students it is for, when `audience` is SELECTED_STUDENTS.
+  targets     HomeworkStudent[]
+  /// What the teacher recorded per student after checking it.
+  submissions HomeworkSubmission[]
 
   @@unique([schoolId, id])
   /// One piece of homework per class record; re-saving the class edits it.
@@ -2993,6 +3131,238 @@ model Homework {
   /// What this teacher has set, newest first.
   @@index([schoolId, teacherId, assignedOn])
   @@index([schoolId, status, dueOn])
+}
+
+/// One student a piece of homework is set for, when it is not for the whole
+/// section. Only students placed in the homework's section (and stream) can
+/// be listed — checked when it is saved.
+model HomeworkStudent {
+  id         String   @id @default(cuid())
+  schoolId   String
+  homeworkId String
+  studentId  String
+  createdAt  DateTime @default(now())
+
+  school   School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  homework Homework @relation(fields: [schoolId, homeworkId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  student  Student  @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, homeworkId, studentId])
+  @@index([schoolId, studentId])
+}
+
+/// The teacher's record of one student's homework after checking it:
+/// handed in, handed in late, or missing. Written only by the teacher who set
+/// the homework; never inferred from a student or parent opening it.
+model HomeworkSubmission {
+  id             String                   @id @default(cuid())
+  schoolId       String
+  homeworkId     String
+  studentId      String
+  status         HomeworkSubmissionStatus
+  note           String?
+  /// The user (teacher) who recorded it.
+  markedByUserId String?
+  markedAt       DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  school   School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  homework Homework @relation(fields: [schoolId, homeworkId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  student  Student  @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, homeworkId, studentId])
+  @@index([schoolId, studentId])
+}
+
+/// The school's own syllabus for one class and subject in one session —
+/// units, their chapters, and the chapters' topics. What is expected to be
+/// taught; what was taught is recorded per lesson (LessonTopic). Nothing is
+/// shared between schools and no national syllabus is built in.
+model SyllabusItem {
+  id                String        @id @default(cuid())
+  schoolId          String
+  academicSessionId String
+  classId           String
+  subjectId         String
+  level             SyllabusLevel
+  /// The unit a chapter is in, or the chapter a topic is in. Null for a unit.
+  parentId          String?
+  title             String
+  position          Int           @default(0)
+  /// When the unit is planned to be taught (units only). Used to show a unit
+  /// running behind; never to grade anyone.
+  plannedFrom       DateTime?     @db.Date
+  plannedTo         DateTime?     @db.Date
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  class           Class           @relation(fields: [schoolId, classId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  subject         Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  parent          SyllabusItem?   @relation("SyllabusTree", fields: [schoolId, parentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  children        SyllabusItem[]  @relation("SyllabusTree")
+
+  lessons     LessonTopic[]
+  homework    Homework[]
+  assessments Assessment[]
+  reviews     AcademicReview[]
+
+  @@unique([schoolId, id])
+  @@index([schoolId, academicSessionId, classId, subjectId])
+  @@index([schoolId, parentId])
+}
+
+/// One syllabus topic taught in one lesson, fully or partly — as the
+/// teacher recorded it. Self-reported: evidence (attendance, the register)
+/// is shown beside it, never merged into it.
+model LessonTopic {
+  id             String        @id @default(cuid())
+  schoolId       String
+  classSessionId String
+  topicId        String
+  coverage       TopicCoverage @default(COVERED)
+  createdAt      DateTime      @default(now())
+
+  school       School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classSession ClassSession @relation(fields: [schoolId, classSessionId], references: [schoolId, id], onDelete: Cascade, onUpdate: NoAction)
+  topic        SyllabusItem @relation(fields: [schoolId, topicId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, classSessionId, topicId])
+  @@index([schoolId, topicId])
+}
+
+/// Something about one class and subject that a leader or teacher should look
+/// at: a unit marked ready, a test below the school's threshold, or a
+/// leader's note — and the revision that follows. Status changes are audited.
+model AcademicReview {
+  id                   String               @id @default(cuid())
+  schoolId             String
+  academicSessionId    String
+  sectionId            String
+  subjectId            String
+  kind                 AcademicReviewKind
+  status               AcademicReviewStatus @default(OPEN)
+  /// The unit (UNIT_READY), or the unit/chapter/topic a test covered.
+  syllabusItemId       String?
+  /// The test whose results raised it (LOW_PERFORMANCE).
+  assessmentId         String?
+  /// The leader's note, or the reason given when asking for an update.
+  note                 String?
+  /// The teacher's reply: what was done or is planned.
+  teacherResponse      String?
+  revisionPlannedOn    DateTime?            @db.Date
+  /// The lesson the revision was taught in, once recorded.
+  revisionSessionId    String?
+  /// The test that checks the revision worked.
+  followUpAssessmentId String?
+  createdById          String?
+  updatedById          String?
+  resolvedAt           DateTime?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  school             School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicSession    AcademicSession @relation(fields: [schoolId, academicSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  section            Section         @relation(fields: [schoolId, sectionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  subject            Subject         @relation(fields: [schoolId, subjectId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  syllabusItem       SyllabusItem?   @relation(fields: [schoolId, syllabusItemId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  assessment         Assessment?     @relation("ReviewAssessment", fields: [schoolId, assessmentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  followUpAssessment Assessment?     @relation("ReviewFollowUp", fields: [schoolId, followUpAssessmentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  revisionSession    ClassSession?   @relation(fields: [schoolId, revisionSessionId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  /// One review per test's low result: the same unresolved issue is never raised twice.
+  @@unique([schoolId, kind, assessmentId])
+  @@index([schoolId, sectionId, subjectId, status])
+  @@index([schoolId, academicSessionId, status])
+}
+
+/// The register of documents produced for people of a school. The content
+/// printed is kept as `content`, so an issued certificate reads the same
+/// later even if the records change; a re-issue supersedes the old one.
+model IssuedDocument {
+  id                 String         @id @default(cuid())
+  schoolId           String
+  type               DocumentType
+  status             DocumentStatus
+  /// "TC/2026/0001" for issued documents; null for generated ones.
+  number             String?
+  studentId          String?
+  teacherId          String?
+  staffMemberId      String?
+  principalProfileId String?
+  /// What was chosen: exam, purpose, dates confirmed by the issuer.
+  params             Json?
+  /// What the document says, as printed.
+  content            Json
+  issuedOn           DateTime       @db.Date
+  generatedById      String?
+  issuedById         String?
+  /// Who approved a transfer certificate that needed approval, and when.
+  approvedById       String?
+  approvedAt         DateTime?
+  revokedAt          DateTime?
+  revokedById        String?
+  revokeReason       String?
+  supersededById     String?
+  /// Documents made together in one bulk run.
+  batchKey           String?
+  /// One per request and person, so a retried request never issues twice.
+  requestKey         String?
+  createdAt          DateTime       @default(now())
+
+  school           School            @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  student          Student?          @relation(fields: [schoolId, studentId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  teacher          Teacher?          @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  staffMember      StaffMember?      @relation(fields: [schoolId, staffMemberId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+  principalProfile PrincipalProfile? @relation(fields: [schoolId, principalProfileId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([schoolId, id])
+  @@unique([schoolId, number])
+  @@unique([schoolId, requestKey])
+  @@index([schoolId, type, status])
+  @@index([schoolId, studentId])
+  @@index([schoolId, teacherId])
+  @@index([schoolId, staffMemberId])
+  @@index([schoolId, principalProfileId])
+  @@index([schoolId, batchKey])
+}
+
+/// The Principal's employment record. The login is the User; this keeps what
+/// the Principal's ID card and employment documents need — employee ID,
+/// designation, dates and qualifications — entered by the School Admin.
+model PrincipalProfile {
+  id              String    @id @default(cuid())
+  schoolId        String
+  userId          String
+  employeeId      String?
+  designation     String    @default("Principal")
+  qualification   String?
+  /// In the School Admin's words: "18 years in CBSE schools".
+  experience      String?
+  appointmentDate DateTime? @db.Date
+  joiningDate     DateTime? @db.Date
+  /// Last working day, once they have left.
+  exitDate        DateTime? @db.Date
+  dateOfBirth     DateTime? @db.Date
+  addressLine     String?
+  city            String?
+  state           String?
+  postalCode      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  school          School           @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issuedDocuments IssuedDocument[]
+
+  @@unique([schoolId, id])
+  @@unique([userId])
+  @@unique([schoolId, employeeId])
 }
 
 /// A teacher's note about one child, for one academic session.
@@ -3054,6 +3424,8 @@ model Assessment {
   /// The exam this paper belongs to. Null for a class test a teacher set on
   /// their own, whose marks are visible as soon as they are entered.
   examId            String?
+  /// The unit, chapter or topic this test assesses, when the syllabus is set up.
+  syllabusItemId    String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -3064,7 +3436,12 @@ model Assessment {
   teacher         Teacher?        @relation(fields: [schoolId, teacherId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
   exam            Exam?           @relation(fields: [schoolId, examId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
 
-  results AssessmentResult[]
+  syllabusItem SyllabusItem? @relation(fields: [schoolId, syllabusItemId], references: [schoolId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  results         AssessmentResult[]
+  /// Reviews raised from this test's results, and revisions it follows up.
+  reviewsRaised   AcademicReview[]   @relation("ReviewAssessment")
+  reviewsFollowUp AcademicReview[]   @relation("ReviewFollowUp")
 
   /// Set when the test is for one stream of a shared section (e.g. Science only).
   streamId      String?
@@ -4331,6 +4708,59 @@ model Organization {
   schools         School[]
   requests        CampusRequest[]
   featureRequests FeatureRequest[]
+  platformBills   PlatformBill[]
+}
+
+/// What SchoolOS bills an organization for its membership, entered by the
+/// Super Admin by hand — SchoolOS takes no online payments. A bill is never
+/// deleted: one without payments may be cancelled, with a reason.
+model PlatformBill {
+  id             String    @id @default(cuid())
+  organizationId String
+  /// "SB-2026-00001": SchoolOS's own numbering, never reused.
+  billNo         String    @unique
+  /// The plan's name when billed, kept as text so a later rename does not rewrite history.
+  planName       String?
+  description    String?
+  periodStart    DateTime? @db.Date
+  periodEnd      DateTime? @db.Date
+  amountMinor    Int
+  currency       String    @default("INR")
+  dueOn          DateTime  @db.Date
+  cancelledAt    DateTime?
+  cancelReason   String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  payments     PlatformPayment[]
+
+  @@index([organizationId, dueOn])
+  @@index([dueOn])
+}
+
+/// Money SchoolOS received against a bill, recorded by the Super Admin. Never
+/// deleted: a mistake is voided with a reason and stops counting.
+model PlatformPayment {
+  id             String        @id @default(cuid())
+  billId         String
+  amountMinor    Int
+  receivedOn     DateTime      @db.Date
+  method         PaymentMethod
+  referenceNo    String?
+  notes          String?
+  /// One per form submission, so a double click records the payment once.
+  idempotencyKey String?       @unique
+  voidedAt       DateTime?
+  voidReason     String?
+  recordedById   String?
+  createdAt      DateTime      @default(now())
+
+  bill PlatformBill @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  @@index([billId])
+  @@index([receivedOn])
 }
 
 /// A school owner's request for something SchoolOS does not do yet. Reviewed

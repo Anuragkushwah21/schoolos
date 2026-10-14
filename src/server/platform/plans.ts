@@ -166,18 +166,58 @@ async function impactOf(row: PlanRow, next: PlanConfig) {
 /**
  * A new plan, as a draft that nobody sees until it is published. Started
  * from a template (Starter, Growth, Pro) when one is chosen — its modules,
- * features, roles and campuses are pre-selected — otherwise from the highest
- * plan, so it passes the "keeps everything below" rule.
+ * features, roles and campuses are pre-selected — or as a copy of one plan
+ * (its published settings: modules, features, roles, campuses, limits,
+ * price and wording), otherwise from the highest plan, so it passes the
+ * "keeps everything below" rule. The copied plan itself is not touched.
  */
-export async function createPlan(actor: SessionUser, input: { name: string; templateKey?: string | null }) {
+export async function createPlan(actor: SessionUser, input: { name: string; templateKey?: string | null; copyFromPlanId?: string | null }) {
   assertRole(actor, "SUPER_ADMIN");
   const name = input.name.trim();
   if (name.length < 2) throw new AppError("VALIDATION", "Give the plan a name.");
   if (input.templateKey && !isPlanTemplateKey(input.templateKey)) throw new AppError("VALIDATION", "Choose Starter, Growth, Pro or no template.");
   const template = isPlanTemplateKey(input.templateKey) ? input.templateKey : null;
+  const source = input.copyFromPlanId ? await prisma.plan.findFirst({ where: { id: input.copyFromPlanId, status: { not: "ARCHIVED" } }, select: PLAN_COLUMNS }) : null;
+  if (input.copyFromPlanId && !source) throw new NotFoundError("That plan cannot be copied. Restore it first, or choose another.");
   const top = await prisma.plan.findFirst({ where: { status: { not: "ARCHIVED" } }, orderBy: { displayOrder: "desc" }, select: { displayOrder: true, optionalModules: true, features: true, availableRoles: true } });
   let slug = planSlug(name);
   for (let n = 2; await prisma.plan.findUnique({ where: { slug }, select: { id: true } }); n += 1) slug = `${planSlug(name)}-${n}`;
+  if (source) {
+    const copy = liveConfig(source);
+    const row = await prisma.plan.create({
+      data: {
+        slug,
+        name,
+        // `tier` is unique to the three original plans, so a copy has none.
+        templateKey: source.templateKey,
+        status: "DRAFT",
+        isActive: true,
+        currency: source.currency,
+        displayOrder: (top?.displayOrder ?? 0) + 1,
+        description: copy.description,
+        highlights: copy.highlights,
+        priceMinor: copy.priceMinor,
+        priceOnRequest: copy.priceOnRequest,
+        billingPeriod: copy.billingPeriod,
+        campusLimit: copy.campusLimit,
+        extraCampusAllowed: copy.extraCampusAllowed,
+        extraCampusPriceMinor: copy.extraCampusPriceMinor,
+        extraCampusPeriod: copy.extraCampusPeriod,
+        maxCampuses: copy.maxCampuses,
+        optionalModules: copy.optionalModules,
+        features: copy.features,
+        maxStudents: copy.maxStudents,
+        maxTeachers: copy.maxTeachers,
+        maxAdmins: copy.maxAdmins,
+        storageMb: copy.storageMb,
+        availableRoles: copy.availableRoles,
+        roleLimits: copy.roleLimits,
+      },
+      select: { id: true, slug: true },
+    });
+    await recordAudit({ action: "PLAN_CREATED", entityType: "Plan", entityId: row.id, actorId: actor.id, summary: `Plan "${name}" created as a draft (${row.slug}), copied from "${source.name}".`, metadata: { copiedFrom: source.id } });
+    return row;
+  }
   const start = template
     ? { ...templateSelection(template), description: PLAN_TEMPLATES[template].description }
     : { optionalModules: top ? cleanModules(top.optionalModules) : [...ESSENTIAL_MODULES], features: top?.features ?? [], availableRoles: top ? cleanRoles(top.availableRoles) : undefined, campusLimit: 1, description: null };
@@ -203,7 +243,12 @@ export async function createPlan(actor: SessionUser, input: { name: string; temp
   return row;
 }
 
-/** Save edits as the plan's draft. Live configuration is untouched. Returns what publishing would refuse. */
+/**
+ * Save edits as the plan's draft. Live configuration is untouched. Settings
+ * not in `input` keep their saved value (the existing draft's, else the
+ * published one), so a partial edit never resets the rest. Returns what
+ * publishing would refuse.
+ */
 export async function savePlanDraft(actor: SessionUser, planId: string, input: Record<string, unknown>) {
   assertRole(actor, "SUPER_ADMIN");
   const row = await prisma.plan.findUnique({ where: { id: planId }, select: PLAN_COLUMNS });
@@ -211,7 +256,8 @@ export async function savePlanDraft(actor: SessionUser, planId: string, input: R
   if (row.status === "ARCHIVED") throw new ConflictError("Restore this plan before editing it.");
   // Which template the plan is compared with: a label for the editor, not an entitlement.
   const templateKey = "templateKey" in input ? (isPlanTemplateKey(input.templateKey) ? input.templateKey : null) : row.templateKey;
-  const next = planConfig(liveConfig(row), input);
+  const saved = row.draft ? planConfig(liveConfig(row), row.draft) : liveConfig(row);
+  const next = planConfig(saved, input);
   await prisma.plan.update({ where: { id: planId }, data: { draft: next as unknown as Prisma.InputJsonValue, draftUpdatedAt: new Date(), draftById: actor.id, templateKey } });
   const diff = templateDiff(next, templateKey);
   await recordAudit({ action: "PLAN_DRAFT_SAVED", entityType: "Plan", entityId: planId, actorId: actor.id, summary: `Draft saved for plan "${next.name}" (not published)${diff ? ` — ${diff.customized ? `customized from ${diff.template}` : `matches the ${diff.template} template`}` : ""}.` });
@@ -312,12 +358,21 @@ export async function publishPlan(actor: SessionUser, planId: string) {
   return { impact };
 }
 
-/** Open or close a published plan for new registrations and requests. Existing customers carry on. */
+/**
+ * Open or close a published plan for new registrations and requests. Existing
+ * customers carry on. Opening checks the plan's published configuration
+ * against the other plans again — a plan restored from the archive may no
+ * longer fit the ladder, and must not reach the homepage until it does.
+ */
 export async function setPlanActive(actor: SessionUser, planId: string, active: boolean) {
   assertRole(actor, "SUPER_ADMIN");
-  const row = await prisma.plan.findUnique({ where: { id: planId }, select: { id: true, name: true, status: true } });
+  const row = await prisma.plan.findUnique({ where: { id: planId }, select: PLAN_COLUMNS });
   if (!row) throw new NotFoundError();
   if (row.status === "ARCHIVED" && active) throw new ConflictError("Restore this plan first.");
+  if (active && row.status === "PUBLISHED") {
+    const problems = planProblems(liveConfig(row), await ladder(planId), planId);
+    if (problems.length) throw new AppError("CONFLICT", `Not opened: ${problems.join(" ")} Fix it in a draft and publish, then open it.`);
+  }
   await prisma.plan.update({ where: { id: planId }, data: { isActive: active } });
   await recordAudit({ action: active ? "PLAN_ACTIVATED" : "PLAN_DEACTIVATED", entityType: "Plan", entityId: planId, actorId: actor.id, summary: `Plan "${row.name}" ${active ? "opened" : "closed"} for new registrations. Existing customers are not affected.` });
 }

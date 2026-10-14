@@ -14,6 +14,9 @@ import {
   planCreateSchema,
   planDraftSchema,
   planIdSchema,
+  platformBillSchema,
+  platformPaymentSchema,
+  platformReasonSchema,
   reviewSchoolSchema,
   schoolModulesSchema,
   schoolRolesSchema,
@@ -22,6 +25,8 @@ import {
 } from "@/lib/validation/platform";
 import { requireRoleForAction } from "@/server/auth/current-user";
 import { prisma } from "@/server/db/prisma";
+import { cancelPlatformBill, createPlatformBill, recordPlatformPayment, voidPlatformPayment } from "@/server/platform/collections";
+import { sendMembershipReminders } from "@/server/platform/membership";
 import { deleteOffer, saveOffer } from "@/server/platform/offers";
 import { changeOrganizationPlan } from "@/server/platform/organizations";
 import { archivePlan, createPlan, discardPlanDraft, publishPlan, restorePlan, savePlanDraft, setPlanActive } from "@/server/platform/plans";
@@ -407,5 +412,78 @@ export async function changeOrganizationPlanAction(_previous: ActionResult<undef
       return successResult(result.unchanged ? "Nothing to change: every campus is already on this plan." : `Plan saved for ${result.campuses === 1 ? "the campus" : `all ${result.campuses} campuses`}. Campus modules are unchanged; newly included ones are offered to the school to switch on.`);
     },
     { revalidate: "/" },
+  );
+}
+
+const reminderSchema = z.object({
+  schoolIds: z.preprocess((value) => (value === undefined || value === "" ? [] : Array.isArray(value) ? value : [value]), z.array(id).min(1, "Choose at least one school").max(200, "Send to at most 200 schools at a time")),
+});
+
+/** Membership: email a reminder to one school or many (one per organization). Success says what was sent, what failed and what was skipped. */
+export async function sendMembershipRemindersAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const { schoolIds } = parseFormData(reminderSchema, formData);
+      const result = await sendMembershipReminders(await superAdmin(), schoolIds);
+      const reasons = (kind: "FAILED" | "SKIPPED") => [...new Set(result.outcomes.filter((row) => row.result === kind).map((row) => row.reason).filter(Boolean))].join("; ");
+      if (!result.sent && result.failed) return errorResult(`Reminder not delivered: ${reasons("FAILED")}`);
+      if (!result.sent && !result.failed) return errorResult(`Nothing sent: ${reasons("SKIPPED")}`);
+      return successResult(
+        [
+          `Reminders sent: ${result.sent}.`,
+          result.failed ? `Not delivered: ${result.failed} (${reasons("FAILED")}).` : "",
+          result.skipped ? `Skipped: ${result.skipped} (${reasons("SKIPPED")}).` : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+    },
+    { revalidate: ["/super-admin/membership", "/super-admin/dashboard"] },
+  );
+}
+
+/** Collections: a bill raised to an organization (entered by hand; nothing is charged online). */
+export async function createPlatformBillAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const input = parseFormData(platformBillSchema, formData);
+      const bill = await createPlatformBill(await superAdmin(), { organizationId: input.organizationId, amountMinor: input.amount, dueOn: input.dueOn, periodStart: input.periodStart, periodEnd: input.periodEnd, description: input.description });
+      return successResult(`Bill ${bill.billNo} created. It counts as pending until money is recorded against it.`);
+    },
+    { revalidate: ["/super-admin/collections", "/super-admin/dashboard"] },
+  );
+}
+
+/** Collections: money received against a bill. */
+export async function recordPlatformPaymentAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const input = parseFormData(platformPaymentSchema, formData);
+      const result = await recordPlatformPayment(await superAdmin(), { billId: input.billId, amountMinor: input.amount, receivedOn: input.receivedOn, method: input.method, referenceNo: input.referenceNo, notes: input.notes, idempotencyKey: input.idempotencyKey });
+      return successResult(result.repeated ? "Already recorded — this payment was saved once." : "Payment recorded.");
+    },
+    { revalidate: ["/super-admin/collections", "/super-admin/dashboard"] },
+  );
+}
+
+export async function voidPlatformPaymentAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const { id: paymentId, reason } = parseFormData(platformReasonSchema, formData);
+      await voidPlatformPayment(await superAdmin(), paymentId, reason);
+      return successResult("Payment voided. It stays on record and no longer counts.");
+    },
+    { revalidate: ["/super-admin/collections", "/super-admin/dashboard"] },
+  );
+}
+
+export async function cancelPlatformBillAction(_previous: ActionResult<undefined>, formData: FormData): Promise<ActionResult<undefined>> {
+  return performAction(
+    async () => {
+      const { id: billId, reason } = parseFormData(platformReasonSchema, formData);
+      await cancelPlatformBill(await superAdmin(), billId, reason);
+      return successResult("Bill cancelled.");
+    },
+    { revalidate: ["/super-admin/collections", "/super-admin/dashboard"] },
   );
 }

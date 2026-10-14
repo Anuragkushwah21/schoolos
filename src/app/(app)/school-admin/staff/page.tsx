@@ -19,6 +19,8 @@ import { enumParam, param } from "@/lib/search-params";
 import { STAFF_ROLES, STAFF_STATUSES } from "@/lib/validation/operations";
 import { requireTenant } from "@/server/auth/current-user";
 import { photoUrlsFor } from "@/server/people/photos";
+import { BulkDocumentsPanel, BulkRowCheckbox } from "@/features/documents/forms";
+import { bulkDocumentOptions } from "@/server/documents/service";
 import { listStaffPage, staffOverview } from "@/server/operations/staff";
 import { Pager } from "@/components/shared/pager";
 import { leavingDates } from "@/server/people/lifecycle";
@@ -49,7 +51,7 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
   const pageNumber = Number(param(search.page) ?? "1") || 1;
   const [{ rows, total, page, pageCount }, overview, roles] = await Promise.all([listStaffPage(ctx, filters, pageNumber), staffOverview(ctx), listRoleProfiles(ctx)]);
   const roleOptions = roles.map((role) => ({ value: role.id, label: role.name }));
-  const [leftOn, photos] = await Promise.all([leavingDates(ctx, "STAFF", rows), photoUrlsFor(ctx, "STAFF", rows.map((row) => row.id))]);
+  const [leftOn, photos, bulkTypes] = await Promise.all([leavingDates(ctx, "STAFF", rows), photoUrlsFor(ctx, "STAFF", rows.map((row) => row.id)), bulkDocumentOptions(ctx, "STAFF")]);
   const { counts } = overview;
 
   return (
@@ -155,10 +157,14 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
       <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
         <div>
           {rows.length ? (
+            <BulkDocumentsPanel kind="STAFF" types={bulkTypes}>
             <div className="overflow-x-auto rounded-xl border">
               <table className="w-full min-w-[44rem] text-sm">
                 <thead className="bg-muted/40 text-left">
                   <tr>
+                    <th className="w-8 px-3 py-2">
+                      <span className="sr-only">Select</span>
+                    </th>
                     <th className="px-3 py-2 font-medium">Name</th>
                     <th className="px-3 py-2 font-medium">Designation</th>
                     <th className="px-3 py-2 font-medium">Phone</th>
@@ -171,6 +177,9 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
                 <tbody>
                   {rows.map((row) => (
                     <tr key={row.id} className="border-t">
+                      <td className="px-3 py-2">
+                        <BulkRowCheckbox id={row.id} label={fullName(row)} />
+                      </td>
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-3">
                           <PersonAvatar name={fullName(row)} photoUrl={photos.get(row.id)} fallbackClassName="bg-orange-soft text-orange-strong" />
@@ -205,6 +214,7 @@ export default async function StaffPage(props: PageProps<"/school-admin/staff">)
                 </tbody>
               </table>
             </div>
+            </BulkDocumentsPanel>
           ) : (
             <EmptyState title={filters.q || filters.role ? "No staff match these filters." : "No staff added yet."}>
               Add office, accounts, library, transport or support staff with the form on this page.

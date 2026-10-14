@@ -13,12 +13,12 @@ way, and [`API.md`](API.md) the REST endpoints. This file is the history.
 
 ## Current status
 
-_Last updated: 10 Oct 2026 (Plan Builder templates: auto-selected modules and features)_
+_Last updated: 14 Oct 2026 (Smaller ID photo, full sample data for checking, document previews)_
 
 | | |
 | --- | --- |
-| Database migrations | 59 in `prisma/migrations`. Neon (read-only check 10 Oct): applied through `20261102090000_ptm_responses`; **NOT applied: `20261103090000_plan_template`** — run `npx prisma migrate deploy` (adds one nullable column + backfill; the Plan Builder needs it). |
-| Tests | 113 files, 1113 tests passing (10 Oct); typecheck clean; lint 0 errors (8 pre-existing warnings); production build passing. |
+| Database migrations | 65 in `prisma/migrations`. Neon (read-only check 10 Oct): applied through `20261102090000_ptm_responses`; **NOT applied: `20261103090000_plan_template`, `20261104090000_platform_billing`, `20261105090000_homework_targets`, `20261106090000_academic_progress`, `20261107090000_documents`, `20261108090000_document_designs`, `20261109090000_admit_card`** — run `npx prisma migrate deploy` before deploying this code. All seven only add things. |
+| Tests | 123 files, 1186 tests passing (14 Oct); typecheck clean; lint 0 errors (8 pre-existing warnings); production build passing. |
 | Email | Code sends through Gmail SMTP when configured. **The Gmail App Password in `.env` was rejected by Gmail** — create a new App Password and put it in `SMTP_PASSWORD`. Demo sandboxes never send email. |
 | Uncommitted work | Everything since commit `9cdbfdf` |
 
@@ -28,6 +28,773 @@ _Last updated: 10 Oct 2026 (Plan Builder templates: auto-selected modules and fe
 - **Green Valley Academy** — 9 of 13 sections have no class teacher.
 
 **Known limits:** no online payment gateway (payments are recorded at the fee desk); no SMS/WhatsApp; the Live Demo rate limit is in memory per server instance (6 starts per IP per hour), so several instances each allow 6; expired demo sandboxes are deleted when the next demo starts, not on a schedule.
+
+---
+
+## 14 Oct 2026 — Smaller ID-card photo; full sample data to check every document
+
+**Asked:**
+- the photo on the ID card is too big — make it small, as in the design;
+- add dummy data where data is missing, so every document can be checked properly.
+
+**Changed:**
+- **ID card front:**
+  - photo frame 20 × 25 mm → **16 × 20 mm** (white edge, soft shadow);
+  - the front's details grid also shows the date of birth from the back (admission no., blood group, DOB), as in the mock-up.
+- **Settings → Documents → Live preview** now shows **every** document filled with clearly marked sample data:
+  - 4 ID cards (student, teacher, Principal, staff; front and back);
+  - bonafide, character, TC, admit card, marksheet and appointment letter;
+  - the sample data: a silhouette photo, father and mother, DOB, blood group, subjects, marks, exam schedule, working days.
+  - It uses the school's own letterhead and signatory. Nothing is saved or issued, and every page is stamped "Preview — not issued".
+  - Real documents still use only real records; sample data appears only in this preview.
+- **Rendered previews saved in `docs/document-previews/`** (19 PNGs): all 4 ID cards front and back, bonafide, character, TC, admit card, marksheet, attendance, appointment letter, employment verification, service certificate, an A4 card sheet, and the settings live preview.
+  - They come from a full dummy school seeded in the **local test DB only**: Green Valley Academy; Aarav Verma with father Vikram and mother Priya, DOB, B+, address and photo; teacher Priya Sharma; librarian Amit Kumar; Principal Dr. Rajesh Mehta; an exam schedule. It was removed afterwards. **Neon was not touched.**
+
+**Migrations:** none.
+
+**Tested:** 123 files / 1186 tests pass; typecheck clean; lint 0 errors; build passes; every preview rendered without error.
+
+---
+
+## 14 Oct 2026 — Documents restyled to match the user's mock-ups
+
+**Asked:** "make it like the designs I gave, not different." The documents had a classic look (serif type, gold double frame) instead of the mock-ups' modern style.
+
+**Changed** (`document-view.tsx`, visual only — same data, sizes, print pipeline and rules):
+- **Design language from the mock-ups:**
+  - white paper and a thin indigo → cyan → violet bar at the top;
+  - the emblem in a soft circle: the school's logo (contained), or a graduation-cap icon when there is none;
+  - bold sans-serif school name and the affiliation line;
+  - a grey REF / DATE bar and a lavender pill title;
+  - the person's name in indigo wherever it appears in the text;
+  - soft rounded field panels and a faint cap watermark.
+- **Certificates:** a signature panel — Class teacher (for student certificates) or Date / Place, the seal circle, and the signatory.
+- **TC:** "Transfer / school leaving certificate" pill, the pupil's card (photo, name, class, admission no.), numbered particulars in alternating soft rows, and Prepared by / Checked by / seal / signatory cards.
+- **Admit card:** a lavender title box with exam and session, the candidate panel with photo, the schedule table with a lavender head and a dashed invigilator column, and candidate / seal / signatory.
+- **Marksheet and letters:** same language — lavender table heads, summary tiles, a Subject bar on letters.
+- **ID cards (front):**
+  - white card with soft circles;
+  - indigo emblem tile, school name and affiliation, the role chip, and a session chip top-right;
+  - photo with a white frame;
+  - name; lavender Class and ROLL # chips (Designation for employees);
+  - admission no. and details grid, blood group in red;
+  - guardian phone with an icon;
+  - Valid till, and a signature line with the signatory.
+  - **Back:** school contact, a return note, and the dates panel.
+  - Each role keeps a chip and strip colour: student indigo, teacher sky, Principal amber, staff teal.
+- On the TC, the admission no. now shows only on the pupil's card, not again as a row.
+
+**Migrations:** none.
+
+**Tested:**
+- Layout unit tests updated (photo frame size, logo vs no-logo emblem, name class).
+- Full suite 123 files / 1186 tests pass; typecheck clean; lint 0 errors.
+- Browser screenshots compared with the mock-ups: ID card front and back, character certificate, TC, admit card, appointment letter.
+- Seed data removed afterwards.
+
+---
+
+## 14 Oct 2026 — Document rendering fixes: photos, logos, print/PDF pipeline
+
+**Asked:** audit and fix how documents actually print and save as PDF:
+- photo fitting, logo distortion, physical sizes, spacing and page breaks;
+- preview / PDF / print consistency;
+- report cards and marksheets;
+- tests against the real output.
+
+**Audit (what the pipeline is, and what was wrong):**
+- **Pipeline:** there is no PDF library. Documents are HTML at physical CSS sizes, on the `(print)` pages, saved with the browser's Print → Save as PDF. Fixed in place; nothing rebuilt.
+- **Print did not wait for images.** Print / Save as PDF called `window.print()` at once, so a slow photo, logo or signature could be missing from the PDF with no warning.
+- **Logos were cropped.** The logo `<img>` had `rounded-full` with `object-contain`, so a wide logo lost its corners to the circle. In the ID-card band it was also squeezed into a small square.
+- **Photos could lose the face.** ID and admit-card photos used `object-cover` centred: a tall portrait was cropped at the head.
+- **Long text was cut off.** Names and field values used `truncate` on ID cards.
+- **The class merger dropped line heights.** `cn()` (tailwind-merge) removes a `leading-*` that comes before a `text-[…]` size, so the tight line height on card names, the card school name and the letterhead name was silently lost.
+- **Multi-page A4 had problems.** A sheet that ran onto a second page lost its margins there, and an exactly 297 mm sheet could spill a blank page.
+- **The report card** had no fixed logo box, no photo, uneven column widths, and the Principal's "Back" link went to the student portal.
+- **Marksheet wording was wrong.** It said "Fail" where the report card says "Needs improvement" (the same result). Its note said "Absent is not zero", but the grading rules count absent as zero.
+
+**Fixed:**
+- `PrintToolbar` ("Download PDF" and "Print"):
+  - waits for web fonts and every image (up to 10 s);
+  - if any image failed, shows "N images did not load", and you choose Reload or "Print anyway";
+  - auto-print waits the same way.
+- **Logos:** contained whole in a box of fixed height that can grow up to 2.4× as wide; never cropped or stretched. White behind a transparent logo on the card band.
+- **Photos:** a shared `PersonPhoto` frame, fixed size per template:
+  - `object-cover` anchored at 50 % / 22 %, so the face stays and a landscape photo is cropped at the sides, not squashed;
+  - a neutral background;
+  - a missing photo shows initials and "No photo".
+  - Signatures stay `object-contain`.
+- **Long text:** card names wrap onto two lines and step down in size (9.4 → 8 → 7 pt); long school names drop to 6.2 pt. Field values wrap instead of truncating, and A4 values use `break-words`. The `cn()` order is fixed (size before leading).
+- **Print CSS:**
+  - sheets use `box-decoration-break: clone`, so margins and frame repeat on every page;
+  - print height is 296 / 296.5 mm, so there are no blank pages;
+  - signature blocks, seal, acknowledgement, photo frames and headings are kept together;
+  - table headers repeat.
+- **Report card:**
+  - fixed logo box and the student's photo (only if the viewer may see it);
+  - fixed column widths with wrapping subject names and remarks;
+  - header repeats on page 2; summary, remarks and signatures never split;
+  - the Principal's Back goes to the student's Academic tab.
+- **Warnings before issuing:** no school logo, and no signature image for the signatory. Shown on the preview; neither is invented.
+- **Marksheet:** the result uses the school's own labels; the note now reads "Absent counts as zero and fails the paper; Exempt is left out of the total".
+
+**Migrations:** none.
+
+**Tested:**
+- New `tests/unit/document-layout.test.ts` (11), rendering the real components:
+  - ID-1 size on both sides;
+  - photo cover / anchor and the no-photo placeholder;
+  - logo contained and not circle-cropped;
+  - long names wrap and keep their line height;
+  - role titles and back details;
+  - A4 sheet maths, with every card inside the page;
+  - duplex mirroring and pairs;
+  - every A4 layout is 210 × 297 mm, and each kind of document gets its own layout;
+  - signature contained or absent, and the preview / pending stamps;
+  - long values wrap.
+- Integration: missing logo / signature warnings, and a cross-school id is not found.
+- Full suite: 123 files / 1186 tests pass. Typecheck clean. Lint 0 errors. Build passes.
+- **Real output check** on a seeded school: a portrait photo, a landscape photo, a very tall photo, a transparent wide logo (400 × 120), a 41-character student name, a 51-character school name, and a 30-subject exam.
+  - The card measured exactly 85.60 × 53.98 mm in the browser.
+  - The logo rendered with `contain` and its own aspect.
+  - Photos used `cover` at 50 % 22 %, and the "face" circles stayed round.
+  - PDFs made with Chromium's print-to-PDF were A4 (595 × 842 pt):
+    - ID cards: 2 pages (fronts and backs);
+    - TC: 1 page;
+    - report card: 1 page;
+    - the 30-subject marksheet: 2 pages, and the preview's page count also said 2;
+    - the 30-subject report card: 2 pages.
+  - Page 2 of each multi-page PDF, rendered to an image: the table header is repeated, the margins are kept, and nothing is clipped.
+- Seed data and test photos removed.
+
+**Still open:**
+- No server-side PDF or ZIP: saving a PDF is the browser's own Print → Save as PDF.
+- Page numbers are shown in the preview only, not printed.
+- No per-photo focus adjustment: the anchor is fixed at 22 % from the top.
+
+---
+
+## 14 Oct 2026 — Admit card, richer TC, ID card front/back preview
+
+**Asked:** four more Stitch mock-ups to match, "do it fast": an ID card print page with Front/Back tabs, an admit card / hall ticket, a fuller TC with a clearance audit, and a character certificate with purpose chips.
+
+**Changed:**
+- **Admit card / hall ticket** (new `ADMIT_CARD`, generated, no number):
+  - for a current student of the exam's class, from the exam's papers: date, day, subject (with code), maximum marks, and a blank invigilator's initials column;
+  - candidate block: photo (or a "paste a photograph" box), name, admission no., class, roll, session, father's and mother's names;
+  - candidate's signature, seal circle, signatory;
+  - A4 layout of its own;
+  - in the preview (this session's exams with papers) and in bulk from the student list.
+- **TC particulars** from the last class's records:
+  - name of father and mother separately, when recorded;
+  - subjects studied (taught in that section);
+  - result of the last published examination;
+  - working days / days present (from the register).
+- **TC preview: Clearance check** — fees pending (School Admin, with fees) and library books not returned. The issuer still confirms on the form.
+- **Character certificate** names both parents when both are recorded. Purpose chips (a scholarship, a passport / visa, admission to another school, a bank account) fill the purpose and refresh the preview.
+- **ID card preview:** Front side / Back side tabs (tap the card to turn it), and size chips: CR80 · 85.60 × 53.98 mm, ISO/IEC 7810 ID-1 size, landscape, front and back.
+- **Left out, as before, because the records do not have them:** RFID/NFC, CMYK/substrate, DSC/DigiLocker, QR, exam times and rules, PEN/Aadhaar, category and nationality.
+
+**Migrations:** `20261109090000_admit_card` adds `DocumentType.ADMIT_CARD`. Applied to the test DB only; **not applied to Neon**.
+
+**Tested:**
+- New admit-card test: the papers are listed, the invigilator column is blank, another class is refused, and an exam with no papers is listed as missing. The TC test now also checks the new particulars.
+- 122 files / 1174 tests pass; typecheck clean; lint 0 errors; build passes.
+- Browser: admit card preview, TC preview with the clearance check, purpose chip applied, card flip to the back.
+- Seed data removed afterwards.
+
+---
+
+## 14 Oct 2026 — Print-ready documents: real sizes, a layout per document, the Principal's record, TC approval
+
+**Asked:** a long design spec, written for Google Stitch, covering:
+- profile and print-ready documents for students, teachers, the Principal and non-teaching staff;
+- ID cards at 85.60 × 53.98 mm landscape, front and back, with A4 sheets of cards;
+- A4 TC, report card, marksheet, certificates and letters, each with its own layout;
+- a preview at real size with zoom;
+- bulk printing;
+- branding settings with a live preview.
+
+The user chose to build it into SchoolOS, with a landscape card.
+
+**Changed:**
+- **ID cards** (`document-view.tsx`):
+  - ID-1 landscape, 85.60 × 53.98 mm, front and back.
+  - Each role has its own accent: student indigo, teacher navy, Principal indigo with gold, staff teal.
+  - Front: emblem, school name, the "… identity card" chip, photo (or initials), name, ID, up to four details, and "Valid till" or the issue date.
+  - Back: school address, phone and email; guardian contact (students) or date of joining (employees); issued and valid-till dates; a return instruction; the signature line.
+  - The student card front now shows Class, Roll, Session and Blood group. The guardian's number moved to the back.
+- **A4 card sheets:** ten cards a page (2 × 5) at actual size, centred, with a dashed cut line 1 mm outside each card.
+  - "Fronts, then backs" for double-sided printing: the backs page swaps the columns so each back lands behind its front.
+  - "Front | back side by side": five cards a page.
+  - Empty slots are left blank.
+- **A layout per A4 document:**
+  - Certificates: double frame, ~20 mm.
+  - Letters (appointment, relieving): business letter, ~22 mm, with To, Subject, body, a particulars table, "Yours sincerely, For {school}", a signature, a seal circle, and an acknowledgement box on the appointment letter.
+  - TC: ~15 mm, TC no. / admission no. / date / session strip, numbered particulars table, then Prepared by, the seal and the signatory.
+  - Marksheet: "Examination marksheet", a student band, the marks table, summary tiles, a note that Absent / Exempt are not zero, and Class teacher / Examiner and Principal signatures.
+- **Preview page:**
+  - Zoom (−, +, Fit, 100 %) and a page count for A4.
+  - ID cards show front and back at real size plus an A4 sheet preview.
+  - Settings show who it is for, the signatory (with "Change") and the page size.
+- **Print page:** a layout switch for ID-card sheets; a reminder to print at 100 %; table headers repeat on a second page.
+- **Principal profile** (`/school-admin/principal/[userId]`, School Admin):
+  - New `PrincipalProfile` record: employee ID, designation, appointment and joining dates, qualification, experience, DOB, address, last working day.
+  - The page shows the hero, tiles, the record form, employment history (from these dates) and documents: ID card, appointment, verification, experience, relieving and service.
+  - Only the School Admin makes the Principal's documents, and they are signed by the School Admin, never by the Principal.
+  - The salary certificate is locked: SchoolOS keeps no payroll record for the Principal.
+  - "Profile & documents" button on the Principal workspace.
+- **Service certificate** (new, SRV/YYYY/NNNN): service from the joining date "and continues in service", or up to the last working day. "Relieving / service certificate" is now just **Relieving letter**.
+- **TC approval:**
+  - New setting under Settings → Documents: "Transfer certificates need a second leader's approval".
+  - When it is on, the TC is saved as **Pending approval**, with no number. It prints "Pending approval — not issued".
+  - The other leader can **Approve & issue** (gets the TC number and supersedes an earlier TC) or **Not approve** with a reason (kept, marked revoked). The one who asked can't approve it.
+  - Pending TCs show at the top of the register and in the profile's history.
+- **Settings → Documents:**
+  - Live preview with the school's letterhead and an obviously made-up person: student, teacher and Principal cards (front and back), TC, appointment letter, marksheet.
+  - A list of the number prefixes.
+- **Student overview** shortcuts: ID card, TC, marksheet, bonafide, character, attendance.
+- **Not built, and why:**
+  - **QR codes:** there is no verification page to point to, and the spec says not to invent one.
+  - **ZIP download:** it would need a new dependency. Bulk runs print as one PDF via the browser instead.
+  - **Configurable numbering format** and **template choices:** the format is fixed at PREFIX/YEAR/NNNN and is shown on the settings page.
+  - **Report card:** already a separate printable page (`/report-cards/...`); not redesigned here.
+
+**Migrations:** `20261108090000_document_designs`. It adds:
+- `SERVICE_CERTIFICATE` and `PENDING_APPROVAL` enum values;
+- the `PrincipalProfile` table;
+- `IssuedDocument.principalProfileId / approvedById / approvedAt`;
+- `School.tcApprovalRequired`.
+
+Applied to the local test DB only. **Not applied to Neon.**
+
+**Tested:**
+- New `tests/integration/document-designs.test.ts` (6 tests):
+  - the Principal's record: School Admin only, unique employee ID, missing ID listed, School Admin signs, Principal refused, salary locked;
+  - the service certificate, current and former;
+  - letters with an addressee and acknowledgement;
+  - role card titles and the student card back;
+  - the settings samples;
+  - the TC approval flow: pending, no self-approval, not approved, approved, direct issue.
+- Full suite 122 files / 1173 tests pass; typecheck clean; lint 0 errors (8 pre-existing warnings); build passes.
+- Browser check on a seeded test school:
+  - student, teacher, staff and Principal cards generated and printed as duplex and pairs sheets;
+  - TC and appointment letter issued and printed;
+  - previews for the service certificate, the card and the marksheet (1 page);
+  - the Principal profile;
+  - settings with the live preview;
+  - a Principal login refused on their own card;
+  - no sideways scroll at 390 px.
+- Seed data removed afterwards.
+
+---
+
+## 14 Oct 2026 — Certificate and ID card design; Principal library error fixed
+
+**Asked:**
+1. "fix it": the Principal got a ForbiddenError from `listLoans` on a student's Academic report tab.
+2. Make the printed document and ID card designs look better.
+
+**Changed:**
+- **Bug:** the library is a School Admin / staff module, but the student page asked for a Principal's loans and the whole tab crashed. Now loans load only for someone the library is open to; a Principal gets no Library panel. This was also wrong before the redesign. File: `students/[studentId]/page.tsx`.
+- **Certificates, letters, marksheets** (`document-view.tsx`):
+  - double frame (indigo outer, gold inner) with gold corner marks and the school's monogram faint behind the text;
+  - letterhead: logo (or initials in a ringed circle), serif name, gold affiliation line, indigo and gold rules;
+  - Ref. no. and Date chips; serif title between gold rules;
+  - details in gold-edged boxes, two columns; marksheet table with an indigo head, zebra rows and a highlighted total;
+  - justified serif body;
+  - Date and Place, a dashed **School seal** circle (where the school's rubber stamp goes; nothing is printed in it), and the signatory.
+- **ID cards:** now a portrait CR80 card (54 × 85.6 mm), **front and back**.
+  - Front: indigo header with a curved foot, school name and emblem, a gold "Student / Staff identity card" ribbon, framed photo (initials when there is no photo), name, ID, up to five details, the signatory line, and a footer with "Valid till" (or the issue date) and the school phone.
+  - Back: school emblem and name, whose card it is, and "If found, please return to" with the school's address, phone and email.
+  - The print page and the preview show the two sides next to each other: cut them out and laminate back to back. Each pair stays together on a printed page.
+- Decoration styles are Tailwind classes, so the Hindi phrase check does not treat them as text. Hindi phrases added.
+
+**Migrations:** none.
+
+**Tested:**
+- Typecheck clean; lint clean; 121 files / 1167 tests pass; production build passes.
+- On a seeded test school, as School Admin and as Principal, every student and teacher tab returns 200, and the server log has no ForbiddenError.
+- Screenshots checked: issued bonafide certificate, marksheet preview, student and staff ID cards (front and back).
+- Seed data removed afterwards.
+
+---
+
+## 14 Oct 2026 — Profile pages redesigned (student, teacher, staff, document preview)
+
+**Asked:** make the student, teacher and staff profile pages and the document preview look like six Google Stitch mock-ups (shared as screenshots), so they feel professional.
+
+**Changed (UI only):**
+- New shared building blocks in `src/features/people/profile-ui.tsx`:
+  - `ProfileHero`: photo with a status dot, name and status, ID chips, an action bar and the session chip;
+  - `ProfileTabs`, `MetricTile`, `Panel`, `SoftRow`, `TileChip`, `RowIconLink`.
+- **Student** (`/school-admin/students/[id]`) is now in tabs: Overview · Academic report · Attendance · Documents · Family · Fees (School Admin with the fees module) · Account.
+  - Overview tiles: attendance %, latest published result %/grade, class & class teacher, fee dues (Principal sees open support instead), homework handed in, latest exam total.
+  - Overview also has a document-generator strip, a **Subject scores** panel (latest published exam, with the class average per paper) and a Guardian & emergency panel.
+  - Placement, login, status and delete moved to Account.
+- **Teacher** tabs: Overview · Teaching assignments · Documents · Salary (School Admin with payroll) · Account.
+  - Tiles: weekly periods, attendance over the last 30 days, sections assigned, and syllabus coverage from Academic Progress.
+  - Teaching assignments show periods a week from the timetable and the number of students enrolled.
+- **Staff**: a new Overview tab is the default, with tiles for today, attendance, permissions and service length, plus Responsibilities & scope (grants grouped by area) and Contact. The old Profile tab is now "Employment details" (`?tab=profile`).
+- **Documents** card is now a document centre: one card per document with its icon, its latest copy's status and number, Print / PDF, and Preview & issue (or Issue again). Documents the user may not make show as Locked with the reason. Every copy is listed below, with Revoke.
+- **Document preview**: the sheet comes first, with "Generation settings" beside it (for whom, signatory, page size, the review form) and the Issue panel. The letterhead is centred in deep indigo, the title sits in a pill, Reference no. / Date of issue are labelled, and the footer is refreshed. ID cards use the same colour.
+- Hindi phrases added for every new string.
+- **Left out on purpose:** the mock-ups show things the system has no records for, so they were not invented — class rank, "Top 5% in cohort", RFID/biometric, DigiLocker, QR verification, DSC, watermark toggle, room numbers. Every figure shown is read from existing records, and a tile with no data says so.
+
+**Migrations:** none.
+
+**Tested:**
+- Typecheck clean; lint 0 errors (8 pre-existing warnings); 121 files / 1167 tests pass; production build passes.
+- Browser check on a seeded test school, as School Admin at 1360 px and 390 px and as Principal: every tab of all three profiles and the document preview return 200 with no error, and the Principal sees employment documents as Locked and no Fees tab.
+- Seed data removed afterwards.
+
+**Open:** links that pointed at a student's `#results` now go to `?tab=academics`.
+
+---
+
+## 14 Oct 2026 — Document Center: certificates, letters, ID cards and marksheets
+
+**Asked:** profile detail pages for students, teachers and staff with role-specific documents:
+- student: ID card, TC, report card, marksheet, bonafide, character, attendance and enrollment;
+- teacher and staff: ID card, appointment, experience, verification, relieving and salary;
+- school branding and signatories;
+- preview → generate / issue, with history (revoked, superseded);
+- print / PDF;
+- bulk selection and generation;
+- strict permissions and isolation.
+
+**Audit — already there (reused):**
+- Profile pages for all three: the student page fairly complete; the staff page with tabs, including uploaded documents; the teacher page thin.
+- Printable report cards and fee receipts through a `(print)` route group with the browser's Print / Save as PDF — there is **no server-side PDF library**.
+- School branding on `School` (name, address, phone, email, public `logoUrl`, `principalName`, board, UDISE, receipt header/footer).
+- Private photos via `/api/v1/photos/{id}`; private file storage (`storeImage`, `readStoredFile`).
+- Status history with effective dates (`StatusChange`, for leaving and exit dates); salary structures (`TeacherSalary`).
+- The audit log; a students bulk page for promotions only.
+
+**Audit — missing:**
+- every certificate and letter, ID cards and a marksheet;
+- signatory and document settings;
+- an issued-document register (numbers, issued / revoked / superseded, history);
+- row selection and bulk generation on lists;
+- teacher timetable and attendance on the profile.
+
+**Changed**
+- **Migration `20261107090000_documents`** (additive):
+  - `IssuedDocument` — type, status GENERATED / ISSUED / REVOKED / SUPERSEDED, a per-school number unique like `TC/2026/0001`, student / teacher / staff, the parameters chosen, a `content` snapshot of what was printed, issued date, generated-by, issued-by, revoked-by and reason, superseded-by, `batchKey`, and a unique `requestKey` for retry safety;
+  - `School` document settings: header and footer notes, School Admin/MD signatory name and title, private Principal and Admin signature image keys, `certificateSignatory` and `employmentSignatory` (PRINCIPAL or SCHOOL_ADMIN);
+  - in `TENANT_MODELS`, with composite school keys.
+- **`src/lib/documents.ts`:** the catalogue — 13 types; who each is for (students, or teachers and staff); generated vs issued; number prefix; inputs the issuer reviews; employment and payroll flags.
+- **`src/server/documents/service.ts`:**
+  - `buildDocument` builds each document only from records plus reviewed inputs and lists what is missing (blocking) and warnings — e.g. no photo, no parent, no attendance marked, no salary structure, an unpublished exam, or a Principal or Admin name not set.
+  - Rules:
+    - TC: only for a student who has left; leaving date from the status history or entered; requires DOB, admission date, reason, conduct, confirmation that dues and library books are cleared, and an explicit "I have checked" confirmation.
+    - Experience / relieving: only for employees who have left.
+    - Verification and ID cards: only for current people.
+    - Marksheet: only from a **published** exam's results, via the existing `getReportCard`.
+    - Salary: School Admin only, payroll module on, from the salary structure.
+    - Appointment: needs designation and joining date.
+  - `createDocument`: issued documents get the next number in a transaction (retried on a clash); a live issued one refuses a second unless "Issue again", which supersedes it (kept, linked); a repeated `requestKey` returns the same document; the content snapshot means a later record change never rewrites what was issued.
+  - Also: `revokeDocument` (reason required, kept), `documentsOf`, `listDocuments`, `documentsForPrint`, `documentSignature`, `bulkCreateDocuments` (up to 200; skips with reasons; same batch = no duplicates; TC never in bulk), `bulkDocumentOptions`.
+  - Audit: `DOCUMENT_GENERATED`, `DOCUMENT_ISSUED`, `DOCUMENT_REVOKED`, `DOCUMENT_BULK_STARTED` / `COMPLETED`, `DOCUMENT_SETTINGS_CHANGED`.
+- **`src/server/documents/settings.ts` and image routes:**
+  - settings and signatures, School Admin (`settings` EDIT);
+  - signature images validated and stored privately under the school's folder; old ones kept while an issued document uses them;
+  - served only to school leaders: `/api/v1/documents/{id}/signature` (the image a document was issued with), and `/api/v1/documents/signatures/{principal|admin}` (current image, for the settings preview);
+  - `private, no-store`, sandboxed.
+- **Permissions:**
+  - School Admin: everything.
+  - Principal: student documents and ID cards; not employment letters, salary or document settings (and the register hides employment documents from them).
+  - Teachers, staff, parents and students: no access.
+  - Every action and print checks again on the server; another school's ids are not found.
+- **Pages:**
+  - `/school-admin/documents` — the register, filtered by type and status, in the sidebar for Admin and Principal;
+  - `/school-admin/documents/new` — reviewed inputs, a watermarked "Preview — not issued", missing / warning lists, Generate or "Issue officially" (with "Issue again" / TC confirmation), then the print view;
+  - `/documents/print?ids=…|batch=…` — A4 certificates one per page, ID cards (85.6 × 54 mm) several per page; Print / Save as PDF gives one combined PDF; revoked and superseded documents are stamped;
+  - `/school-admin/settings/documents`.
+- **Profiles:** a Documents card (only the actions this user may take, plus the person's register with Print / PDF and Revoke):
+  - student page, top; plus a `#results` anchor for report cards, which stay on the existing page;
+  - teacher page, plus a new "Timetable and attendance" card;
+  - staff page, Documents tab.
+- **Lists:** students, teachers and staff get row checkboxes, "Select all on this page" (the page only — never the whole school), a count, "Clear selection", and a bulk form (document type, exam for marksheets, purpose / conduct where needed). The result shows made / already made / skipped with each reason, "Print / save as PDF" for the batch, and "Retry skipped" (same batch, never duplicates).
+- Hindi for every new string.
+
+**Not done (limits):**
+- No server-side PDF or ZIP — PDFs come from the browser's Save as PDF (one combined PDF per batch). Separate files or a ZIP would need a PDF renderer (e.g. headless Chromium), which is a new heavy dependency.
+- Opening or printing a document is not audited (generation, issue and revoke are).
+- The logo is the school's existing public `logoUrl`.
+- Report cards keep their existing page (no bulk report-card printing added; marksheets can be made in bulk).
+- The Principal has no access to the staff profile pages (existing rule) or employment letters.
+
+**Migrations:** `20261107090000_documents` — local test DB only, **NOT on Neon**.
+
+**Tested:** new `tests/integration/documents.test.ts` (10 tests):
+- bonafide preview saves nothing; issue → `BC/YYYY/0001`; duplicate refused; re-issue supersedes;
+- missing signatory blocks; policy switches to the School Admin signatory; header note used;
+- conduct required;
+- attendance certificate counts, and none marked is refused;
+- TC: refused while the student is current; every field and confirmation required; snapshot unchanged after a record change;
+- marksheet only from a published exam, with the totals;
+- employment documents fit status; relieving needs the exit date;
+- Principal refused employment and salary, allowed ID cards; salary from the salary record; no payroll → refused; register filtered;
+- revoke keeps the reason;
+- bulk: skips not-current / other-school with reasons, retry makes no duplicates, TC not in bulk;
+- signatures private, other-school not found, teacher and parent refused.
+
+Updated `i18n-nav.test.ts`. Full suite 121 files, 1167 tests pass; typecheck clean; lint 0 errors (8 old warnings); `next build` passes (test DB).
+
+Browser (production build, test DB, temporary data removed):
+- the student profile showed 7 document actions + report cards;
+- the bonafide preview was watermarked and "ready", then issued `BC/2026/0001` on the letterhead with the Principal signatory;
+- "Select all on this page" on the student list selected 3; bulk ID cards: made 3, printed 3 cards;
+- the Principal on a teacher profile was offered only the ID card; the Principal opening document settings got their own dashboard.
+
+A bug found there and fixed: "Place" printed the street; it now prints the city.
+
+---
+
+## 13 Oct 2026 — Academic progress & monitoring (syllabus, coverage, reviews, revision, readiness)
+
+**Asked:** audit and build a connected academic progress system:
+- teacher lesson coverage linked to the timetable;
+- homework tied to units and topics;
+- student submissions and teacher feedback;
+- syllabus units, chapters and topics;
+- Principal monitoring with review notes;
+- unit completion reports;
+- configurable low-performance thresholds with revision tracking;
+- an exam readiness report;
+- all permission-controlled, without duplicate models.
+
+**Audit — already there (reused):**
+- `TeacherSubjectAssignment` as the source of truth, enforced on the server.
+- Timetable-linked class records (`ClassSession`, 7-day window, substitute-aware, audited).
+- Teacher attendance and the student register (shown as separate evidence).
+- Homework with whole-class / selected-student targets and teacher-recorded Submitted / Late / Missing (13 Oct).
+- Class tests and exams with submitted / published marks (`VISIBLE_PAPER`).
+- Principal permissions: `academics` / `homework` ALL, `reports` VIEW / EXPORT, no finance / payroll / settings / users.
+- `School` threshold columns and derived alert feeds.
+
+**Audit — missing:**
+- any syllabus;
+- topic coverage in lessons (topics were free text);
+- links from homework and tests to units or topics;
+- "lesson record missing" detection;
+- unit-ready / review / revision workflow;
+- a configurable academic threshold;
+- unit and exam-readiness reports;
+- feedback visible to students and parents (the teacher's note was never shown).
+
+**Changed**
+- **Migration `20261106090000_academic_progress`** (additive):
+  - `SyllabusItem` — UNIT → CHAPTER → TOPIC per class, subject and session, with optional planned dates on units;
+  - `LessonTopic` — a topic taught in a lesson, COVERED or PARTIAL;
+  - `AcademicReview` — UNIT_READY, LOW_PERFORMANCE or NOTE, with status OPEN → UPDATE_REQUESTED / REVISION_RECOMMENDED → REVISION_PLANNED → REVISION_DONE → RESOLVED, the teacher's reply, revision lesson and follow-up test; unique per low test, so the same issue is never raised twice;
+  - nullable `Homework.syllabusItemId` and `Assessment.syllabusItemId`;
+  - `School.academicReviewPercent` (default 60, set by the School Admin);
+  - the new tables are in `TENANT_MODELS` and use composite school keys.
+- **`src/server/academics/syllabus.ts`:**
+  - leaders edit the syllabus (`academics` EDIT); a teacher reads only a class and subject they teach;
+  - nesting is checked; an entry in use cannot be deleted (rename instead);
+  - `requireSyllabusItemFor` checks any link against the class's own syllabus;
+  - `mySyllabusChoices` and `topicsBySlot` feed the teacher forms.
+- **`src/server/academics/progress.ts`** — everything is computed from source records, batched across class+subject pairs; no report copy. Five separate measures, never merged:
+  1. syllabus coverage;
+  2. homework submitted;
+  3. homework checked by teacher;
+  4. test participation;
+  5. test performance (with score bands).
+
+  It also covers:
+  - "Syllabus not configured" and "No assessment data" instead of 0;
+  - "Lesson record missing" (timetable × open school days, excluding today) with teacher attendance and register status beside it — never "not conducted";
+  - units behind plan;
+  - `unitReport` (gaps, pending work, reviews) and `examReadiness` (completed / pending units, topics needing teaching, revision with original vs follow-up averages — it never certifies a class as ready);
+  - `academicMonitoring` for leaders (filters: class, subject, teacher, date range of up to 92 days);
+  - the threshold (School Admin only, `settings` EDIT);
+  - `markUnitReady` (teacher, one open per unit), `createReview` / `updateReview` (leaders), `respondToReview` (teacher: reply, planned date, a revision lesson that must be their own recorded lesson after the test, and a follow-up test that must come after the original);
+  - `myReviewsToAnswer` and `leaderReviewCounts`;
+  - every change audited (`SYLLABUS_UPDATED`, `UNIT_MARKED_READY`, `ACADEMIC_REVIEW_*`, `ACADEMIC_THRESHOLD_CHANGED`).
+- **Class record:** `recordActivity` takes topics (`COVERED` / `PARTIAL`), only from that class's syllabus and only for a class that took place. The form shows the period's topics; the edit page loads recorded ones.
+- **Homework and class tests:** optional "unit, chapter or topic" link, checked on the server. An edit form without the field keeps the existing link (a bug I nearly introduced and fixed: `optionalId` turns a missing field into `null`).
+- **Homework feedback:** the teacher can add feedback per student in "Who handed it in"; students and parents see it with the status.
+- **Pages:**
+  - leaders: `/school-admin/progress` (exceptions first, per-class table, threshold for the School Admin), `/progress/syllabus` (editor), `/progress/class` (class+subject overview or unit report, with review forms), `/progress/readiness`;
+  - teachers: `/teacher/progress` (with "No classes or subjects have been assigned to you. Please contact your School Admin."), `/teacher/progress/class` (unit report, mark ready, reply), `/teacher/progress/readiness`;
+  - sidebar entries for School Admin, Principal and Teacher.
+- **Alerts:**
+  - School Admin and Principal: units ready for review, and tests below the threshold not yet reviewed (counts);
+  - teacher: one alert per review waiting on them.
+- Hindi for every new string.
+
+**Not done (honest limits):**
+- No online student submission (no upload method exists; teachers record what they checked).
+- No homework marks or rubric.
+- Topic-wise performance is per test linked to a topic, since no per-question marks exist.
+- No "Rescheduled" lesson status (Cancelled plus notes covers it).
+- Exam papers are not linked to units (class tests are).
+- Academic progress is part of the core academics module, not a separately plan-gated module — a decision for the user.
+
+**Migrations:** `20261106090000_academic_progress` — applied to the local test DB only, **NOT to Neon**.
+
+**Tested:** new `tests/integration/academic-progress.test.ts` (11 tests):
+- syllabus not configured → null;
+- leader edit vs teacher read, wrong nesting, in-use delete;
+- coverage and behind plan from lesson topics;
+- topics from another syllabus, or for a missed class, refused;
+- missing record vs "not conducted";
+- homework submission vs review counted apart, and feedback reaching the student;
+- no assessment data;
+- participation, average and bands;
+- the threshold changes the flag, Principal cannot set it;
+- a low test raised once, revision planned → done with a follow-up test, readiness comparing 40% → 70%, no "ready" verdict;
+- unit-ready once, leader alerts, unit report gaps;
+- teacher / Principal / other-school / parent scope.
+
+Updated `tests/unit/i18n-nav.test.ts` for the new sidebar entry. Full suite 120 files, 1157 tests pass. One run showed `homework-resources` "serves the student the homework PDF" failing; it passed alone and on the next full run (order-dependent flake, not reproduced). Typecheck clean (run with a config excluding `.next/dev`, see the previous entry); lint 0 errors (8 old warnings); `next build` passes (test DB).
+
+Browser (production build, test DB, temporary data removed):
+- the teacher recorded yesterday's class with 2 topics → "Class recorded with 2 topic(s)"; Progress showed 50% and "No assessment data";
+- the Principal's monitoring showed 12 lesson records missing with evidence and 1 unit behind plan; the unit report said "1 of 2 recorded as taught, 1 partly";
+- the syllabus page listed the topics;
+- the threshold form shows for the School Admin only;
+- a teacher opening the leaders' page is sent to their dashboard.
+
+---
+
+## 13 Oct 2026 — Homework: selected students, several classes, who handed it in
+
+**Asked:** audit the homework system and add only what is missing. Teachers should be able to set homework for the whole class, for several sections, or for selected students. Students and parents see only homework meant for them. Track Assigned / Submitted / Late / Missing. Add a review step before publishing.
+
+**Already there (kept as is):**
+- One homework per section and subject, optionally for one stream.
+- Only a teacher assigned to that subject in that class (and stream) can set it; only the teacher who set it can edit or delete it.
+- Drafts stay private to the teacher.
+- Attachments (PDF, video, link), all-or-nothing on failure.
+- Due-date states: assigned, due today, overdue.
+- Students and parents see published homework for their own section and stream only; parents only for linked children.
+- Tenant isolation through `ctx.db`.
+
+**Missing (confirmed in code):**
+- Homework for selected students.
+- Several classes in one save.
+- Any record of who handed homework in — the code said so: "no submission or completion tracking in the schema".
+- A review step before publishing.
+
+**Changed**
+- **Migration `20261105090000_homework_targets`**, additive only:
+  - `Homework.audience` (`SECTION` default | `SELECTED_STUDENTS`) — every existing homework stays whole-class;
+  - `HomeworkStudent` — the chosen students;
+  - `HomeworkSubmission` — the teacher's mark per student: `SUBMITTED` | `LATE` | `MISSING`, with who marked it and when;
+  - both new tables are school-scoped (added to `TENANT_MODELS`), use composite school keys, and cascade only with their homework.
+- **`src/server/classwork/homework.ts`:**
+  - `createHomework` takes `extraSectionIds` (up to 20), `audience` and `studentIds`.
+  - Every class is checked with the existing subject/stream rule. Work for one stream can be set for one class only.
+  - Chosen students must be placed in a chosen class this session, still on the roll, and in the stream when one is set. Students from another class or another school, and a class left with no chosen student, are refused.
+  - All rows are written in one transaction. The duplicate check runs per class.
+  - Each class gets its own copy of each attachment, so deleting one class's homework never removes another's file.
+  - `updateHomework` can change who it is for (the student list is replaced). An edit that does not mention the audience keeps it.
+  - New: `homeworkStudentChoices` (only sections the teacher teaches), `homeworkRoster` and `markHomeworkSubmissions`. Only the teacher who set it, only published work, only from the day it is set, only students it is for, and "missing" only once it is due. "Not checked" clears a mark.
+- **One visibility filter** `visibleToStudent` (`src/server/academics/stream-scope.ts`), applied to every student and parent read:
+  - student homework list, item page, lesson page and alerts;
+  - parent homework, today and report pages;
+  - parent alerts, per child;
+  - file downloads (`readMaterialFile`).
+- **Status for students and parents:** their own mark (Submitted / Submitted late / Missing work), or nothing while it is only assigned. Opening homework never records anything.
+- **Teacher form** (`src/features/classwork/forms.tsx`):
+  - "Also set it for" — other classes they teach the subject to;
+  - "Who is it for?" — Whole class (with the count) or Selected students: checkboxes by class, with Select all / Clear;
+  - "Review homework" shows a summary (title, subject, classes, who, dates, visibility) and nothing is saved until "Confirm". The fields are locked with `inert`, not `disabled`, so their values are still sent.
+- **Teacher homework page:** a "Who handed it in" card with a status per student, "Mark everyone not checked as submitted", counts, and Save. The list shows "Selected students: N".
+- Hindi for every new string.
+- The homework label is "Missing work", because the shared Hindi for "Missing" ("नहीं है") reads wrongly here.
+
+**Not changed:**
+- Homework set from a class record is still whole-class.
+- The School Admin's homework view and report are unchanged.
+- No student uploads: students and parents cannot submit online; the teacher records what they checked.
+
+**Migrations:** `20261105090000_homework_targets` — applied to the local test DB only, **NOT to Neon**. Apply with `npx prisma migrate deploy` before deploying; the homework pages read the new column and tables.
+
+**Tested:** new `tests/integration/homework-targets.test.ts` (7 tests):
+- whole class;
+- selected students — the student not chosen and their parent cannot see it in lists, the item page or alerts;
+- several classes, with the chosen students split between them;
+- refused: a class the teacher does not teach, a subject from another school, a student from another class or school, nobody chosen, another school's teacher — and nothing saved;
+- editing the list and switching to whole class;
+- marking: viewing marks nothing; missing only once due; only students it is for; drafts refused; cross-school not found.
+
+All existing homework tests still pass. Full suite 119 files, 1146 tests pass; typecheck clean; lint 0 errors (8 old warnings); `next build` passes (test DB).
+
+Browser (production build, test DB, temporary data removed): set homework for 1 selected student → review panel → confirm → list shows "Selected students: 1" → marked one student Submitted → the student who was not chosen does not see it.
+
+**Note:** the user's own `next dev` (pid 53490) had half-written `.next/dev/types/validator.ts` at one point, so `tsc` on the default config failed inside that generated file. Checks were run with a config that leaves `.next/dev` out. Restarting `next dev` regenerates it.
+
+---
+
+## 12 Oct 2026 — SchoolOS collection: total, pending and today
+
+**Asked:** show the Super Admin total collection, pending collection and today's collection. Asked which collection; the user chose **SchoolOS's own income** from schools (not schools' fee collection).
+
+**Why a migration:** SchoolOS had no record of money billed or received — billing was manual and nowhere in the app. Collection can only be shown once it is recorded.
+
+**Changed**
+- **Migration `20261104090000_platform_billing`** adds two tables and changes nothing existing:
+  - `PlatformBill` — organization, bill number `SB-YYYY-00001`, plan name when billed, optional period, amount, due date, cancel reason;
+  - `PlatformPayment` — bill, amount, date received, method (reuses the existing `PaymentMethod` enum), reference, note, a one-per-form key, void reason.
+  - Bills and organizations are `ON DELETE RESTRICT`; nothing is deleted in the app.
+- **Service** `src/server/platform/collections.ts`, Super Admin only:
+  - **Total collection** = every payment recorded, less voided ones. **Today's collection** = payments received today. **Pending collection** = what live bills still wait for (amount less payments); **Overdue** = the pending part past its due date. "This month" is shown too.
+  - Choosing a plan, an upgrade or approving a request never counts as collected — only money the Super Admin records.
+  - **New bill:** for any organization with a real campus (demo sandboxes left out). The amount is pre-filled from the plan's price for its campuses when the plan has one; it can be changed.
+  - **Payments:**
+    - recorded against a bill;
+    - refused above what is still due, on a cancelled or fully paid bill, or with a future date;
+    - the same form submitted twice is recorded once;
+    - two payments at the same moment cannot both take the last amount (the bill row is locked).
+  - **Void a payment** with a reason: it stays on record and stops counting. **Cancel a bill** with a reason, only while nothing has been received on it.
+  - Audit: `PLATFORM_BILL_CREATED`, `PLATFORM_BILL_CANCELLED`, `PLATFORM_PAYMENT_RECORDED`, `PLATFORM_PAYMENT_VOIDED` (platform audit).
+- **Collections page** (`/super-admin/collections`, sidebar after Membership):
+  - four cards (Total, Today, Pending, Overdue);
+  - a New bill form and Recent payments (with Void);
+  - a bills table with tabs All / Pending / Overdue / Paid / Cancelled, showing amount, received, pending, due date and status (Unpaid / Part paid / Paid / Cancelled), with Record payment and Cancel bill.
+- **Dashboard:** a "SchoolOS collection" row with Total, Pending (and overdue) and Today, linking to Collections.
+- Hindi for every new string.
+
+**Not done (by design):** no online payment gateway, no invoices or receipts sent to schools, no automatic bills from subscriptions. Bills and payments are entered by the Super Admin.
+
+**Migrations:** `20261104090000_platform_billing` — applied to the local test database only, **NOT to Neon**. Apply with `npx prisma migrate deploy` before deploying; without it the Super Admin dashboard fails to load.
+
+**Tested:** new `tests/integration/platform-collections.test.ts` (6 tests):
+- billing alone adds to pending, not collected;
+- part and full payments move total, today and pending; over-payment, future dates and repeats are handled;
+- two payments at the same moment for the last amount — one succeeds;
+- void and cancel rules;
+- overdue;
+- demo organizations not billable, input checks, Super Admin only.
+
+Full suite 118 files, 1139 tests pass; typecheck clean; lint 0 errors (8 old warnings); `next build` passes (test DB).
+
+Browser (production build, test DB, temporary data removed): Collections in the sidebar → created bill SB-2026-00001 for ₹60,000 → recorded ₹25,000 by UPI → cards showed total ₹25,000, today ₹25,000, pending ₹35,000, and the bill showed "Part paid"; the dashboard row matched.
+
+---
+
+## 12 Oct 2026 — Membership page in the sidebar, with reminders (one school or many)
+
+**Asked:** add Membership to the Super Admin sidebar, and a button to send a school a reminder that its membership is ending — for one school, or many selected at once.
+
+**Changed**
+- **Sidebar:** "Membership" under Plans (after Features & Plans), page `/super-admin/membership`. Tabs: All, Ended, Ending in 30 days, Payment overdue, No end date. Each row: organization/school, plan and campuses, Active / Trial / Payment overdue, end date, days left, last reminded (with "not delivered" when the email failed).
+- **Reminders** (`src/server/platform/membership.ts`, Super Admin only): a "Send reminder" button per row, and tick boxes (with Select all) plus "Send reminder to selected". Each send asks for confirmation.
+  - One email per organization, to its owner (else an active School Admin, else the registration contact). Wording covers ending, ended, trial and payment due, and always says nothing has been charged — billing stays manual.
+  - The School Admin also sees a notice in their alerts for 14 days ("SchoolOS reminder: your Pro plan ends on …"), linking to Plan & billing. It is read from the reminder's audit entry, so there is no new table.
+  - Skipped and reported: an organization already *delivered* a reminder in the last 24 hours, campuses of an organization already in the same send, demo sandboxes, schools without a running plan, unknown ids. A failed email is recorded as "not delivered" and can be retried at once. At most 200 per send.
+  - Nothing about the subscription changes. Audit action `MEMBERSHIP_REMINDER_SENT`, one per campus, is in the platform audit.
+- Dashboard Membership section: a "Send reminders" button to the page.
+- Hindi for every new string.
+
+**Migrations:** none.
+
+**Tested:** new `tests/integration/membership-reminders.test.ts` covers:
+- one reminder: owner email, audit entry per campus, School Admin alert, subscription unchanged, other school sees nothing;
+- bulk: one email per organization, and every skip reason;
+- a refused email is reported, can be retried at once, and the 24-hour rule applies after delivery;
+- page filters and last reminded;
+- Super Admin only.
+
+Full suite 117 files, 1133 tests pass; typecheck clean; lint 0 errors (8 old warnings); `next build` passes (test DB).
+
+Browser (production build, test DB, temporary data removed): Membership in the sidebar, a single reminder and a bulk reminder to 3 selected, tabs and last reminded. Email providers were switched off for this run, so nothing left the machine; the page correctly reported "not delivered".
+
+**Open:** real delivery depends on email being set up. The Gmail App Password in `.env` is still rejected, and until it is replaced reminders show as "not delivered" (the in-app notice still appears). There are no automatic or scheduled reminders yet, only the Super Admin's button. There are no SMS or WhatsApp reminders.
+
+---
+
+## 12 Oct 2026 — Super Admin dashboard: Membership; role limits per school
+
+**Asked:** add a Membership section to the Super Admin dashboard showing whose membership ends when; and let the Super Admin set, per school, how many people each role may have.
+
+**Changed**
+- **Membership on the dashboard** (`membershipOverview` in `src/server/platform/calendar.ts`, Super Admin only, read-only): one row per organization (or school without one), soonest end first, ended ones at the top, "no end date" last; plan and campuses, Active / Trial / Payment overdue, end date, and days left (red within 7 days or ended, amber within 30). Header counts: ended, ending in 30 days, no end date. Shows 8, links to the calendar. Demo sandboxes left out. Nothing says a membership is paid — billing stays manual.
+- **Role limits per school — already existed** (school page → Roles & limits → "Limits for this school", saved by `setSchoolRolesAndLimits`, enforced on the server by `assertWithinLimit` for everyone, the School Admin included). Made clearer: each limit field now shows the plan's limit and how many people are in that role today; the explanation says blank = the plan's limit, and that a limit below today's people keeps them but stops new ones. The "Roles in use" card flags a role over its limit and has a "Change roles & limits" button.
+- Hindi for the new strings.
+
+**Migrations:** none.
+
+**Tested:** `platform-calendar.test.ts` (membership order, days left, counts, limit, Super Admin only) and `platform-role-usage.test.ts` (Super Admin sets limits → enforced, over-limit shown, other school untouched, School Admin cannot set them). Full suite 116 files, 1129 tests pass; typecheck clean; lint 0 errors (8 old warnings); `next build` passes (test DB). Browser (production build, test DB, temporary data removed): Membership section with ended / 1 day / 12 days / 40 days / no end date; limit field shows "2 in use"; over-limit badge shown.
+
+---
+
+## 12 Oct 2026 — Super Admin: which roles each school uses
+
+**Asked:** why the Super Admin has a calendar; and show the Super Admin, per school, how many roles it uses and which ones.
+
+**Answered:** the Super Admin calendar was added on 10 Oct at the user's request ("calendar should also be with the organizer and the Super Admin, so that they are reminded"). It shows plan/trial end dates, overdue subscriptions and requests waiting for a decision — no school's daily work. Kept as is.
+
+**Changed**
+- New `src/server/platform/role-usage.ts` (`roleUsage`, Super Admin only, read-only): per school, every optional role with whether it is switched on, how many current people hold it (Principal = active login; staff = employed, active or on leave; people who left are not counted), and its limit (the school's own, else the plan's). Also School Admin and teacher counts. Counts only, never names.
+- Schools list: new **Roles in use** column — "N in use · M switched on" and e.g. "Accountant 1 · Driver 2"; links to the school's card.
+- School page: new **Roles in use** card above Roles & limits — a table of each role, Switched on / Off / "Off — people kept" (a role switched off while someone still holds it), people and limit.
+- Hindi for the new strings.
+
+**Migrations:** none.
+
+**Tested:** new `tests/integration/platform-role-usage.test.ts` (counts per role, people who left not counted, a kept role flagged, schools counted apart, Super Admin only). Full suite 116 files, 1127 tests pass; typecheck clean; lint 0 errors (8 old warnings); `next build` passes (test DB). Browser (production build, test DB, temporary data removed): the list column and the card show the right counts and states.
+
+---
+
+## 12 Oct 2026 — Plan Builder audit: entitlements, campus activation, data safety
+
+**Asked:** audit the Plan Builder and plan-based modules end to end (plans, drafts/publish/archive/restore, plan entitlement vs campus activation vs role, upgrades, public pricing/registration/demo, grandfathered modules) and fix only what the audit proves. No payments, no new pricing rules, no destructive schema changes, nothing on Neon.
+
+**Already working (verified in code and tests, not rebuilt):** draft → impact preview → confirmed publish; publishing never switches campus modules; ladder and essential-module rules; Super Admin–only services; registration, plan requests, the organization page and the Live Demo accept only published plans (registration and requests only open ones); campuses can switch on only eligible modules, grandfathered ones stay until switched off; org-wide plan changes; billing text says nothing is charged.
+
+**Bugs found and fixed**
+- **Partial saves reset settings.** `savePlanDraft` filled anything not sent from the *published* plan, and `PUT /api/v1/platform/plans/{id}` defaulted missing fields (sending only a name cleared modules, features and roles and set the price to 0). Now a save starts from the saved draft (or the published plan), and the API changes only the keys in the body.
+- **Ladder bypass by equal display order.** Two published plans at the same order had no "below/above", so the "higher plan includes everything" rule was never checked between them. Publishing now refuses a display order already used.
+- **Restored plans skipped the rules.** A plan restored from the archive could be opened to new schools even if the ladder had moved on while it was archived. "Open to new schools" now re-checks and refuses with the reasons.
+- **Archived plans could take new customers.** `setSubscription` (school page form and `PUT …/subscription`) accepted archived plans. Now refused, unless the school is already on that plan (its status and dates can still be updated).
+- **Wrong reason in module refusals.** Services said "not part of your school's plan" even when the module *is* in the plan and only switched off for the campus. The message now says which one it is (page guards already did).
+- **Super Admin school page showed the plan's modules as switched on.** After a plan change, "Switch on everything in the plan" came up ticked with every plan module ticked, although the campus had fewer on; pressing Save would switch them all on. It is now ticked only when the campus really matches the plan, and the card labels each module "In plan / Not in plan" separately from on/off, with a one-line summary.
+- **Extra-campus price lost.** Saving with "Allow more campuses" unticked cleared the saved extra-campus price and cap. They are kept (the cap rule only applies when extras are allowed).
+
+**Added:** "Start from → Copy of <plan>" in the Plan Builder (a draft with that plan's published settings; the original is untouched; audit says what it was copied from).
+
+**Migrations:** none.
+
+**Tested**
+- New `tests/integration/plan-entitlements.test.ts` (8 tests): partial saves keep the rest; API PUT changes only sent keys and is Super Admin only; equal display order refused; restore → open refused until fixed; copying a plan; archived plan refused for new customers/requests/registration but its customer can be updated; Library in plan but off → API 403 with the right message, on → 200, teacher refused; after a downgrade the kept module works, once off it cannot come back, another organization cannot switch it.
+- `tests/unit/plan-catalog.test.ts`: display-order clash and cap rule.
+- Full suite: 115 files, 1125 tests pass. Typecheck clean, lint 0 errors (8 old warnings), `next build` passes (built against the local test DB).
+- Browser (production build on the test DB, temporary data removed afterwards): Plans page shows the "Copy of …" options; a school on Pro with only Fees and Expenses on shows the follow box unticked, only those two ticked, all six "In plan", and the summary line.
+
+**Open (for the user):** whether the Super Admin per-school "exception" (switching on a module outside the plan) should stay; whether a school approved onto a plan should get all its modules switched on (today it does, adjustable at approval); module dependencies (none exist in code today, so the map is empty); a plan closed to new schools (still published) still counts in the ladder; archived plans do not.
+
+---
+
+## 10 Oct 2026 — Calendar for meeting organizers and the Super Admin
+
+**Asked:** the calendar should also be with the organizer and the Super Admin, so that they are reminded.
+
+**Changed**
+- **Organizer (gap fixed):** a staff member with "Schedule meetings" (e.g. a receptionist booking a parents-only PTM) did not see the meeting they scheduled on their calendar or in "Coming up" unless they were also invited. `visibleMeetingWhere` now always includes meetings the user created (`createdById`). That one rule covers the Meetings list, the calendar, the dashboard "Coming up this week" and the PTM pages. School Admin and Principal already saw every meeting, and an organization owner is a School Admin of each campus, so nothing changed for them.
+- **Super Admin calendar** (new page `/super-admin/calendar`, under Overview in the sidebar; `src/server/platform/calendar.ts`):
+  - month grid of plan and trial end dates, one entry per organization (every campus has a subscription row); demo sandboxes are left out;
+  - "Overdue": plan or trial end date passed while still marked active, and subscriptions marked payment overdue;
+  - "Waiting for you": school approvals, campus, plan and feature requests, and new enquiries, with how long the oldest has waited;
+  - "Coming up — next 60 days";
+  - read-only, read from existing records (no new table), Super Admin only.
+- **Super Admin dashboard:** Platform alerts add "N subscriptions overdue" and "N plans or trials ending in the next 7 days", both linking to the calendar.
+- Hindi for the new strings.
+
+**Migrations:** none.
+
+**Tested**
+- `tests/integration/receptionist-security.test.ts`: the organizer sees their own parents-only PTM on the calendar and in "coming up", but not a meeting they neither scheduled nor were invited to.
+- New `tests/integration/platform-calendar.test.ts`: one entry per organization, demo left out, a single day, overdue and waiting reminders, Super Admin only.
+- Full suite: 114 files, 1116 tests pass. Typecheck clean, lint 0 errors, `next build` passes.
+- Browser check (production build, test DB, temporary data removed afterwards): calendar grid, Overdue, Coming up, and the dashboard alerts.
+
+**Open:** reminders are shown in the app only (calendar page and dashboard). There is no email, push or SMS reminder yet.
 
 ---
 

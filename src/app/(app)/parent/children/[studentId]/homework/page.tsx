@@ -1,3 +1,4 @@
+import { SubmissionBadge } from "@/features/classwork/submission-badge";
 import type { Metadata } from "next";
 
 import { EmptyState } from "@/components/shared/empty-state";
@@ -23,6 +24,8 @@ type Entry = {
   dueOn: Date;
   subject: string;
   teacher: string;
+  submission: "SUBMITTED" | "LATE" | "MISSING" | null;
+  feedback: string | null;
 };
 
 /**
@@ -96,13 +99,15 @@ export default async function ChildHomeworkPage(
                           <span className="text-sm font-medium">
                             {entry.subject} — {entry.title}
                           </span>
-                          <span className="text-muted-foreground text-xs tabular-nums">
-                            due {formatDate(entry.dueOn)}
+                          <span className="flex items-center gap-2">
+                            <SubmissionBadge status={entry.submission} />
+                            <span className="text-muted-foreground text-xs tabular-nums">due {formatDate(entry.dueOn)}</span>
                           </span>
                         </div>
                         {entry.description ? (
                           <p className="text-sm whitespace-pre-line">{entry.description}</p>
                         ) : null}
+                        {entry.feedback ? <p className="bg-muted/50 rounded-lg px-2 py-1 text-sm">{`Teacher's feedback: ${entry.feedback}`}</p> : null}
                         <p className="text-muted-foreground text-xs">
                           Set {formatDate(entry.assignedOn)} by {entry.teacher}
                         </p>

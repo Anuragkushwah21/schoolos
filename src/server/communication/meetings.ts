@@ -72,14 +72,18 @@ export function meetingTimeWhere(status: MeetingTimeStatus, clock: Clock = schoo
 // -----------------------------------------------------------------------------
 
 /**
- * Which meetings the signed-in user is invited to. Admins see all of their
- * school's; any role without a group sees none.
+ * Which meetings the signed-in user is invited to, or scheduled themselves.
+ * Admins see all of their school's; any other role without a group sees only
+ * the ones they scheduled.
  */
 export async function visibleMeetingWhere(ctx: TenantContext): Promise<Prisma.MeetingWhereInput> {
   // The Principal sees every meeting (PTMs included) to oversee; only the office changes them.
   if (isSchoolLeader(ctx.user.role)) return {};
+  // Whoever scheduled a meeting (staff with "Schedule meetings") always sees
+  // it — on their list, calendar and reminders — even when not invited to it.
+  const organizer: Prisma.MeetingWhereInput = { createdById: ctx.user.id };
   const group = GROUP_FOR_ROLE[ctx.user.role];
-  if (!group) return { id: { in: [] } };
+  if (!group) return organizer;
 
   const audience: Prisma.MeetingWhereInput = { audiences: { hasSome: ["ALL", group] } };
   let sectionIds: string[] = [];
@@ -111,6 +115,7 @@ export async function visibleMeetingWhere(ctx: TenantContext): Promise<Prisma.Me
 
   return {
     OR: [
+      organizer,
       { scope: "SCHOOL", ...audience },
       ...(sectionIds.length ? [{ scope: "SECTIONS" as const, ...audience, sections: { some: { sectionId: { in: sectionIds } } } }] : []),
       ...byPerson,

@@ -1,3 +1,4 @@
+import { SubmissionBadge } from "@/features/classwork/submission-badge";
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/shared/page-header";
@@ -41,6 +42,8 @@ export default async function StudentHomeworkItemPage(
         description={
           <span className="flex flex-wrap items-center gap-2">
             <StatusBadge status={homework.state} label={state.label} tone={state.tone} />
+            <SubmissionBadge status={homework.submission} />
+            {homework.feedback ? <span>{`Teacher's feedback: ${homework.feedback}`}</span> : null}
             {homework.subject} · {homework.teacher} · {homework.section}
           </span>
         }

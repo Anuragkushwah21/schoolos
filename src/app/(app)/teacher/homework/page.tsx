@@ -134,7 +134,10 @@ export default async function TeacherHomeworkPage(props: PageProps<"/teacher/hom
                     </Link>
                     <p className="text-muted-foreground text-xs">{item.subject}</p>
                   </TableCell>
-                  <TableCell>{item.section}</TableCell>
+                  <TableCell>
+                    {item.section}
+                    {item.studentCount !== null ? <p className="text-muted-foreground text-xs">{`Selected students: ${item.studentCount}`}</p> : null}
+                  </TableCell>
                   <TableCell>
                     <StatusBadge status={item.status} />
                   </TableCell>

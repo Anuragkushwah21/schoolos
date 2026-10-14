@@ -9,6 +9,8 @@ import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession } from "@/server/academics/structure";
 import { myTeachingOptions } from "@/server/people/teacher-self";
+import { mySyllabusChoices } from "@/server/academics/syllabus";
+import { homeworkStudentChoices } from "@/server/classwork/homework";
 
 export const metadata: Metadata = { title: "Set homework" };
 
@@ -25,7 +27,7 @@ export default async function NewHomeworkPage(props: PageProps<"/teacher/homewor
     );
   }
 
-  const teaching = await myTeachingOptions(ctx);
+  const [teaching, students, syllabus] = await Promise.all([myTeachingOptions(ctx), homeworkStudentChoices(ctx), mySyllabusChoices(ctx)]);
 
   if (teaching.length === 0) {
     return (
@@ -44,9 +46,11 @@ export default async function NewHomeworkPage(props: PageProps<"/teacher/homewor
       <PageHeader
         back={{ href: "/teacher/homework", label: "Homework" }}
         title="Set homework"
-        description="Published work is visible to the class and their parents straight away."
+        description="Published work is visible straight away to the students it is for and their parents. Review it before it is set."
       />
       <HomeworkForm
+        students={students}
+        syllabus={syllabus}
         defaultSectionId={defaultSectionId}
         today={toDateInput(today())}
         sections={teaching.map((option) => ({

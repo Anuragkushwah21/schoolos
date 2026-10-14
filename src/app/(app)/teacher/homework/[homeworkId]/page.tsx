@@ -9,12 +9,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import {
   AddHomeworkResourceForm,
   HomeworkForm,
+  HomeworkMarksForm,
   HomeworkResourceEditor,
 } from "@/features/classwork/forms";
 import { formatDate, toDateInput, today } from "@/lib/dates";
 import { requireTenant } from "@/server/auth/current-user";
 import { getCurrentSession } from "@/server/academics/structure";
-import { getMyHomework } from "@/server/classwork/homework";
+import { getMyHomework, homeworkRoster, homeworkStudentChoices } from "@/server/classwork/homework";
+import { mySyllabusChoices } from "@/server/academics/syllabus";
 import { orHidden } from "@/server/page-helpers";
 import { myTeachingOptions } from "@/server/people/teacher-self";
 
@@ -41,10 +43,13 @@ export default async function EditHomeworkPage(
     );
   }
 
-  const [homework, teaching] = await Promise.all([
+  const [homework, teaching, students, syllabus] = await Promise.all([
     orHidden(getMyHomework(ctx, homeworkId)),
     myTeachingOptions(ctx),
+    homeworkStudentChoices(ctx),
+    mySyllabusChoices(ctx),
   ]);
+  const roster = await homeworkRoster(ctx, homeworkId);
 
   return (
     <>
@@ -96,8 +101,31 @@ export default async function EditHomeworkPage(
           assignedOn: toDateInput(homework.assignedOn),
           dueOn: toDateInput(homework.dueOn),
           status: homework.status,
+          audience: homework.audience,
+          studentIds: homework.studentIds,
+          syllabusItemId: homework.syllabusItemId,
         }}
+        students={students}
+        syllabus={syllabus}
       />
+
+      <Card className="mt-8 max-w-3xl">
+        <CardHeader>
+          <CardTitle>Who handed it in</CardTitle>
+          <CardDescription>
+            {`${homework.audience === "SELECTED_STUDENTS" ? `Selected students: ${roster.counts.total}` : `Whole class: ${roster.counts.total}`}. Submitted ${roster.counts.submitted} · late ${roster.counts.late} · missing ${roster.counts.missing} · not checked ${roster.counts.assigned}. Students and parents see what you record here; opening the homework never marks it.`}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {!roster.students.length ? (
+            <p className="text-muted-foreground text-sm">No students in this class yet.</p>
+          ) : roster.canMark ? (
+            <HomeworkMarksForm homeworkId={homework.id} canMarkMissing={roster.canMarkMissing} students={roster.students.map((row) => ({ studentId: row.studentId, name: row.name, rollNumber: row.rollNumber, status: row.status, note: row.note }))} />
+          ) : (
+            <p className="text-muted-foreground text-sm">{roster.status === "PUBLISHED" ? "You can record who handed it in from the day it is set." : "Publish the homework to record who handed it in."}</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="mt-8 max-w-3xl">
         <CardHeader>

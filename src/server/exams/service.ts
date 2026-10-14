@@ -13,6 +13,7 @@ import { spanStatus } from "@/lib/time-status";
 import type { ClassTestInput, CreateExamInput, MarkEntry, UpdateClassTestInput, UpdateExamInput } from "@/lib/validation/exams";
 import { requireCurrentSession, sectionLabel } from "@/server/academics/structure";
 import { recordAudit } from "@/server/audit/log";
+import { requireSyllabusItemFor } from "@/server/academics/syllabus";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
 import { requireStreamTeaching } from "@/server/academics/stream-scope";
@@ -1052,12 +1053,13 @@ export async function myTestOptions(ctx: TenantContext) {
 /** A test the teacher sets for a subject they teach. Families see it once marks are submitted. */
 export async function createClassTest(
   ctx: TenantContext,
-  input: Omit<ClassTestInput, "streamId" | "description"> & { streamId?: string | null; description?: string | null },
+  input: Omit<ClassTestInput, "streamId" | "description" | "syllabusItemId"> & { streamId?: string | null; description?: string | null; syllabusItemId?: string | null },
 ): Promise<{ id: string }> {
   assertRole(ctx.user, "TEACHER");
   const session = await requireCurrentSession(ctx);
   const streamId = input.streamId ?? null;
   const { teacherId } = await requireTeachingAssignment(ctx, input.sectionId, input.subjectId, streamId, session.id);
+  const syllabusItemId = await requireSyllabusItemFor(ctx, input.syllabusItemId, { sectionId: input.sectionId, subjectId: input.subjectId, academicSessionId: session.id });
 
   const created = await ctx.db.assessment.create({
     data: {
@@ -1072,6 +1074,7 @@ export async function createClassTest(
       date: input.date,
       maxMarks: input.maxMarks,
       passMarks: input.passMarks ?? null,
+      syllabusItemId,
     },
     select: { id: true, subject: { select: { name: true } }, section: { select: SECTION_LABEL_SELECT } },
   });
@@ -1095,7 +1098,7 @@ async function requireOwnTest(ctx: TenantContext, assessmentId: string) {
 }
 
 /** Change a test's details while its marks are still a draft. */
-export async function updateClassTest(ctx: TenantContext, input: UpdateClassTestInput): Promise<void> {
+export async function updateClassTest(ctx: TenantContext, input: Omit<UpdateClassTestInput, "syllabusItemId"> & { syllabusItemId?: string | null }): Promise<void> {
   const paper = await requireOwnTest(ctx, input.assessmentId);
   if (paper.marksStatus === "SUBMITTED") {
     throw new AppError("VALIDATION", "This test's marks are submitted, so it is locked. The school office can reopen it for a correction.");
@@ -1106,9 +1109,11 @@ export async function updateClassTest(ctx: TenantContext, input: UpdateClassTest
       maxMarks: [`A student already has ${highest._max.marksObtained} marks. The maximum cannot be lower than that.`],
     });
   }
+  // Left as it is when the caller does not say; checked against the class's syllabus when it does.
+  const syllabusItemId = input.syllabusItemId !== undefined ? await requireSyllabusItemFor(ctx, input.syllabusItemId, { sectionId: paper.sectionId, subjectId: paper.subjectId, academicSessionId: paper.academicSessionId }) : undefined;
   await ctx.db.assessment.updateMany({
     where: { id: paper.id },
-    data: { name: input.name, date: input.date, maxMarks: input.maxMarks, description: input.description ?? null },
+    data: { name: input.name, date: input.date, maxMarks: input.maxMarks, description: input.description ?? null, ...(syllabusItemId !== undefined ? { syllabusItemId } : {}) },
   });
   await recordAudit({
     action: "CLASS_TEST_UPDATED",

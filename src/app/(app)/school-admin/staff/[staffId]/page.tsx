@@ -1,13 +1,14 @@
 import type { Metadata, Route } from "next";
 import Link from "next/link";
-import { BusIcon, RepeatIcon } from "lucide-react";
+import { BriefcaseIcon, BusIcon, CalendarCheckIcon, CalendarDaysIcon, FingerprintIcon, KeyRoundIcon, ListChecksIcon, PencilIcon, PhoneIcon, RepeatIcon, ShieldCheckIcon, SparklesIcon } from "lucide-react";
 
 import { ActionButton } from "@/components/forms/action-button";
 import { EmptyState } from "@/components/shared/empty-state";
-import { PageHeader } from "@/components/shared/page-header";
-import { PersonPhoto } from "@/components/shared/person-photo";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { ViewTabs } from "@/components/shared/view-tabs";
+import { HeroAction, MetricTile, Panel, ProfileHero, ProfileTabs, SoftRow, TileChip } from "@/features/people/profile-ui";
+import { DocumentShortcuts } from "@/features/documents/person-documents";
+import { attendedDays } from "@/lib/attendance";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AssignCrewForm, MoveCrewForm, RouteForm, StaffForm, StaffLoginForm, StopForm } from "@/features/operations/forms";
 import { removeRouteCrewAction, removeStopAction } from "@/features/operations/actions";
@@ -21,12 +22,13 @@ import { PermissionMatrix } from "@/features/staff/permission-matrix";
 import { removeSalaryAction } from "@/features/finance/actions";
 import { SalaryForm } from "@/features/finance/forms";
 import { rupees, toRupeeInput } from "@/features/finance/money";
-import { formatDate, formatDateTime, formatDayShort, formatMinutes, formatMonth, minutesToTime, parseDateInput, today, toDateInput } from "@/lib/dates";
+import { addDays, formatDate, formatDateTime, formatDayShort, formatMinutes, formatMonth, minutesToTime, parseDateInput, today, toDateInput } from "@/lib/dates";
 import { fullName, humanize, pluralize } from "@/lib/format";
 import { param } from "@/lib/search-params";
 import { type BaseStaffRole, STAFF_ROLE_WORKSPACE, STAFF_MODULE_LABEL, STAFF_MODULES, STAFF_ROLE_MODULES, STAFF_ROLE_NAMES, allowedGrants, grantDef } from "@/lib/staff-access";
 import { activationEmailStatuses } from "@/server/auth/account-links";
 import { requireTenant } from "@/server/auth/current-user";
+import { PersonDocuments } from "@/features/documents/person-documents";
 import { getStaffSalary } from "@/server/finance/salary";
 import { DOCUMENT_TYPE_LABEL, listStaffDocuments, staffAuditLog, staffPermissionSummary } from "@/server/staff/profiles";
 import { archiveStaffDocumentAction, restoreRoleDefaultsAction } from "@/features/staff/profile-actions";
@@ -41,7 +43,7 @@ import { hasModule } from "@/server/platform/modules";
 
 export const metadata: Metadata = { title: "Staff member" };
 
-const TABS = ["profile", "access", "work", "substitutes", "attendance", "salary", "documents", "audit"] as const;
+const TABS = ["overview", "profile", "access", "work", "substitutes", "attendance", "salary", "documents", "audit"] as const;
 type Tab = (typeof TABS)[number];
 
 const SUB_TONE: Record<SubstitutionStatus, "positive" | "info" | "neutral" | "warning"> = { ACTIVE: "positive", SCHEDULED: "info", EXPIRED: "neutral", ENDED: "warning" };
@@ -58,12 +60,12 @@ export default async function StaffMemberPage(props: PageProps<"/school-admin/st
   const { staffId } = await props.params;
   const search = await props.searchParams;
   const tabParam = param(search.tab);
-  const tab: Tab = TABS.includes(tabParam as Tab) ? (tabParam as Tab) : "profile";
+  const tab: Tab = TABS.includes(tabParam as Tab) ? (tabParam as Tab) : "overview";
   const staff = await orNotFound(getStaff(ctx, staffId));
   const roleName = staff.roleProfile?.name ?? STAFF_ROLE_NAMES[staff.role as BaseStaffRole];
   const grants = allowedGrants(staff.role, staff.grants);
   const modulesFirst = STAFF_ROLE_MODULES[staff.role as BaseStaffRole] ?? [];
-  const href = (next: Tab) => (next === "profile" ? `/school-admin/staff/${staff.id}` : `/school-admin/staff/${staff.id}?tab=${next}`) as Route;
+  const href = (next: Tab) => (next === "overview" ? `/school-admin/staff/${staff.id}` : `/school-admin/staff/${staff.id}?tab=${next}`) as Route;
 
   const [payrollOn, transportOn] = await Promise.all([hasModule(ctx, "PAYROLL"), hasModule(ctx, "TRANSPORT")]);
   const [photoUrl, substitutions, todayMark, onRoutes] = await Promise.all([
@@ -75,66 +77,44 @@ export default async function StaffMemberPage(props: PageProps<"/school-admin/st
   const activeCover = substitutions.coveredBy.filter((row) => row.status === "ACTIVE");
   const activeCovering = substitutions.covering.filter((row) => row.status === "ACTIVE");
 
+  const name = fullName(staff);
   return (
     <>
-      <PageHeader
+      <ProfileHero
         back={{ href: "/school-admin/staff", label: "Non-teaching staff" }}
-        title={fullName(staff)}
-        description={[roleName, staff.employeeId, staff.department].filter(Boolean).join(" · ")}
+        name={name}
+        photoUrl={photoUrl}
+        presence={staff.status === "ACTIVE" ? "positive" : staff.status === "ON_LEAVE" ? "warning" : "neutral"}
+        badge={<StatusBadge status={staff.status} />}
+        role={roleName}
+        lines={[[staff.designation, staff.department].filter(Boolean).join(" · ")]}
+        chips={[
+          { label: `EMP ID: ${staff.employeeId}`, tone: "neutral", icon: FingerprintIcon },
+          staff.joiningDate ? { label: `Joined ${formatDate(staff.joiningDate)}`, tone: "neutral", icon: CalendarDaysIcon } : null,
+          staff.user ? { label: !staff.user.isActive ? "Login disabled" : staff.user.activatedAt ? "Can sign in" : "Pending activation", tone: !staff.user.isActive ? "neutral" : staff.user.activatedAt ? "green" : "amber" } : { label: "No login", tone: "neutral" },
+          ...activeCover.map((row) => ({ label: `Covered by ${row.substitute.name} until ${formatDate(row.endDate)}`, tone: "amber" as const })),
+          ...activeCovering.map((row) => ({ label: `Covering for ${row.original.name} until ${formatDate(row.endDate)}`, tone: "cyan" as const })),
+        ]}
+        facts={[
+          { label: "Workspace", value: STAFF_ROLE_WORKSPACE[staff.role as BaseStaffRole] ?? "As assigned", icon: BriefcaseIcon },
+          { label: "Mobile", value: staff.phone ?? "—", icon: PhoneIcon },
+          ...(transportOn && (onRoutes.length || staff.role === "DRIVER" || staff.role === "TRANSPORT_ATTENDANT") ? [{ label: "Routes", value: onRoutes.length ? onRoutes.map((route) => (route.code ? `${route.code} · ${route.name}` : route.name)).join(", ") : "None yet", icon: BusIcon }] : []),
+        ]}
+        actions={
+          <>
+            <HeroAction href={href("documents")} icon={SparklesIcon} label="Generate document" primary />
+            <HeroAction href={href("profile")} icon={PencilIcon} label="Edit" />
+            <HeroAction href={href("access")} icon={ShieldCheckIcon} label="Permissions" />
+            <HeroAction href={href("attendance")} icon={CalendarCheckIcon} label="Attendance" />
+          </>
+        }
       />
-      <div className="mb-4 flex flex-wrap items-center gap-4">
-        <PersonPhoto name={fullName(staff)} photoUrl={photoUrl} who="The staff member" />
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge status={staff.status} />
-          {staff.user ? <StatusBadge status={staff.user.isActive ? "ACTIVE" : "INACTIVE"} label={staff.user.isActive ? "Has a login" : "Login disabled"} tone={staff.user.isActive ? "positive" : "neutral"} /> : <StatusBadge status="INACTIVE" tone="neutral" label="No login" />}
-          {activeCover.map((row) => (
-            <StatusBadge key={row.id} status="ACTIVE" tone="warning" label={`Covered by ${row.substitute.name} until ${formatDate(row.endDate)}`} />
-          ))}
-          {activeCovering.map((row) => (
-            <StatusBadge key={row.id} status="ACTIVE" tone="info" label={`Covering for ${row.original.name} until ${formatDate(row.endDate)}`} />
-          ))}
-        </div>
-      </div>
 
-      {/* Everything about them at a glance; each tab below is where it is changed. */}
-      <Card size="sm" className="mb-4">
-        <CardContent>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 xl:grid-cols-6">
-            {[
-              { label: "Role", value: roleName, href: staff.roleProfile ? (`/school-admin/staff/roles/${staff.roleProfile.id}` as Route) : null },
-              { label: "Employee ID", value: staff.employeeId },
-              { label: "Job title / department", value: [staff.designation, staff.department].filter(Boolean).join(" · ") || "—" },
-              { label: "Mobile", value: staff.phone ?? "—", href: staff.phone ? (`tel:${staff.phone.replace(/\s/g, "")}` as Route) : null },
-              { label: "Email", value: staff.email ?? "—" },
-              { label: "Joined", value: staff.joiningDate ? formatDate(staff.joiningDate) : "—" },
-              { label: "Today", value: todayMark ? humanize(todayMark.status) : "Not marked", href: href("attendance") },
-              { label: "Login", value: staff.user ? (staff.user.isActive ? (staff.user.activatedAt ? "Can sign in" : "Pending activation") : "Disabled") : "No login", href: href("profile") },
-              { label: "Permissions", value: grants.length ? pluralize(grants.length, "permission") : "Only common pages", href: href("access") },
-              ...(transportOn && (onRoutes.length || staff.role === "DRIVER" || staff.role === "TRANSPORT_ATTENDANT")
-                ? [{ label: "Routes", value: onRoutes.length ? onRoutes.map((route) => (route.code ? `${route.code} · ${route.name}` : route.name)).join(", ") : "None yet", href: href("work") }]
-                : []),
-            ].map((item) => (
-              <div key={item.label} className="min-w-0">
-                <dt className="text-muted-foreground text-xs">{item.label}</dt>
-                <dd className="truncate font-medium">
-                  {item.href ? (
-                    <Link href={item.href} className="hover:underline">
-                      {item.value}
-                    </Link>
-                  ) : (
-                    item.value
-                  )}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </CardContent>
-      </Card>
-
-      <ViewTabs
+      <ProfileTabs
         label="Staff member"
         tabs={[
-          { href: href("profile"), label: "Profile", active: tab === "profile" },
+          { href: href("overview"), label: "Overview", active: tab === "overview" },
+          { href: href("profile"), label: "Employment details", active: tab === "profile" },
           { href: href("access"), label: "Role & access", count: grants.length, active: tab === "access" },
           { href: href("work"), label: transportOn && (staff.role === "DRIVER" || staff.role === "TRANSPORT_ATTENDANT") ? "Work & routes" : "Work", count: onRoutes.length || undefined, active: tab === "work" },
           { href: href("substitutes"), label: "Substitutes", count: activeCover.length + activeCovering.length || undefined, active: tab === "substitutes" },
@@ -146,6 +126,7 @@ export default async function StaffMemberPage(props: PageProps<"/school-admin/st
         ]}
       />
 
+      {tab === "overview" ? <OverviewTab ctx={ctx} staff={staff} grants={grants} todayMark={todayMark?.status ?? null} href={href} /> : null}
       {tab === "profile" ? <ProfileTab ctx={ctx} staff={staff} /> : null}
       {tab === "access" ? <AccessTab ctx={ctx} staff={staff} roleName={roleName} grants={grants} modulesFirst={modulesFirst} temporary={activeCovering} /> : null}
       {tab === "work" ? <WorkTab ctx={ctx} staff={staff} grants={grants} transportOn={transportOn} /> : null}
@@ -160,6 +141,102 @@ export default async function StaffMemberPage(props: PageProps<"/school-admin/st
 
 type Ctx = Awaited<ReturnType<typeof requireTenant>>;
 type Staff = Awaited<ReturnType<typeof getStaff>>;
+
+/** Years and months since a date: "3 yrs 2 mos". */
+function tenure(from: Date, to: Date) {
+  const months = Math.max(0, (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth() - (to.getDate() < from.getDate() ? 1 : 0));
+  const years = Math.floor(months / 12);
+  return [years ? pluralize(years, "yr") : null, months % 12 || !years ? pluralize(months % 12, "mo") : null].filter(Boolean).join(" ");
+}
+
+/** At a glance: today, attendance, permissions, service — then what they are responsible for. */
+async function OverviewTab({ ctx, staff, grants, todayMark, href }: { ctx: Ctx; staff: Staff; grants: string[]; todayMark: string | null; href: (tab: Tab) => Route }) {
+  const now = today();
+  const marks = await ctx.db.staffAttendance.groupBy({ by: ["status"], where: { staffMemberId: staff.id, date: { gte: addDays(now, -30), lte: now } }, _count: { _all: true } });
+  const counts = Object.fromEntries(marks.map((row) => [row.status, row._count._all])) as Record<string, number>;
+  const markedDays = marks.reduce((sum, row) => sum + row._count._all, 0);
+  const attended = attendedDays({ PRESENT: counts.PRESENT ?? 0, LATE: counts.LATE ?? 0, HALF_DAY: 0 });
+  const byModule = new Map<string, string[]>();
+  for (const grant of grants) {
+    const def = grantDef(grant);
+    if (!def) continue;
+    byModule.set(def.module, [...(byModule.get(def.module) ?? []), def.label]);
+  }
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <MetricTile
+          label="Today"
+          icon={CalendarCheckIcon}
+          tone={todayMark === "ABSENT" ? "red" : todayMark === "ON_LEAVE" ? "amber" : "green"}
+          value={todayMark ? humanize(todayMark) : "Not marked"}
+          valueClassName="text-xl"
+          sub={formatDate(now)}
+          href={href("attendance")}
+        />
+        <MetricTile label="Attendance" icon={FingerprintIcon} tone="green" value={markedDays ? `${Math.round((attended / markedDays) * 100)}%` : "—"} sub={markedDays ? `Last 30 days · ${pluralize(markedDays, "day")} marked` : "Not marked in 30 days"} foot={counts.ABSENT ? <TileChip tone="red">{`${counts.ABSENT} absent`}</TileChip> : null} href={href("attendance")} />
+        <MetricTile label="Permissions" icon={KeyRoundIcon} tone="purple" value={grants.length} sub={grants.length ? `Across ${pluralize(byModule.size, "area")}` : "Only common pages"} href={href("access")} />
+        <MetricTile label="Service" icon={BriefcaseIcon} tone="blue" value={staff.joiningDate ? tenure(staff.joiningDate, now) : "—"} valueClassName="text-xl" sub={staff.joiningDate ? `Since ${formatDate(staff.joiningDate)}` : "Joining date not recorded"} />
+      </div>
+
+      <DocumentShortcuts ctx={ctx} kind="STAFF" personId={staff.id} picks={["STAFF_ID_CARD", "EMPLOYMENT_VERIFICATION", "APPOINTMENT_LETTER"]} more={href("documents")} />
+
+      <div className="grid items-start gap-5 xl:grid-cols-[1.3fr_1fr]">
+        <Panel
+          title="Responsibilities & scope"
+          icon={ListChecksIcon}
+          aside={
+            <Link href={href("access")} className="text-primary text-sm font-semibold hover:underline">
+              Change
+            </Link>
+          }
+        >
+          {byModule.size ? (
+            <ul className="flex flex-col gap-2">
+              {[...byModule.entries()].map(([module, labels]) => (
+                <SoftRow key={module} className="items-start">
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">{STAFF_MODULE_LABEL[module as keyof typeof STAFF_MODULE_LABEL] ?? module}</span>
+                      <TileChip tone="neutral">{pluralize(labels.length, "permission")}</TileChip>
+                    </span>
+                    <span className="text-muted-foreground block text-sm">{labels.join(" · ")}</span>
+                  </span>
+                </SoftRow>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground text-sm">No module permissions — they see only the pages every staff member has.</p>
+          )}
+        </Panel>
+        <Panel title="Contact & employment" icon={PhoneIcon} tone="cyan">
+          <dl className="flex flex-col gap-2 text-sm">
+            {[
+              { label: "Mobile", value: staff.phone ?? "—", href: staff.phone ? `tel:${staff.phone.replace(/\s/g, "")}` : null },
+              { label: "Email", value: staff.email ?? "—", href: staff.email ? `mailto:${staff.email}` : null },
+              { label: "Job title / department", value: [staff.designation, staff.department].filter(Boolean).join(" · ") || "—", href: null },
+              { label: "Joined", value: staff.joiningDate ? formatDate(staff.joiningDate) : "—", href: null },
+              { label: "Login", value: staff.user ? (staff.user.isActive ? (staff.user.activatedAt ? "Can sign in" : "Pending activation") : "Disabled") : "No login", href: null },
+            ].map((item) => (
+              <SoftRow key={item.label} className="justify-between py-2.5">
+                <dt className="text-muted-foreground text-xs font-semibold tracking-wider uppercase">{item.label}</dt>
+                <dd className="min-w-0 truncate text-right font-medium">
+                  {item.href ? (
+                    <a href={item.href} className="text-primary hover:underline">
+                      {item.value}
+                    </a>
+                  ) : (
+                    item.value
+                  )}
+                </dd>
+              </SoftRow>
+            ))}
+          </dl>
+        </Panel>
+      </div>
+    </div>
+  );
+}
 
 async function ProfileTab({ ctx, staff }: { ctx: Ctx; staff: Staff }) {
   const [invites, roles] = await Promise.all([activationEmailStatuses(ctx, [staff.user?.id]), listRoleProfiles(ctx)]);
@@ -727,6 +804,10 @@ async function DocumentsTab({ ctx, staffId, showArchived }: { ctx: Ctx; staffId:
   const documents = await listStaffDocuments(ctx, staffId, { archived: showArchived });
   const VERIFY_TONE = { PENDING: "neutral", VERIFIED: "positive", REJECTED: "negative" } as const;
   return (
+    <>
+    <div className="mb-6">
+      <PersonDocuments ctx={ctx} kind="STAFF" personId={staffId} />
+    </div>
     <div className="grid items-start gap-6 xl:grid-cols-[1.4fr_1fr]">
       <Card>
         <CardHeader>
@@ -788,6 +869,7 @@ async function DocumentsTab({ ctx, staffId, showArchived }: { ctx: Ctx; staffId:
         </CardContent>
       </Card>
     </div>
+    </>
   );
 }
 

@@ -3,7 +3,7 @@ import "server-only";
 import { formatSpan } from "@/lib/calendar";
 import { addDays, formatDate, formatDayShort, formatMinutes, today } from "@/lib/dates";
 import { fullName, humanize } from "@/lib/format";
-import { visibleToStream } from "@/server/academics/stream-scope";
+import { visibleToStream, visibleToStudent } from "@/server/academics/stream-scope";
 import { sectionLabel } from "@/server/academics/structure";
 import { assertRole } from "@/server/auth/assert";
 import type { TenantContext } from "@/server/auth/current-user";
@@ -18,6 +18,8 @@ import { listExams, VISIBLE_PAPER } from "@/server/exams/service";
 import { overdueLoanCount, overdueLoansFor } from "@/server/operations/library";
 import { staffHolds } from "@/server/auth/staff-access";
 import { findStudentSelf } from "@/server/student/access";
+import { latestMembershipReminder } from "@/server/platform/membership";
+import { leaderReviewCounts, myReviewsToAnswer } from "@/server/academics/progress";
 import { hasModule } from "@/server/platform/modules";
 
 /**
@@ -110,7 +112,7 @@ export async function getStudentAlerts(ctx: TenantContext): Promise<FeedAlert[]>
         sectionId,
         academicSessionId: sessionId,
         status: "PUBLISHED",
-        AND: [visibleToStream(self.placement.streamId)],
+        AND: [visibleToStream(self.placement.streamId), visibleToStudent(self.student.id)],
         OR: [{ createdAt: { gte: addDays(now, -2) } }, { dueOn: { gte: now, lte: addDays(now, 1) } }],
         dueOn: { gte: now },
       },
@@ -254,11 +256,12 @@ export async function getPrincipalAlerts(ctx: TenantContext): Promise<FeedAlert[
   const moment = new Date();
   const day = now.toISOString().slice(0, 10);
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
-  const [shared, absent, missed, exams] = await Promise.all([
+  const [shared, absent, missed, exams, academic] = await Promise.all([
     sharedAlerts(ctx, "/school-admin/notices", "/school-admin/holidays", "/school-admin/meetings"),
     ctx.db.studentAttendance.count({ where: { date: now, status: "ABSENT" } }),
     ctx.db.classSession.count({ where: { date: now, status: "MISSED" } }),
     session ? listExams(ctx, { academicSessionId: session.id }) : Promise.resolve([]),
+    leaderReviewCounts(ctx),
   ]);
   const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length;
   const pending = exams.filter((exam) => exam.stage === "MARKS_PENDING").length;
@@ -267,6 +270,8 @@ export async function getPrincipalAlerts(ctx: TenantContext): Promise<FeedAlert[
     { kind: "missed", count: missed, title: `${missed} class${missed === 1 ? "" : "es"} missed today`, href: "/school-admin/substitutes", tone: "warning" as const },
     { kind: "marks-pending", count: pending, title: `${pending} exam${pending === 1 ? " has" : "s have"} marks still missing`, href: "/school-admin/exams/pending", tone: "info" as const },
     { kind: "results-ready", count: ready, title: `${ready} exam result${ready === 1 ? " is" : "s are"} ready to publish`, href: "/school-admin/exams/results", tone: "info" as const },
+    { kind: "units-ready", count: academic.readyUnits, title: `Units ready for review: ${academic.readyUnits}`, href: "/school-admin/progress", tone: "info" as const },
+    { kind: "low-tests", count: academic.lowUnreviewed, title: `Tests below the review threshold, not yet reviewed: ${academic.lowUnreviewed}`, href: "/school-admin/progress", tone: "warning" as const },
   ];
   return sortAlerts([
     ...counts.filter((row) => row.count > 0).map((row) => ({ kind: row.kind, childId: null, title: row.title, detail: "", at: moment, href: row.href, tone: row.tone, key: `${row.kind}:${row.count}:${day}` })),
@@ -284,7 +289,7 @@ export async function getAdminAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
   const now = today();
   const moment = new Date();
   const session = await ctx.db.academicSession.findFirst({ where: { isCurrent: true }, select: { id: true } });
-  const [absent, missed, leave, admissions, enquiries, complaints, concerns, studentLeave, exams, overdueBooks] = await Promise.all([
+  const [absent, missed, leave, admissions, enquiries, complaints, concerns, studentLeave, exams, overdueBooks, reminder, academic] = await Promise.all([
     ctx.db.studentAttendance.count({ where: { date: now, status: "ABSENT" } }),
     ctx.db.classSession.count({ where: { date: now, status: "MISSED" } }),
     ctx.db.leaveRequest.count({ where: { status: "PENDING" } }),
@@ -296,6 +301,9 @@ export async function getAdminAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
     session ? listExams(ctx, { academicSessionId: session.id }) : Promise.resolve([]),
     // Only for a school whose plan has the library.
     hasModule(ctx, "LIBRARY").then((on) => (on ? overdueLoanCount(ctx) : 0)),
+    // A membership reminder SchoolOS sent this campus in the last two weeks.
+    latestMembershipReminder(ctx.schoolId),
+    leaderReviewCounts(ctx),
   ]);
   const ready = exams.filter((exam) => exam.stage === "READY_TO_PUBLISH").length;
   const pending = exams.filter((exam) => exam.stage === "MARKS_PENDING").length;
@@ -327,12 +335,40 @@ export async function getAdminAlerts(ctx: TenantContext): Promise<FeedAlert[]> {
     { kind: "enquiries", count: enquiries, title: `${enquiries} enquir${enquiries === 1 ? "y" : "ies"} due for follow-up`, href: "/school-admin/admissions/enquiries?followUp=due", tone: "info" },
     { kind: "library-overdue", count: overdueBooks, title: `${overdueBooks} library book${overdueBooks === 1 ? " is" : "s are"} overdue`, href: "/school-admin/library/loans?view=overdue", tone: "info" },
     { kind: "complaints", count: complaints, title: `${complaints} complaint${complaints === 1 ? "" : "s"} still open`, href: "/school-admin/complaints", tone: "warning" },
+    { kind: "units-ready", count: academic.readyUnits, title: `Units ready for review: ${academic.readyUnits}`, href: "/school-admin/progress", tone: "info" },
+    { kind: "low-tests", count: academic.lowUnreviewed, title: `Tests below the review threshold, not yet reviewed: ${academic.lowUnreviewed}`, href: "/school-admin/progress", tone: "warning" },
   ];
-  return sortAlerts(
-    counts
+  const membership: FeedAlert[] = reminder
+    ? [
+        {
+          kind: "membership",
+          childId: null,
+          title:
+            reminder.status === "PAST_DUE"
+              ? `SchoolOS reminder: your ${reminder.plan} plan has a payment due`
+              : !reminder.endsOn
+                ? `SchoolOS reminder: your ${reminder.plan} plan is up for renewal`
+                : reminder.endsOn < now
+                  ? reminder.status === "TRIALING"
+                    ? `SchoolOS reminder: your ${reminder.plan} trial ended on ${formatDate(reminder.endsOn)}`
+                    : `SchoolOS reminder: your ${reminder.plan} plan ended on ${formatDate(reminder.endsOn)}`
+                  : reminder.status === "TRIALING"
+                    ? `SchoolOS reminder: your ${reminder.plan} trial ends on ${formatDate(reminder.endsOn)}`
+                    : `SchoolOS reminder: your ${reminder.plan} plan ends on ${formatDate(reminder.endsOn)}`,
+          detail: "Contact SchoolOS to renew or change your plan. Nothing has been charged.",
+          at: reminder.at,
+          href: "/school-admin/plan",
+          tone: reminder.status === "PAST_DUE" || (reminder.endsOn !== null && reminder.endsOn < now) ? "critical" : "warning",
+          key: "membership:" + reminder.id,
+        },
+      ]
+    : [];
+  return sortAlerts([
+    ...membership,
+    ...counts
       .filter((row) => row.count > 0)
       .map((row) => ({ kind: row.kind, childId: null, title: row.title, detail: "", at: moment, href: row.href, tone: row.tone, key: `${row.kind}:${row.count}:${day}` })),
-  );
+  ]);
 }
 
 /** What a teacher would want to be told: cover duties, leave decisions, marks to enter. */
@@ -382,6 +418,19 @@ export async function getTeacherAlerts(ctx: TenantContext): Promise<FeedAlert[]>
     });
   }
   for (const row of leave) alerts.push(leaveDecisionAlert(row, "/teacher/leave", now));
+  // Academic reviews waiting on this teacher: one alert per review, never repeated.
+  for (const review of await myReviewsToAnswer(ctx).catch(() => [])) {
+    alerts.push({
+      kind: "academic-review",
+      childId: null,
+      title: `${review.subject.name}, ${sectionLabel(review.section)}: ${review.status === "UPDATE_REQUESTED" ? "an update was requested" : review.status === "REVISION_RECOMMENDED" ? "a revision class was recommended" : "planned revision is due"}`,
+      detail: review.note ?? "",
+      at: now,
+      href: `/teacher/progress/class?section=${review.sectionId}&subject=${review.subjectId}`,
+      tone: "warning",
+      key: "academic-review:" + review.id + ":" + review.status,
+    });
+  }
 
   // A class register the office handed over for today or the days ahead.
   const registerCovers = await ctx.db.registerCover.findMany({

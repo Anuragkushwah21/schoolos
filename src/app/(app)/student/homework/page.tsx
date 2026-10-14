@@ -1,4 +1,5 @@
 import { NotebookPenIcon } from "lucide-react";
+import { SubmissionBadge } from "@/features/classwork/submission-badge";
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 
@@ -79,13 +80,15 @@ export default async function StudentHomeworkPage() {
                           >
                             {entry.subject} — {entry.title}
                           </Link>
-                          <span className="text-muted-foreground text-xs tabular-nums">
-                            due {formatDate(entry.dueOn)}
+                          <span className="flex items-center gap-2">
+                            <SubmissionBadge status={entry.submission} />
+                            <span className="text-muted-foreground text-xs tabular-nums">due {formatDate(entry.dueOn)}</span>
                           </span>
                         </div>
                         {entry.description ? (
                           <p className="text-sm whitespace-pre-line">{entry.description}</p>
                         ) : null}
+                        {entry.feedback ? <p className="bg-muted/50 rounded-lg px-2 py-1 text-sm">{`Teacher's feedback: ${entry.feedback}`}</p> : null}
                         <p className="text-muted-foreground text-xs">
                           Set {formatDate(entry.assignedOn)} by {entry.teacher}
                           {entry.resourceCount

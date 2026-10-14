@@ -3,7 +3,7 @@ import "server-only";
 import { addDays, dayOfWeek, today } from "@/lib/dates";
 import { NotFoundError } from "@/lib/errors";
 import { fullName } from "@/lib/format";
-import { visibleToStream } from "@/server/academics/stream-scope";
+import { visibleToStream, visibleToStudent } from "@/server/academics/stream-scope";
 import { monthlyAttendance } from "@/server/analytics/student";
 import { homeworkStatus, schoolNow } from "@/lib/time-status";
 import { schoolClosureOn } from "@/server/calendar/holidays";
@@ -333,7 +333,7 @@ export async function getMyLesson(ctx: TenantContext, classSessionId: string) {
   const homework = await ctx.db.homework.findMany({
     where: {
       sectionId: me.placement.sectionId,
-      AND: [visibleToStream(me.placement.streamId)],
+      AND: [visibleToStream(me.placement.streamId), visibleToStudent(me.student.id)],
       status: "PUBLISHED",
       OR: [
         // Set from this very class record…
@@ -465,7 +465,7 @@ export async function getMyHomework(ctx: TenantContext) {
   const rows = await ctx.db.homework.findMany({
     where: {
       sectionId: me.placement.sectionId,
-      AND: [visibleToStream(me.placement.streamId)],
+      AND: [visibleToStream(me.placement.streamId), visibleToStudent(me.student.id)],
       academicSessionId: me.placement.sessionId,
       status: "PUBLISHED",
     },
@@ -480,6 +480,7 @@ export async function getMyHomework(ctx: TenantContext) {
       subject: { select: { id: true, name: true } },
       teacher: { select: { firstName: true, lastName: true } },
       _count: { select: { resources: true } },
+      submissions: { where: { studentId: me.student.id }, select: { status: true, note: true } },
     },
   });
 
@@ -494,6 +495,10 @@ export async function getMyHomework(ctx: TenantContext) {
     subjectId: row.subject.id,
     teacher: fullName(row.teacher),
     resourceCount: row._count.resources,
+    /** SUBMITTED, LATE or MISSING as the teacher recorded it; null while only assigned. */
+    submission: row.submissions[0]?.status ?? null,
+    /** The teacher's feedback, once they have checked it. */
+    feedback: row.submissions[0]?.note ?? null,
   }));
 
   return {
@@ -521,7 +526,7 @@ export async function getMyHomeworkItem(ctx: TenantContext, homeworkId: string) 
     where: {
       id: homeworkId,
       sectionId: me.placement.sectionId,
-      AND: [visibleToStream(me.placement.streamId)],
+      AND: [visibleToStream(me.placement.streamId), visibleToStudent(me.student.id)],
       academicSessionId: me.placement.sessionId,
       status: "PUBLISHED",
     },
@@ -535,6 +540,7 @@ export async function getMyHomeworkItem(ctx: TenantContext, homeworkId: string) 
       subject: { select: { name: true } },
       teacher: { select: { firstName: true, lastName: true } },
       resources: { orderBy: { createdAt: "asc" }, select: RESOURCE_SELECT },
+      submissions: { where: { studentId: me.student.id }, select: { status: true, note: true } },
     },
   });
   if (!row) throw new NotFoundError("That homework was not found.");
@@ -554,6 +560,8 @@ export async function getMyHomeworkItem(ctx: TenantContext, homeworkId: string) 
       // The same buckets the homework list uses.
       state: ((status) => (status === "ASSIGNED" ? ("PENDING" as const) : status))(homeworkStatus(row.dueOn, now)),
       resources: row.resources,
+      submission: row.submissions[0]?.status ?? null,
+      feedback: row.submissions[0]?.note ?? null,
     },
   };
 }

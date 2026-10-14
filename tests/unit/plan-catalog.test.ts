@@ -65,6 +65,15 @@ describe("planProblems", () => {
     expect(planProblems({ ...base, priceMinor: 0, priceOnRequest: true }, [], "g")).toEqual([]);
     expect(planProblems({ ...base, extraCampusAllowed: true }, [], "g").join(" ")).toMatch(/price of an extra campus/);
     expect(planProblems({ ...base, extraCampusAllowed: true, extraCampusPriceMinor: 0, maxCampuses: 1 }, [], "g").join(" ")).toMatch(/cap cannot be lower/);
+    // A cap kept while extra campuses are off is not used, so it is not a problem.
+    expect(planProblems({ ...base, extraCampusAllowed: false, maxCampuses: 1 }, [], "g")).toEqual([]);
+  });
+
+  it("refuses two plans at the same place in the order, where the ladder could not be checked", () => {
+    const twin = { ...starter, id: "twin", name: "Lite", displayOrder: base.displayOrder, optionalModules: ["FINANCE", "EXPENSES", "TRANSPORT"] };
+    expect(planProblems(base, [starter, twin, pro], "g").join(" ")).toMatch(/Display order 2 is already used by Lite/);
+    // Its own row is not a clash.
+    expect(planProblems(base, [starter, { ...twin, id: "g" }, pro], "g")).toEqual([]);
   });
 });
 

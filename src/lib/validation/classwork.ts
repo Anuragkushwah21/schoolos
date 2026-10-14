@@ -128,6 +128,10 @@ export type LessonMaterialInput = z.infer<typeof lessonMaterialSchema>;
 
 export const HOMEWORK_STATUS_VALUES = ["DRAFT", "PUBLISHED"] as const;
 
+/** Ids from checkboxes (one value or many), without repeats. */
+const idList = (max: number) =>
+  z.preprocess((value) => (value === undefined || value === "" ? [] : Array.isArray(value) ? value : [value]), z.array(id).max(max)).transform((values) => [...new Set(values)]);
+
 export const homeworkSchema = z
   .object({
     homeworkId: optionalId,
@@ -142,11 +146,26 @@ export const homeworkSchema = z
     assignedOn: requiredDate("the date it is set"),
     dueOn: requiredDate("a due date"),
     status: z.enum(HOMEWORK_STATUS_VALUES, { error: "Choose a status" }),
+    /** More classes for the same work (new homework only); ticked checkboxes. */
+    extraSectionIds: idList(20),
+    /** The whole class, or only the ticked students. */
+    audience: z.enum(["SECTION", "SELECTED_STUDENTS"], { error: "Choose who it is for" }).default("SECTION"),
+    studentIds: idList(500),
+    /** The unit, chapter or topic it practises; blank for none. */
+    syllabusItemId: optionalId,
   })
   .refine((data) => data.dueOn >= data.assignedOn, {
     message: "The due date cannot be before the date it is set",
     path: ["dueOn"],
+  })
+  .refine((data) => data.audience !== "SELECTED_STUDENTS" || data.studentIds.length > 0, {
+    message: "Choose at least one student, or set it for the whole class",
+    path: ["studentIds"],
   });
+
+/** What a teacher recorded after checking homework, one entry per student (`mark.<studentId>`). */
+export const homeworkMarksSchema = z.object({ homeworkId: id });
+export const SUBMISSION_MARK_VALUES = ["ASSIGNED", "SUBMITTED", "LATE", "MISSING"] as const;
 
 export type HomeworkInput = z.infer<typeof homeworkSchema>;
 

@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import { ActionForm } from "@/components/forms/action-form";
 import { SubmitButton } from "@/components/forms/fields";
-import { CORE_MODULES, OPTIONAL_MODULES } from "@/lib/school-modules";
+import { CORE_MODULES, OPTIONAL_MODULES, moduleLabel } from "@/lib/school-modules";
 import { cn } from "@/lib/utils";
 
 import { approveSchoolAction, setSchoolModulesAction } from "./actions";
@@ -26,7 +26,8 @@ export function CoreModuleList({ compact = false }: { compact?: boolean }) {
 }
 
 /** Optional modules as checkboxes named `optionalModules`; read-only when `disabled`. */
-export function OptionalModuleChecks({ selected, onChange, disabled = false }: { selected: readonly string[]; onChange?: (next: string[]) => void; disabled?: boolean }) {
+/** `inPlan`, when given, labels each module "In plan" or "Not in plan" — apart from whether it is ticked (on). */
+export function OptionalModuleChecks({ selected, onChange, disabled = false, inPlan }: { selected: readonly string[]; onChange?: (next: string[]) => void; disabled?: boolean; inPlan?: readonly string[] }) {
   return (
     <ul className="grid gap-2 sm:grid-cols-2">
       {OPTIONAL_MODULES.map((module) => {
@@ -46,7 +47,10 @@ export function OptionalModuleChecks({ selected, onChange, disabled = false }: {
               {/* A disabled checkbox is not submitted: the ticked set travels as hidden fields instead. */}
               {disabled && on ? <input type="hidden" name="optionalModules" value={module.key} /> : null}
               <span>
-                <span className="block font-medium">{module.label}</span>
+                <span className="flex flex-wrap items-center gap-2 font-medium">
+                  {module.label}
+                  {inPlan ? <span className={cn("rounded-full px-1.5 text-[11px]", inPlan.includes(module.key) ? "bg-success-soft text-success-strong" : "bg-muted text-muted-foreground")}>{inPlan.includes(module.key) ? "In plan" : "Not in plan"}</span> : null}
+                </span>
                 <span className="text-muted-foreground block text-xs">{module.hint}</span>
               </span>
             </label>
@@ -138,8 +142,14 @@ export function ApproveWithPlanForm({ schoolId, plans, defaultPlanId, canApprove
 
 /** Manage one school's optional modules: follow the plan, or choose them for this school. */
 export function SchoolModulesForm({ schoolId, planName, planModules, current, customized }: { schoolId: string; planName: string | null; planModules: string[]; current: string[]; customized: boolean }) {
-  const [follow, setFollow] = useState(!customized && planName !== null);
+  // Ticked only when the campus really has exactly the plan's modules: a plan
+  // change leaves `customized` false but the campus's modules as they were,
+  // and showing the plan's set here would claim modules that are switched off.
+  const matchesPlan = current.length === planModules.length && current.every((key) => planModules.includes(key));
+  const [follow, setFollow] = useState(!customized && planName !== null && matchesPlan);
   const [modules, setModules] = useState<string[]>(current);
+  const inPlanOff = planModules.filter((key) => !current.includes(key));
+  const onOutsidePlan = current.filter((key) => !planModules.includes(key));
   return (
     <ActionForm action={setSchoolModulesAction} className="gap-4">
       <input type="hidden" name="schoolId" value={schoolId} />
@@ -161,7 +171,19 @@ export function SchoolModulesForm({ schoolId, planName, planModules, current, cu
           </span>
         </label>
       ) : null}
-      <OptionalModuleChecks selected={follow ? planModules : modules} onChange={setModules} disabled={follow} />
+      {planName ? (
+        <p className="text-muted-foreground text-xs">
+          {[
+            `In the ${planName} plan: ${planModules.length ? planModules.map(moduleLabel).join(", ") : "core only"}.`,
+            `On for this campus: ${current.length ? current.map(moduleLabel).join(", ") : "core only"}.`,
+            inPlanOff.length ? `In the plan but off here: ${inPlanOff.map(moduleLabel).join(", ")}.` : "",
+            onOutsidePlan.length ? `On here but not in the plan (kept, or an exception): ${onOutsidePlan.map(moduleLabel).join(", ")}.` : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        </p>
+      ) : null}
+      <OptionalModuleChecks selected={follow ? planModules : modules} onChange={setModules} disabled={follow} inPlan={planName ? planModules : undefined} />
       <div>
         <SubmitButton pendingLabel="Saving…">Save changes</SubmitButton>
       </div>

@@ -446,13 +446,14 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
  * there is nothing to type and nothing outside their teaching to choose.
  */
 /** `sectionId` pre-selects a class (from the dashboard's class switcher). */
-export function ClassTestForm({ options, today, sectionId }: { options: TestOption[]; today: string; sectionId?: string }) {
+export function ClassTestForm({ options, today, sectionId, syllabus = {} }: { options: TestOption[]; today: string; sectionId?: string; /** Syllabus entries per "sectionId:subjectId". */ syllabus?: Record<string, Array<{ id: string; label: string }>> }) {
   const [value, setValue] = useState((options.find((option) => option.sectionId === sectionId) ?? options[0])?.value ?? "");
   const [previewing, setPreviewing] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ name: "", date: today, maxMarks: "25", description: "" });
+  const [draft, setDraft] = useState({ name: "", date: today, maxMarks: "25", description: "", syllabusItemId: "" });
   const chosen = options.find((option) => option.value === value) ?? options[0];
-  const set = (key: keyof typeof draft) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+  const items = chosen ? (syllabus[`${chosen.sectionId}:${chosen.subjectId}`] ?? []) : [];
+  const set = (key: keyof typeof draft) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setDraft((current) => ({ ...current, [key]: event.target.value }));
 
   function preview() {
@@ -474,6 +475,7 @@ export function ClassTestForm({ options, today, sectionId }: { options: TestOpti
       <input type="hidden" name="date" value={draft.date} />
       <input type="hidden" name="maxMarks" value={draft.maxMarks} />
       <input type="hidden" name="description" value={draft.description} />
+      <input type="hidden" name="syllabusItemId" value={items.some((item) => item.id === draft.syllabusItemId) ? draft.syllabusItemId : ""} />
 
       {!previewing ? (
         <>
@@ -501,6 +503,9 @@ export function ClassTestForm({ options, today, sectionId }: { options: TestOpti
             <div />
           </FieldRow>
           <TextareaField name="_description" label="Description (optional)" rows={2} placeholder="Chapters 3–5, short answers" value={draft.description} onChange={set("description")} maxLength={500} />
+          {items.length ? (
+            <SelectField name="_syllabusItemId" label="Unit, chapter or topic it tests (optional)" options={items.map((item) => ({ value: item.id, label: item.label }))} placeholder="Not linked" value={items.some((item) => item.id === draft.syllabusItemId) ? draft.syllabusItemId : ""} onChange={set("syllabusItemId")} hint="Linked tests show in the unit's progress report and in exam readiness." />
+          ) : null}
           {problem ? (
             <p role="alert" className="text-destructive text-sm">
               {problem}

@@ -27,6 +27,7 @@ const SLOT_SELECT = {
   startMinute: true,
   endMinute: true,
   room: true,
+  subjectId: true,
   stream: { select: { name: true } },
   subject: { select: { name: true } },
   teacher: { select: { firstName: true, lastName: true } },

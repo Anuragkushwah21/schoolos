@@ -351,7 +351,7 @@ Logins for teachers, staff, parents and students (Class 6–12 only) are created
 | `PUT` | `/super-admin/schools/{id}/subscription` | |
 | `POST` | `/super-admin/admins/{userId}/password` | New one-time password; signs them out everywhere |
 | `POST` | `/super-admin/admins/{userId}/active` | `{ "isActive": false }` signs them out at once |
-| `GET` | `/super-admin/plans`, `PUT /super-admin/plans/{id}` | Prices in rupees on the way in |
+| `GET` | `/super-admin/plans`, `PUT /super-admin/plans/{id}` | Saves a draft only (never publishes). Prices in rupees on the way in. Only the settings in the body change; the rest keep their saved value |
 | `GET` `POST` | `/super-admin/offers` | |
 | `GET` `PUT` `DELETE` | `/super-admin/offers/{id}` | |
 | `GET` | `/super-admin/audit` | `?action=&schoolId=&q=&page=` |

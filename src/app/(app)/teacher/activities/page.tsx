@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { ClassActivityForm, LessonPlanForm } from "@/features/classwork/forms";
+import { mySyllabusChoices, topicsBySlot } from "@/server/academics/syllabus";
 import {
   DAY_SHORT,
   addDays,
@@ -54,11 +55,12 @@ export default async function TeacherActivitiesPage(props: PageProps<"/teacher/a
   // "the office has not opened the year yet" is a setup state, not an error.
   if (!(await getCurrentSession(ctx))) return <NoSessionNotice title="Class records" />;
 
-  const [week, plan, history, planned] = await Promise.all([
+  const [week, plan, history, planned, syllabus] = await Promise.all([
     getTeacherWeek(ctx),
     getMyDayPlan(ctx, date),
     listMyActivities(ctx, { from: addDays(now, -HISTORY_DAYS), to: now }),
     listMyPlannedLessons(ctx),
+    mySyllabusChoices(ctx).catch(() => ({})),
   ]);
 
   if (!week || week.slots.length === 0) {
@@ -112,6 +114,7 @@ export default async function TeacherActivitiesPage(props: PageProps<"/teacher/a
               defaultSlotId={param(search.slot)}
               defaultDate={toDateInput(now)}
               earliestDate={toDateInput(earliest)}
+              topicsBySlot={topicsBySlot(week.slots, syllabus)}
             />
           </CardContent>
         </Card>

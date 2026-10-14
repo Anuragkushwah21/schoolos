@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 import { CheckCircle2Icon, ClipboardListIcon, Clock3Icon, HourglassIcon, TriangleAlertIcon, UserRoundCogIcon } from "lucide-react";
 
@@ -85,9 +85,14 @@ export default async function PrincipalWorkspacePage() {
             </CardHeader>
             <CardContent className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-sm">
               <span>{principal.lastLoginAt ? `Last signed in ${formatDateTime(principal.lastLoginAt)}` : "Has not signed in yet"}</span>
-              <Button asChild variant="outline" size="sm">
-                <Link href="/school-admin/settings/principal">Manage login</Link>
-              </Button>
+              <span className="flex flex-wrap gap-2">
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/school-admin/settings/principal">Manage login</Link>
+                </Button>
+                <Button asChild size="sm">
+                  <Link href={`/school-admin/principal/${principal.id}` as Route}>Profile &amp; documents</Link>
+                </Button>
+              </span>
             </CardContent>
           </Card>
         ))}

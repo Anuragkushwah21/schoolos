@@ -7,6 +7,7 @@ import { ActionButton } from "@/components/forms/action-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { deleteLessonMaterialAction } from "@/features/classwork/actions";
 import { ClassActivityForm, LessonMaterialForm } from "@/features/classwork/forms";
+import { mySyllabusChoices, topicsBySlot } from "@/server/academics/syllabus";
 import { humanize } from "@/lib/format";
 import { DAY_SHORT, addDays, formatDate, formatMinutes, toDateInput, today } from "@/lib/dates";
 import { requireTenant } from "@/server/auth/current-user";
@@ -28,9 +29,10 @@ export default async function EditActivityPage(
   const ctx = await requireTenant("TEACHER");
   const { activityId } = await props.params;
 
-  const [activity, week] = await Promise.all([
+  const [activity, week, syllabus] = await Promise.all([
     orNotFound(getMyActivity(ctx, activityId)),
     getTeacherWeek(ctx),
+    mySyllabusChoices(ctx).catch(() => ({})),
   ]);
 
   const now = today();
@@ -75,7 +77,9 @@ export default async function EditActivityPage(
         }))}
         defaultDate={toDateInput(now)}
         earliestDate={toDateInput(earliest)}
+        topicsBySlot={topicsBySlot(week?.slots ?? [], syllabus)}
         activity={{
+          topics: activity.topics,
           timetableSlotId: slot.id,
           date: toDateInput(activity.date),
           status: activity.status,

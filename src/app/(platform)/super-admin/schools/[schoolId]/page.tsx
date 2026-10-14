@@ -15,7 +15,7 @@ import {
 } from "@/features/platform/actions";
 import { ApproveWithPlanForm, CoreModuleList, SchoolModulesForm } from "@/features/platform/module-forms";
 import { cleanModules } from "@/lib/school-modules";
-import { cleanLimits, cleanRoles } from "@/lib/school-roles";
+import { cleanLimits, cleanRoles, roleLabel } from "@/lib/school-roles";
 import { CampusLimitForm } from "@/features/campuses/forms";
 import {
   CreateAdminForm,
@@ -31,6 +31,7 @@ import { SUBSCRIPTION_STATUSES } from "@/lib/validation/platform";
 import { requireSuperAdmin } from "@/server/auth/current-user";
 import { NotFoundError } from "@/lib/errors";
 import { getSchoolForPlatform, listPlansForSelect } from "@/server/platform/schools";
+import { roleUsage } from "@/server/platform/role-usage";
 
 export const metadata: Metadata = { title: "School" };
 
@@ -53,7 +54,8 @@ export default async function PlatformSchoolPage(
     if (error instanceof NotFoundError) notFound();
     throw error;
   });
-  const plans = await listPlansForSelect();
+  const [plans, usageMap] = await Promise.all([listPlansForSelect(), roleUsage(user, [schoolId])]);
+  const usage = usageMap.get(schoolId);
   const { school, admins, recentAudit, academic } = data;
   const subscription = school.subscriptions[0];
   const planRow = subscription ? plans.find((plan) => plan.id === subscription.plan.id) : null;
@@ -242,6 +244,45 @@ export default async function PlatformSchoolPage(
             </CardContent>
           </Card>
 
+          {/* ---------------- roles in use (counts only) ---------------- */}
+          {usage ? (
+            <Card id="role-usage" className="scroll-mt-24">
+              <CardHeader>
+                <CardTitle>Roles in use</CardTitle>
+                <CardDescription>{`Roles in use: ${usage.inUse.length} · switched on: ${usage.enabledCount}. Always available: School Admins ${usage.core.schoolAdmins}, teachers ${usage.core.teachers}, plus parents and students. Counts of current people only — no names.`}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-muted-foreground text-left text-xs">
+                      <th className="py-1.5 font-medium">Role</th>
+                      <th className="py-1.5 font-medium">For this school</th>
+                      <th className="py-1.5 text-right font-medium">People</th>
+                      <th className="py-1.5 text-right font-medium">Limit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usage.roles.map((row) => (
+                      <tr key={row.role} className="border-t">
+                        <td className="py-1.5">{roleLabel(row.role)}</td>
+                        <td className="py-1.5">
+                          {row.enabled ? <StatusBadge status="ON" label="Switched on" tone="positive" /> : <StatusBadge status="OFF" label={row.people ? "Off — people kept" : "Off"} tone={row.people ? "warning" : "neutral"} />}
+                        </td>
+                        <td className="py-1.5 text-right tabular-nums">{row.people}</td>
+                        <td className="py-1.5 text-right tabular-nums">
+                          {row.limit === null ? <span className="text-muted-foreground">No limit</span> : row.people > row.limit ? <StatusBadge status="OVER" label={`${row.limit} — over limit`} tone="negative" /> : <span className="text-muted-foreground">{row.limit}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <Button asChild variant="outline" size="sm" className="mt-3">
+                  <Link href="#roles">Change roles & limits</Link>
+                </Button>
+              </CardContent>
+            </Card>
+          ) : null}
+
           {/* ---------------- roles & limits ---------------- */}
           <Card id="roles" className="scroll-mt-24">
             <CardHeader>
@@ -251,7 +292,7 @@ export default async function PlatformSchoolPage(
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <SchoolRolesForm schoolId={school.id} roles={cleanRoles(school.enabledRoles)} followPlan={!school.rolesCustomized} limits={cleanLimits(school.roleLimits)} />
+              <SchoolRolesForm schoolId={school.id} roles={cleanRoles(school.enabledRoles)} followPlan={!school.rolesCustomized} limits={cleanLimits(school.roleLimits)} planLimits={usage?.planLimits} used={usage?.used} />
             </CardContent>
           </Card>
 

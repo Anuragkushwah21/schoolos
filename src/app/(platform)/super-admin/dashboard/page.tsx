@@ -2,6 +2,9 @@ import type { Metadata, Route } from "next";
 import Link from "next/link";
 import {
   BookOpenCheckIcon,
+  CalendarCheckIcon,
+  HourglassIcon,
+  WalletIcon,
   Building2Icon,
   CheckCircle2Icon,
   ClipboardCheckIcon,
@@ -18,8 +21,8 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatDate, formatDateTime } from "@/lib/dates";
-import { formatNumber, humanize } from "@/lib/format";
+import { addDays, formatDate, formatDateTime, today } from "@/lib/dates";
+import { formatMoney, formatNumber, humanize, pluralize } from "@/lib/format";
 import { requireSuperAdmin } from "@/server/auth/current-user";
 import { activeSessionCount, moduleAdoption, platformTotals, recentRegistrations, schoolGrowth, schoolsByStatus } from "@/server/analytics/platform";
 import { BarChart, ColumnChart } from "@/components/charts/bars";
@@ -28,6 +31,8 @@ import { OPTIONAL_MODULES } from "@/lib/school-modules";
 import { cn } from "@/lib/utils";
 import { prisma } from "@/server/db/prisma";
 import { PLATFORM_AUDIT_WHERE } from "@/server/platform/audit";
+import { membershipOverview, platformCalendarEntries, platformReminders } from "@/server/platform/calendar";
+import { collectionSummary } from "@/server/platform/collections";
 
 export const metadata: Metadata = { title: "Platform" };
 
@@ -39,7 +44,7 @@ export const metadata: Metadata = { title: "Platform" };
  */
 export default async function PlatformDashboardPage() {
   const user = await requireSuperAdmin();
-  const [status, totals, sessions, recent, activity, growth, adoption, unverified, newEnquiries] = await Promise.all([
+  const [status, totals, sessions, recent, activity, growth, adoption, unverified, newEnquiries, endingSoon, reminders, membership, collection] = await Promise.all([
     schoolsByStatus(user),
     platformTotals(user),
     activeSessionCount(user),
@@ -55,12 +60,18 @@ export default async function PlatformDashboardPage() {
     moduleAdoption(user),
     prisma.school.count({ where: { status: { in: ["PENDING", "UNDER_REVIEW"] }, contactEmailVerifiedAt: null } }),
     prisma.platformInquiry.count({ where: { status: "NEW" } }),
+    platformCalendarEntries(user, today(), addDays(today(), 7)),
+    platformReminders(user),
+    membershipOverview(user, 8),
+    collectionSummary(user),
   ]);
   // Platform alerts: only what needs the Super Admin.
   const platformAlerts = [
     status.awaitingReview ? { text: `${status.awaitingReview} school${status.awaitingReview === 1 ? "" : "s"} waiting for approval`, href: "/super-admin/approvals" as Route, tone: "warning" } : null,
     unverified ? { text: `${unverified} pending school${unverified === 1 ? " has" : "s have"} not verified the contact email`, href: "/super-admin/approvals" as Route, tone: "info" } : null,
     status.suspended ? { text: `${status.suspended} school${status.suspended === 1 ? " is" : "s are"} suspended`, href: "/super-admin/schools?status=SUSPENDED" as Route, tone: "critical" } : null,
+    reminders.overdue.length ? { text: `${reminders.overdue.length} subscription${reminders.overdue.length === 1 ? " is" : "s are"} overdue (ended or payment due)`, href: "/super-admin/calendar" as Route, tone: "critical" } : null,
+    endingSoon.length ? { text: `${endingSoon.length} plan${endingSoon.length === 1 ? "" : "s"} or trial${endingSoon.length === 1 ? "" : "s"} ending in the next 7 days`, href: "/super-admin/calendar" as Route, tone: "warning" } : null,
     newEnquiries ? { text: `${newEnquiries} new enquir${newEnquiries === 1 ? "y" : "ies"} from schools`, href: "/super-admin/inquiries" as Route, tone: "info" } : null,
   ].filter((row): row is { text: string; href: Route; tone: string } => row !== null);
 
@@ -85,6 +96,23 @@ export default async function PlatformDashboardPage() {
         <StatCard tone="amber" icon={ClipboardCheckIcon} label="Pending approval" value={status.awaitingReview} hint={status.awaitingReview ? "need a decision" : "all decided"} href="/super-admin/approvals" />
         <StatCard tone="red" icon={PauseCircleIcon} label="Suspended schools" value={status.suspended} hint="access paused" href="/super-admin/schools?status=SUSPENDED" />
       </div>
+
+      {/* SchoolOS's own collection: entered by hand on Collections (no online payments). */}
+      <section aria-labelledby="collection" className="mb-4">
+        <div className="mb-2 flex items-end justify-between gap-3">
+          <h2 id="collection" className="text-muted-foreground text-sm font-semibold">
+            SchoolOS collection
+          </h2>
+          <Button asChild variant="ghost" size="sm">
+            <Link href={"/super-admin/collections" as Route}>Collections</Link>
+          </Button>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+          <StatCard tone="green" icon={WalletIcon} label="Total collection" value={formatMoney(collection.totalMinor)} hint={`this month ${formatMoney(collection.monthMinor)}`} href={"/super-admin/collections" as Route} />
+          <StatCard tone="amber" icon={HourglassIcon} label="Pending collection" value={formatMoney(collection.pendingMinor)} hint={collection.overdueMinor ? `${formatMoney(collection.overdueMinor)} overdue` : pluralize(collection.pendingBills, "bill waiting", "bills waiting")} href={"/super-admin/collections?show=pending" as Route} />
+          <StatCard tone="blue" icon={CalendarCheckIcon} label="Today's collection" value={formatMoney(collection.todayMinor)} hint={pluralize(collection.todayPayments, "payment received today", "payments received today")} href={"/super-admin/collections" as Route} />
+        </div>
+      </section>
 
       {/* People across schools: secondary to the school figures. */}
       <dl className="bg-card mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border sm:grid-cols-4">
@@ -176,6 +204,71 @@ export default async function PlatformDashboardPage() {
         ) : (
           <EmptyState title="No schools yet">Schools appear here as they register.</EmptyState>
         )}
+      </section>
+
+      <section aria-labelledby="membership" className="mb-8">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 id="membership" className="text-lg font-bold tracking-tight">
+              Membership
+            </h2>
+            <p className="text-muted-foreground text-sm">{`Whose plan or trial ends when — soonest first. Ended: ${membership.ended} · ending in 30 days: ${membership.within30} · no end date: ${membership.noEndDate}.`}</p>
+          </div>
+          <div className="flex gap-2">
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/super-admin/calendar">Open calendar</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link href={"/super-admin/membership" as Route}>Send reminders</Link>
+            </Button>
+          </div>
+        </div>
+        {membership.rows.length ? (
+          <div className="overflow-x-auto rounded-xl border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Organization / school</TableHead>
+                  <TableHead className="hidden sm:table-cell">Plan</TableHead>
+                  <TableHead>Membership</TableHead>
+                  <TableHead>Ends</TableHead>
+                  <TableHead className="text-right">Days left</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {membership.rows.map((row) => (
+                  <TableRow key={row.key}>
+                    <TableCell>
+                      <Link href={row.href} className="font-medium hover:underline">
+                        {row.title}
+                      </Link>
+                      <p className="text-muted-foreground text-xs sm:hidden">{row.detail}</p>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground hidden sm:table-cell">{row.detail}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={row.status} label={row.status === "TRIALING" ? "Trial" : row.status === "PAST_DUE" ? "Payment overdue" : "Active"} tone={row.status === "PAST_DUE" ? "negative" : row.status === "TRIALING" ? "info" : "positive"} />
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">{row.endsOn ? formatDate(row.endsOn) : <span className="text-muted-foreground">No end date</span>}</TableCell>
+                    <TableCell className="text-right">
+                      {row.daysLeft === null ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : row.daysLeft < 0 ? (
+                        <StatusBadge status="ENDED" label={row.daysLeft === -1 ? "Ended yesterday" : `Ended ${-row.daysLeft} days ago`} tone="negative" />
+                      ) : row.daysLeft === 0 ? (
+                        <StatusBadge status="TODAY" label="Ends today" tone="negative" />
+                      ) : (
+                        <StatusBadge status="LEFT" label={row.daysLeft === 1 ? "1 day" : `${row.daysLeft} days`} tone={row.daysLeft <= 7 ? "negative" : row.daysLeft <= 30 ? "warning" : "neutral"} />
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <EmptyState title="No memberships yet">Schools on a plan appear here with their end date.</EmptyState>
+        )}
+        {membership.total > membership.rows.length ? <p className="text-muted-foreground mt-2 text-xs">{`Showing ${membership.rows.length} of ${membership.total}. Membership has them all.`}</p> : null}
       </section>
 
       <div className="mb-8 grid gap-6 lg:grid-cols-3">

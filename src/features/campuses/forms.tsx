@@ -119,7 +119,8 @@ export function RoleChecks(props: { name?: string; initial: readonly string[]; a
 }
 
 /** One number field per limit key, named `limit.<KEY>`; blank means "no limit" (or "the plan's"). */
-export function LimitFields({ initial, max, keys }: { initial: Record<string, number | undefined>; max?: Record<string, number | undefined>; keys?: readonly string[] }) {
+/** `max` shows the plan's limit and `used` how many are in use now, under each field. */
+export function LimitFields({ initial, max, used, keys }: { initial: Record<string, number | undefined>; max?: Record<string, number | undefined>; used?: Record<string, number | undefined>; keys?: readonly string[] }) {
   const shown = LIMIT_KEYS.filter((limit) => !keys || keys.includes(limit.key));
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -132,7 +133,7 @@ export function LimitFields({ initial, max, keys }: { initial: Record<string, nu
           min={0}
           step={1}
           defaultValue={initial[limit.key] ?? ""}
-          hint={max?.[limit.key] !== undefined ? `Plan max ${max[limit.key]}` : undefined}
+          hint={[max?.[limit.key] !== undefined ? `Plan max ${max[limit.key]}` : "", used?.[limit.key] !== undefined ? `${used[limit.key]} in use` : ""].filter(Boolean).join(" · ") || undefined}
         />
       ))}
     </div>

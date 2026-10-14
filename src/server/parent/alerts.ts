@@ -84,8 +84,13 @@ function rupeesText(minor: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(minor / 100);
 }
 
-/** Homework for one stream concerns only that stream's children; whole-section work concerns everyone in the section. */
-function forChild(work: { streamId: string | null }, child: { streamId: string | null }): boolean {
+/**
+ * Homework for one stream concerns only that stream's children; whole-section
+ * work concerns everyone in the section; work set for selected students only
+ * the children it lists.
+ */
+function forChild(work: { streamId: string | null; audience: "SECTION" | "SELECTED_STUDENTS"; targets: Array<{ studentId: string }> }, child: { id: string; streamId: string | null }): boolean {
+  if (work.audience === "SELECTED_STUDENTS" && !work.targets.some((target) => target.studentId === child.id)) return false;
   return work.streamId === null || work.streamId === child.streamId;
 }
 
@@ -122,6 +127,8 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
         dueOn: true,
         sectionId: true,
         streamId: true,
+        audience: true,
+        targets: { where: { studentId: { in: studentIds } }, select: { studentId: true } },
         subject: { select: { name: true } },
       },
     }),
@@ -175,7 +182,7 @@ export async function getParentAlerts(ctx: TenantContext): Promise<ParentAlert[]
       },
       orderBy: { createdAt: "desc" },
       take: 10,
-      select: { id: true, title: true, dueOn: true, createdAt: true, sectionId: true, streamId: true, subject: { select: { name: true } } },
+      select: { id: true, title: true, dueOn: true, createdAt: true, sectionId: true, streamId: true, audience: true, targets: { where: { studentId: { in: studentIds } }, select: { studentId: true } }, subject: { select: { name: true } } },
     }),
     upcomingHolidays(ctx, 5),
     // Each child's own fee account, read after `listMyChildren` has resolved

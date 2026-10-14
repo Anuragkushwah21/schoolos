@@ -22,6 +22,7 @@ import { visitorEntrySchema, visitorUpdateSchema } from "@/lib/validation/visito
 import { addEnquiryFollowUp, createEnquiry, listEnquiries, setEnquiryStatus } from "@/server/admissions/enquiries";
 import { applicationCounts } from "@/server/admissions/service";
 import type { TenantContext } from "@/server/auth/current-user";
+import { getCalendarEntries, upcomingEntries } from "@/server/calendar/entries";
 import { cancelMeeting, deleteMeeting, getMeetingForAdmin, listMeetingsForAdmin, saveMeeting } from "@/server/communication/meetings";
 import { prisma } from "@/server/db/prisma";
 import { listFeePositions } from "@/server/finance/fees";
@@ -90,6 +91,12 @@ describe("receptionist", () => {
     const mine = await saveMeeting(receptionist.ctx, meeting());
     const admins = await saveMeeting(adminOf(schoolA), meeting({ title: "Staff meeting" }));
     expect((await listMeetingsForAdmin(receptionist.ctx)).rows.map((row) => row.id)).toEqual(expect.arrayContaining([mine, admins]));
+    // The organizer is reminded of what they scheduled (a parents-only PTM), on their calendar and "coming up";
+    // a meeting they neither scheduled nor were invited to stays off it.
+    const calendar = (await getCalendarEntries(receptionist.ctx, today(), addDays(today(), 10))).map((entry) => entry.key);
+    expect(calendar).toContain(`MEETING:${mine}`);
+    expect(calendar).not.toContain(`MEETING:${admins}`);
+    expect((await upcomingEntries(receptionist.ctx, 7)).map((entry) => entry.key)).toContain(`MEETING:${mine}`);
     await saveMeeting(receptionist.ctx, meeting({ meetingId: mine, title: "PTM 10-A (moved)" }));
     expect(await getMeetingForAdmin(receptionist.ctx, mine)).toMatchObject({ canEdit: true, canDelete: false });
     expect(await getMeetingForAdmin(receptionist.ctx, admins)).toMatchObject({ canEdit: false, canCancel: false });

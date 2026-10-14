@@ -6,6 +6,7 @@ import { NoSessionNotice } from "@/components/shared/no-session-notice";
 import { PageHeader } from "@/components/shared/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { ClassTestForm } from "@/features/exams/forms";
+import { mySyllabusChoices } from "@/server/academics/syllabus";
 import { today, toDateInput } from "@/lib/dates";
 import { param } from "@/lib/search-params";
 import { requireTenant } from "@/server/auth/current-user";
@@ -20,7 +21,7 @@ export default async function CreateTestPage(props: PageProps<"/teacher/exams/ne
   // "?section=" from the dashboard pre-selects that class; only the teacher's own options are listed anyway.
   const sectionId = param((await props.searchParams).section);
   if (!(await getCurrentSession(ctx))) return <NoSessionNotice title="Create test" />;
-  const options = await myTestOptions(ctx);
+  const [options, syllabus] = await Promise.all([myTestOptions(ctx), mySyllabusChoices(ctx)]);
 
   return (
     <>
@@ -34,7 +35,7 @@ export default async function CreateTestPage(props: PageProps<"/teacher/exams/ne
       {options.length ? (
         <Card className="max-w-3xl">
           <CardContent>
-            <ClassTestForm options={options} today={toDateInput(today())} sectionId={sectionId} />
+            <ClassTestForm options={options} today={toDateInput(today())} sectionId={sectionId} syllabus={syllabus} />
           </CardContent>
         </Card>
       ) : (

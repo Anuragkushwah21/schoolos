@@ -58,6 +58,16 @@ export function visibleToStream(streamId: string | null): { OR: Array<{ streamId
   return { OR: streamId ? [{ streamId: null }, { streamId }] : [{ streamId: null }] };
 }
 
+/**
+ * Homework one student may see, on top of the section and stream filters:
+ * work for the whole section, or work set for selected students that lists
+ * this student. Every student and parent read of homework (lists, alerts,
+ * the class record, file downloads) goes through this.
+ */
+export function visibleToStudent(studentId: string): { OR: Array<Record<string, unknown>> } {
+  return { OR: [{ audience: "SECTION" }, { targets: { some: { studentId } } }] };
+}
+
 /** Rows that clash with a period for `streamId`: whole-section ones always; one stream's only with the same stream. */
 export function clashesWithStream(streamId: string | null): Record<string, unknown> {
   return streamId ? { OR: [{ streamId: null }, { streamId }] } : {};

@@ -18,6 +18,8 @@ import { formatDate } from "@/lib/dates";
 import { enumParam, pageParam, param } from "@/lib/search-params";
 import { requireSuperAdmin } from "@/server/auth/current-user";
 import { listSchools } from "@/server/platform/schools";
+import { roleUsage } from "@/server/platform/role-usage";
+import { roleLabel } from "@/lib/school-roles";
 import { schoolsByStatus } from "@/server/analytics/platform";
 import { ViewTabs } from "@/components/shared/view-tabs";
 
@@ -43,6 +45,7 @@ export default async function SchoolsPage(props: PageProps<"/super-admin/schools
     listSchools(user, { status, q, page: pageParam(search.page) }),
     schoolsByStatus(user),
   ]);
+  const usage = await roleUsage(user, rows.map((school) => school.id));
   const tab = (value: (typeof STATUS_FILTERS)[number] | null, label: string, count: number) => ({
     href: (value ? `/super-admin/schools?status=${value}` : "/super-admin/schools") as Route,
     label,
@@ -83,6 +86,7 @@ export default async function SchoolsPage(props: PageProps<"/super-admin/schools
                 <TableHead>Plan</TableHead>
                 <TableHead className="text-right">Students</TableHead>
                 <TableHead className="text-right">Teachers</TableHead>
+                <TableHead>Roles in use</TableHead>
                 <TableHead>Registered</TableHead>
               </TableRow>
             </TableHeader>
@@ -116,6 +120,18 @@ export default async function SchoolsPage(props: PageProps<"/super-admin/schools
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{school._count.students}</TableCell>
                     <TableCell className="text-right tabular-nums">{school._count.teachers}</TableCell>
+                    <TableCell className="max-w-72">
+                      {(() => {
+                        const roles = usage.get(school.id);
+                        if (!roles) return <span className="text-muted-foreground text-sm">—</span>;
+                        return (
+                          <Link href={`/super-admin/schools/${school.id}#role-usage`} className="block hover:underline">
+                            <span className="text-sm font-medium">{`${roles.inUse.length} in use · ${roles.enabledCount} switched on`}</span>
+                            <span className="text-muted-foreground block text-xs">{roles.inUse.length ? roles.inUse.map((row) => `${roleLabel(row.role)} ${row.people}`).join(" · ") : "No staff roles filled yet"}</span>
+                          </Link>
+                        );
+                      })()}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(school.createdAt)}</TableCell>
                   </TableRow>
                 );

@@ -108,6 +108,8 @@ export const classTestSchema = z
       (value) => (value === "" || value === null ? undefined : value),
       z.coerce.number().int("Enter a whole number").min(0).optional(),
     ),
+    /** The unit, chapter or topic it assesses, from the class's syllabus; blank for none. */
+    syllabusItemId: optionalId,
   })
   .refine((data) => data.passMarks === undefined || data.passMarks <= data.maxMarks, {
     message: "Pass marks cannot be more than the maximum",
@@ -123,6 +125,7 @@ export const updateClassTestSchema = z.object({
   date: requiredDate("the date of the test"),
   maxMarks: requiredInt(1, 1000),
   description: optionalText(500),
+  syllabusItemId: optionalId,
 });
 export type UpdateClassTestInput = z.infer<typeof updateClassTestSchema>;
 

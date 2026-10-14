@@ -7,7 +7,9 @@ import { ValidationError } from "@/lib/errors";
 import {
   activitySchema,
   addHomeworkResourceSchema,
+  homeworkMarksSchema,
   homeworkSchema,
+  SUBMISSION_MARK_VALUES,
   lessonMaterialSchema,
   lessonPlanSchema,
   parseHomeworkResources,
@@ -23,6 +25,7 @@ import {
   addHomeworkResource,
   createHomework,
   deleteHomework,
+  markHomeworkSubmissions,
   removeHomeworkResource,
   updateHomework,
   updateHomeworkResource,
@@ -50,8 +53,15 @@ export async function recordActivityAction(_p: Result, formData: FormData): Prom
   return performAction(
     async () => {
       const ctx = await requireTenantForAction("TEACHER");
-      await recordActivity(ctx, parseFormData(activitySchema, formData));
-      return successResult("Class recorded.");
+      // Syllabus topics arrive as `topic.<id>` = COVERED | PARTIAL; blank means not taught today.
+      // Without the topics block on the form, the recorded topics are left as they were.
+      const topics = formData.get("topicsSent")
+        ? [...formData.entries()]
+            .filter(([key, value]) => key.startsWith("topic.") && (value === "COVERED" || value === "PARTIAL"))
+            .map(([key, value]) => ({ topicId: key.slice(6), coverage: value as "COVERED" | "PARTIAL" }))
+        : undefined;
+      await recordActivity(ctx, { ...parseFormData(activitySchema, formData), topics });
+      return successResult(topics?.length ? `Class recorded with ${topics.length} topic(s).` : "Class recorded.");
     },
     { revalidate: CLASSWORK_PAGES },
   );
@@ -117,7 +127,9 @@ export async function saveHomeworkAction(_p: Result, formData: FormData): Promis
       if (Object.keys(fieldErrors).length) {
         throw new ValidationError("Please correct the highlighted resources.", fieldErrors);
       }
-      const { homeworkId, ...input } = parsed;
+      const { homeworkId, syllabusItemId, ...rest } = parsed;
+      // Only a form that shows the syllabus choice may change it; otherwise an edit leaves the link as it is.
+      const input = formData.has("syllabusItemId") ? { ...rest, syllabusItemId } : rest;
 
       if (homeworkId) {
         // Resources on existing homework are managed one at a time on its page.
@@ -125,12 +137,13 @@ export async function saveHomeworkAction(_p: Result, formData: FormData): Promis
         return successResult("Homework updated.");
       }
 
-      await createHomework(ctx, input, resources);
-      return successResult(
-        resources.length
-          ? `Homework set with ${resources.length} resource${resources.length === 1 ? "" : "s"}.`
-          : "Homework set.",
-      );
+      const { ids } = await createHomework(ctx, input, resources);
+      const parts = [
+        ids.length > 1 ? `Classes: ${ids.length}.` : "",
+        input.audience === "SELECTED_STUDENTS" ? `Selected students: ${input.studentIds.length}.` : "",
+        resources.length ? `Resources: ${resources.length}.` : "",
+      ].filter(Boolean);
+      return successResult(parts.length ? `Homework set. ${parts.join(" ")}` : "Homework set.");
     },
     { revalidate: CLASSWORK_PAGES, redirectTo: "/teacher/homework" },
   );
@@ -217,5 +230,32 @@ export async function removeHomeworkResourceAction(_p: Result, formData: FormDat
       return successResult("Resource removed.");
     },
     { revalidate: CLASSWORK_PAGES },
+  );
+}
+
+/**
+ * Record who handed homework in, after checking it. One field per student,
+ * `mark.<studentId>` = ASSIGNED | SUBMITTED | LATE | MISSING; the service
+ * checks the teacher set it and each student is one it is for.
+ */
+export async function markHomeworkAction(_p: Result, formData: FormData): Promise<Result> {
+  return performAction(
+    async () => {
+      const ctx = await requireTenantForAction("TEACHER");
+      const { homeworkId } = parseFormData(homeworkMarksSchema, formData);
+      const marks: Array<{ studentId: string; status: (typeof SUBMISSION_MARK_VALUES)[number]; note: string | null }> = [];
+      for (const [key, value] of formData.entries()) {
+        if (!key.startsWith("mark.")) continue;
+        const status = String(value);
+        if (!(SUBMISSION_MARK_VALUES as readonly string[]).includes(status)) throw new ValidationError("Please correct the highlighted fields.", { [key]: ["Choose a status"] });
+        const studentId = key.slice(5);
+        // Feedback the student and their parents see; blank for none.
+        const note = String(formData.get("note." + studentId) ?? "").trim().slice(0, 300) || null;
+        marks.push({ studentId, status: status as (typeof SUBMISSION_MARK_VALUES)[number], note });
+      }
+      const { changed } = await markHomeworkSubmissions(ctx, homeworkId, marks);
+      return successResult(changed ? `Saved. Students updated: ${changed}.` : "Nothing changed.");
+    },
+    { revalidate: [...CLASSWORK_PAGES, "/student", "/parent"] },
   );
 }
